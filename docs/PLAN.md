@@ -296,14 +296,23 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Decodificador de vértices: todos los vtypes y el skinning.
   - Transformación y clipping.
   - Rasterizador por software portado de softgpu de PPSSPP, con cabeceras de origen.
-- **Criterios de hecho**: se ven el logo y el menú del título. Las capturas comparadas contra PPSSPP
-  quedan en local y se describen en la nota de sesión. **M2 parcial.**
-- **Notas (F05)**: lo que hay que cubrir sale de `docs/analysis/ge-usage.md` (escenas `title` y
-  `menu`). Los frame dumps **no guardan la estructura de las listas** (`CALL`, `JUMP`, `RET`,
-  `SIGNAL`, `FINISH`, `BASE`, `ORIGIN`, `OFFSETADDR`, `BOUNDINGBOX`, `BJUMP`), así que los signals,
-  los stalls y los saltos por bounding box se miden con el histograma HLE. `ge_usage.vertex_size()`
-  sigue las reglas de tamaño de vértice de PPSSPP y coincide con los dumps reales; sirve como
-  referencia para el decodificador.
+  - Stub mínimo de `sceMpeg`/`scePsmf` (decidido en F05):
+    - no decodifica: entrega frames en negro en el buffer de display, o lo deja como está;
+    - informa bien el estado y el fin del stream, para que el juego pase la intro y el "Press Start"
+      y acepte Start;
+    - cada NID del stub queda en el histograma HLE.
+- **Criterios de hecho**: se ven el logo de Kojima Productions, la pantalla de título (con el fondo de
+  video en negro por el stub) y el menú. Las capturas comparadas contra PPSSPP quedan en local y se
+  describen en la nota de sesión. **M2 parcial.**
+- **Notas (F05)**: la lista de lo que hay que cubrir está en `docs/analysis/ge-usage.md` §5 (F11).
+  - El logo y el menú son 2D en modo through, con CLUT4/8, swizzle, `MODULATE` ×2, alpha test,
+    2 modos de blending y salida 5551.
+  - La intro y el "Press Start" no usan el GE: son tres framebuffers 8888 que rotan, seguramente
+    escritos por `sceMpeg` [?]. El display tiene que presentar 8888 además de 5551.
+  - Los frame dumps no guardan la estructura de las listas (`CALL`, `JUMP`, `SIGNAL`, `FINISH`,
+    `BASE`, `BOUNDINGBOX`…). Esto se mide con el histograma HLE.
+  - `ge_usage.vertex_size()` coincide con los dumps reales y sirve de referencia para el
+    decodificador.
 
 ### F12 — GE por software: completo
 
@@ -318,10 +327,18 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Render-to-texture.
 - **Criterios de hecho**: el histograma de F05 queda cubierto al 100 % y las escenas de los dumps se
   ven igual que en PPSSPP.
-- **Notas (F05)**: la lista de comprobación es la sección `features` de
-  `python3 -I profiles/mpo/tools/ge_usage.py` sobre los dumps de todas las escenas. Los mismos dumps
-  sirven para comparar contra PPSSPP, que los reproduce si se abren como un juego (**File › Load**,
-  Ctrl+O).
+- **Notas (F05)**: la lista de comprobación es la sección `features` de `ge_usage.py` sobre los dumps
+  (`docs/analysis/ge-usage.md` §5, F12). PPSSPP reproduce esos mismos dumps si se abren como un juego
+  (**File › Load**), así que sirven para comparar.
+  - Lo más importante:
+    - los **splines** 4×4, división 6×6 y tipo 3×3, **sin skinning**, que son el 49 % de las draws;
+    - depth `GEQUAL` con rango `0x2710-0xC350` y depth clamp;
+    - fog y dither;
+    - skinning de 8 bits e iluminación;
+    - `REVERSE_SUBTRACT`;
+    - líneas.
+  - **No aparecen** y se dejan fuera hasta que una captura los muestre: mipmaps, DXT, logic ops,
+    stencil, color test, beziers, splines con skinning y render-to-texture.
 
 ### F13 — Overlays de etapa en runtime
 
@@ -353,9 +370,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Elegir el renderer con una opción: `--renderer=soft|vulkan`.
 - **Criterios de hecho**: el título y la primera etapa se ven en Vulkan sin errores de validación,
   en Windows y Linux.
-- **Notas (F05)**: las combinaciones de estado que se ven en las secciones `blend`, `logic_op`,
-  `stencil`, `depth` y `tex_*` del informe de F05 sirven para dimensionar la caché de pipelines y
-  para decidir qué va por shader (logic ops, factores dobles, MIN/MAX/ABSDIFF).
+- **Notas (F05)**: el estado visto es pequeño: 11 vtypes, CLUT4/8 con paleta 8888, 3 modos de
+  blending y 3 de profundidad. Todo el blending cabe en el blending fijo de Vulkan. Falta decidir el
+  destino 5551 con dither (ver `docs/analysis/ge-usage.md` §5, F14).
 
 ### F15 — Renderer Vulkan: framebuffers y efectos
 
@@ -370,10 +387,12 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Toggles A/B por variable de entorno para cada optimización.
 - **Criterios de hecho**: en las escenas de F05, la diferencia entre los dos renderers está por debajo
   del umbral. **M3 cerrado.**
-- **Notas (F05)**: el render-to-texture, el self-texturing, las CLUT desde VRAM y las transferencias
-  de VRAM a VRAM salen de las secciones `vram_reads`, `transfers` y `cpu_vram_writes`. Lo que **no**
-  queda en un dump son las transferencias del GE hacia RAM y las lecturas de VRAM de la CPU: eso
-  necesita una traza del runtime.
+- **Notas (F05)**: **en las escenas capturadas no hubo render-to-texture.** Lo que se lee de VRAM es
+  una caché de texturas CLUT en `0x0CC000` y más arriba, y hay que invalidarla cuando se escribe en
+  VRAM.
+  - Hay que presentar los framebuffers 8888 de video, que no dibuja el GE.
+  - Las transferencias del GE hacia RAM y las lecturas de VRAM de la CPU no quedan en un dump: hacen
+    falta trazas.
 
 ---
 
@@ -402,6 +421,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   se ve correcto.
 - **Notas (F01)**: el disco trae **30 PMF** en `USRDIR/mpg/` (342 MB), cinemáticas incluidas, no
   solo el título. Probar varias, no solo `MPO_OP*.pmf`.
+- **Notas (F05)**: el decodificador real sustituye al stub de `sceMpeg`/`scePsmf` de F11.
+  - La intro y el "Press Start" se muestran en tres framebuffers 8888 en `0x04000000`, `0x04088000`
+    y `0x04110000`, sin draws del GE.
+  - El bucle del título es probablemente `MPO_OP_LOOP.pmf` o `MPO_loop.pmf` [?].
 
 ### F18 — Savedata, OSK y diálogos
 

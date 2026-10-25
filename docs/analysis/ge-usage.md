@@ -4,8 +4,11 @@ Qué funciones del GE usa **MGS: Portable Ops** (`ULUS-10202`), medido sobre *fr
 de PPSSPP. Esta página es la entrada de F11, F12, F14 y F15. Solo lleva números y nombres: los dumps
 traen texturas y vértices del juego, así que **nunca entran al repo** (`CLAUDE.md` §1.1).
 
-Estado (2026-10-25): **la herramienta está lista y probada, pero todavía no hay dumps de MPO.** La
-sección 4 (resultados) está vacía y se llena cuando el usuario capture los dumps (sección 6).
+Estado (2026-10-25): **medido sobre 11 dumps de MPO**:
+- el logo de KP, la intro, el título (2), el menú, el codec (2), las cinemáticas (2) y la primera
+  misión (2);
+- los resultados están en la sección 4 y la lista priorizada en la 5;
+- lo que falta capturar está al final de la sección 6.
 
 ## 1. De dónde salen los datos
 
@@ -138,51 +141,227 @@ Cada sección es un histograma: cuenta **draws**, salvo donde dice otra cosa.
 
 ## 4. Resultados
 
-**Pendiente: todavía no hay dumps de MPO.** El 2026-10-25 en
-`C:\Users\eduar\Documents\PPSSPP\PSP\SYSTEM\DUMP\` solo estaba `ULUS10202_EBOOT.BIN`, el volcado de
-F02.
+Once dumps que el usuario capturó el 2026-10-25 con PPSSPP v1.20.4. Todos son versión 6 (zstd) con
+`gameID = ULUS10202`. Se leyeron en su sitio (`C:\Users\eduar\Documents\PPSSPP\PSP\SYSTEM\DUMP\`) con
+`ge_usage.py --per-file`, que terminó con código 0. Todo lo de esta sección es **[V]** salvo que se
+indique lo contrario.
 
-| Escena | Dumps | Estado |
-|---|---|---|
-| Título (logo y menú del título) | — | pendiente |
-| Menú del juego | — | pendiente |
-| Primera misión (gameplay con HUD y radar) | — | pendiente |
-| Codec | — | pendiente |
-| Radar y mapa | — | pendiente |
-| Cinemática in-engine | — | pendiente |
+| Dump | Escena | Draws | Vértices | Texturas distintas |
+|---|---|---:|---:|---:|
+| `ULUS10202_0001_kojima_productions` | Logo de Kojima Productions | 6 | 42 | 1 |
+| `ULUS10202_0001_intro` | Video de introducción | **0** | 0 | 0 |
+| `ULUS10202_0001-titulo` / `_0001_title_2` | Pantalla "Press Start" del título (la segunda unos segundos después) | **0** / **0** | 0 | 0 |
+| `ULUS10202_0002-menu-juego` | Menú del juego | 87 | 346 | 4 |
+| `ULUS10202_codec_1` / `_2` | Codec | 164 / 178 | 596 / 652 | 25 / 26 |
+| `ULUS10202_cutscene_1` / `_2` | Cinemática in-engine | 816 / 640 | 12 872 / 17 171 | 111 / 128 |
+| `ULUS10202_mission1_1` / `_2` | Primera misión (con el radar del HUD) | 1 505 / 541 | 35 105 / 16 076 | 137 / 66 |
+| **Total** | | **3 937** | **82 860** | 498 |
 
-### 4.1 Histograma total
+En "Vértices", los splines cuentan sus puntos de control, no los vértices teselados.
 
-*(Se pega aquí la salida de `--format markdown`.)*
+### 4.1 El video de introducción y la pantalla de título no usan el GE
 
-### 4.2 Render-to-texture y lecturas de VRAM
+- **[V] El logo de Kojima Productions sí lo dibuja el GE**: 6 draws en modo through (5 `RECTANGLES`
+  y 1 `TRIANGLE_FAN`), una textura CLUT8 de 512×512, blending (también con color fijo) y 2 clears,
+  sobre un target 5551 en `0x044000` mientras se muestra `0x04000000`. Es la misma ruta que el menú.
+- **[V] El video de introducción y la pantalla "Press Start" no se dibujan con el GE**: sus tres dumps
+  tienen **0 draws**.
+  - Solo traen un `INIT`, una CLUT, un bloque de 8 comandos (`FRAMEBUFPTR`, `FRAMEBUFWIDTH` y
+    `FRAMEBUFPIXFORMAT` dos veces, `ZTESTENABLE` y `ZWRITEDISABLE`) y dos `DISPLAY`.
+  - El framebuffer que se muestra es **8888**, con stride 512, y rota entre **tres buffers**:
+    `0x04000000`, `0x04088000` y `0x04110000`, de `0x88000` cada uno. Por pares, la intro usa
+    `0x088000`→`0x110000`, el primer título `0x110000`→`0x000000` y el segundo `0x000000`→`0x088000`.
+  - El resto del juego usa **5551** con doble buffer.
+  - La imagen del título, texto incluido, llega a la pantalla **sin pasar por el GE**.
+- **[?]** Hipótesis, muy probable pero sin confirmar con un log HLE: son videos PMF que
+  `sceMpegAvcDecode` decodifica directamente en los tres framebuffers 8888.
+  - La etapa `title` importa `sceMpeg` (F03).
+  - En el disco están `USRDIR/mpg/MPO_OP.pmf`, `MPO_OP_LONG.pmf`, `MPO_OP_LOOP.pmf` y
+    `MPO_loop.pmf` (`docs/formats/disc-layout.md`). Los dos últimos son candidatos al bucle del
+    título, con el "Press Start" incluido en el video.
+- **Consecuencia para el plan** (aprobada por el usuario el 2026-10-25):
+  - F11 incluye un stub mínimo de `sceMpeg`/`scePsmf`, que entrega frames en negro y el estado del
+    stream, para pasar la intro y el "Press Start".
+  - El decodificador real llega en F17.
+  - Está en `docs/PLAN.md`.
 
-*(Se pega aquí la sección `vram_reads`, junto con `transfers` y `cpu_vram_writes`.)*
+### 4.2 Histograma total (las 3 937 draws)
+
+**Primitivas y vértices**
+
+| Draws | Vértices | Primitiva | Vertex type |
+|---:|---:|---|---|
+| 1 942 | 31 072 | `SPLINE` transform, siempre 4×4 puntos de control, `PATCHDIVISION` 6×6, tipo 3×3, `PATCHCULLENABLE` y `PATCHFACING` (normales invertidas) | `0x00011E`: tc 16, color 8888, pos 16 (16 B) |
+| 1 435 | 49 384 | `TRIANGLE_STRIP` transform | `0x00015E` (964), `0x004342` (175), `0x00019E` (170), `0x00C342` (77), `0x00115E` (28), `0x01C342` (15), `0x005342` (6) |
+| 442 | 1 672 | `TRIANGLE_FAN` through (HUD y 2D) | `0x80011E`: tc 16, color 8888, pos 16 |
+| 92 | 408 | `RECTANGLES` through (16 son clears) | `0x80011C`: color 8888, pos 16, sin tc |
+| 20 | 60 | `TRIANGLE_STRIP` through | `0x80011E` |
+| 4 | 244 | `LINE_STRIP` through, solo en las misiones (el radar) | `0x800180`: pos float, sin color ni tc |
+| 2 | 20 | `RECTANGLES` transform, uno por dump de misión | `0x00019E` |
+
+- **No aparecen**: puntos, `LINES`, `TRIANGLES`, beziers ni morphing.
+- **Índices**: 34 draws con índices de 16 bits.
+- **Skinning**: 273 draws, solo en `TRIANGLE_STRIP`, con pesos de 8 bits ×2, ×4 u ×8. **Los splines
+  nunca usan skinning.**
+
+**Texturas** (3 841 draws texturizadas)
+
+- Formato:
+  - **CLUT4** en 2 901 draws y **CLUT8** en 940, siempre con **paleta 8888** e índice simple (sin
+    shift, máscara ni offset).
+  - No hay texturas de color directo, CLUT16/32 ni DXT.
+- **Siempre swizzled**, siempre **un solo nivel** (sin mipmaps) y la UV sale siempre de las
+  coordenadas del vértice (sin matriz de textura ni environment map).
+- Filtro: LINEAR/LINEAR en 3 778 draws y NEAREST/NEAREST en 63.
+- Wrap: repeat en 1 953 draws y clamp en 1 888.
+- Función: **`MODULATE` rgba con doblado de color (×2)** en 3 821 draws y `MODULATE` rgba sin doblar
+  en 20. No aparecen `REPLACE`, `DECAL`, `BLEND` ni `ADD`.
+- Tamaños: de 8 a 512 texels por lado. Los más usados son 64×64 (842), 64×128 (712) y 128×128
+  (432).
+- CLUT: 1 778 cargas, **todas desde RAM**. Son de 64 bytes (16 colores, CLUT4) en 1 231 cargas y de
+  1 024 bytes (256 colores, CLUT8) en 547.
+- Origen: **3 162 draws texturizan desde VRAM** y 679 desde RAM (ver 4.3).
+
+**Pipeline de píxeles**
+
+| Función | Draws | Detalle |
+|---|---:|---|
+| Alpha test | 3 917 | Siempre `GREATER ref=0x00` (descarta alpha 0). |
+| Blending | 968 | `ADD(SRCALPHA, INVSRCALPHA)` 810 · `ADD(SRCALPHA, FIX 0xFFFFFF)` 152 (aditivo) · `REVERSE_SUBTRACT(SRCALPHA, FIX 0xFFFFFF)` 6 |
+| Depth test | 3 379 | Siempre **`GEQUAL`** (Z invertida). Escribe en 3 173 y no escribe en 206. |
+| Depth range | todos | `MINZ = 0x2710` y `MAXZ = 0xC350`: **no es el rango por defecto**. |
+| Depth clamp | 2 053 | **Los 1 942 splines lo usan**, además de 65 strips 3D y parte del HUD. |
+| Fog | 2 906 | El 90 % de los splines y casi todo el 3D. |
+| Dither | 3 207 | Solo en 3D. Importa porque el framebuffer es de 16 bits. |
+| Iluminación | 285 | 3 luces direccionales con difusa y especular, en los modelos con skinning. |
+| Culling | 931 | CW. |
+| Shading | todas | Gouraud. |
+| Clears | 16 | Dos por frame en cada escena con draws: uno completo (color, alpha/stencil y Z) y uno **solo de Z** (antes del HUD). |
+
+- **No aparecen**: logic ops, stencil test, color test, máscaras de escritura, antialias, ecuaciones
+  MIN/MAX/ABSDIFF, factores dobles y lectura del alpha de destino.
+
+**Framebuffers**
+
+- Color: **5551**, stride 512, con **doble buffer** en `0x000000` y `0x044000`. Se dibuja en uno
+  mientras se muestra el otro.
+- Depth: `0x088000`, stride 512.
+- Scissor: siempre `0,0-479,271`.
+- Esos tres buffers ocupan exactamente VRAM `0x000000-0x0CBFFF`.
+- `EdramSetAddrTranslation`: ningún dump tiene registros `EDRAMTRANS`, así que el valor se quedó en
+  el `0x400` por defecto durante los 11 frames.
+- No hay transferencias de bloque ni escrituras de la CPU en VRAM (`MEMSET`/`MEMCPY`) en ninguno de
+  los 11 frames. Esto no descarta la hipótesis del video: en PPSSPP v1.20.4 `sceMpeg` escribe con
+  `GPUCommon::PerformWriteFormattedFromMemory`, que no avisa al grabador [S: `Core/HLE/sceMpeg.cpp`,
+  `GPU/GPUCommon.cpp`].
+
+**Presencia por escena**
+
+| Función | Logo KP | Intro y título | Menú | Codec | Cinemática | Misión |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| Display 8888 sin draws del GE (tres buffers) | | ✓ | | | | |
+| 2D (through: fans, rects), swizzle, MODULATE ×2, alpha test, blending, 5551 y clears | ✓ | | ✓ | ✓ | ✓ | ✓ |
+| CLUT4 | | | ✓ | ✓ | ✓ | ✓ |
+| CLUT8 | ✓ | | | ✓ | ✓ | ✓ |
+| Splines, depth test `GEQUAL`, depth clamp, fog, dither y texturas en VRAM | | | | | ✓ | ✓ |
+| Skinning e iluminación | | | | | ✓ (`_2`) | ✓ |
+| Índices de 16 bits | | | | | ✓ | ✓ (`_1`) |
+| Líneas (`LINE_STRIP` through) y `RECTANGLES` transform | | | | | | ✓ |
+| `REVERSE_SUBTRACT` | | | | | ✓ | ✓ |
+
+### 4.3 Render-to-texture y lecturas de VRAM
+
+- **[V] En las escenas capturadas no hay render-to-texture.**
+  - Las 3 162 lecturas de textura desde VRAM usan 211 direcciones distintas, todas entre `0x0CC000`
+    y `0x165900`, es decir, justo después de los dos framebuffers y el depth buffer.
+  - **Todas son CLUT4 o CLUT8**, un formato en el que el GE no puede renderizar.
+  - Ninguna tiene las marcas del grabador de "es un render target" o "se dibujó encima".
+  - Es una **caché de texturas residente en VRAM**: los `.txp` se suben a VRAM y se samplean desde
+    ahí.
+- **[V]** No hay self-texturing, ni texturas desde el depth buffer o el framebuffer mostrado, ni CLUT
+  desde VRAM, ni transferencias de VRAM a VRAM.
+- **[?]** Cómo llegan las texturas a VRAM (memcpy de la CPU, `sceDmac` o transferencia del GE). No pasa
+  en ninguno de los 11 frames, así que se hace antes, seguramente al cargar la etapa. Se ve con una
+  traza en F09 o F15, o con un dump del primer frame de una etapa.
 
 ## 5. Lista priorizada para F11, F12, F14 y F15
 
-**Se completa con los resultados de la sección 4.** Criterios:
+Ordenada por lo que hace falta para cada hito y, dentro de cada fase, por número de draws.
 
-1. Lo que aparece en el **título o el menú** va a **F11**, porque es lo mínimo para M2.
-2. Lo que aparece en la **primera misión, el codec, el radar o las cinemáticas** va a **F12**. El
-   criterio de F12 es cubrir el 100 % de la sección `features`.
-3. En F14 se ordena por número de draws: lo más usado se resuelve primero en el pipeline fijo de
-   Vulkan, y lo que el hardware no puede hacer (logic ops sin `logicOp`, factores dobles, MIN/MAX con
-   factores, ABSDIFF) pasa al shader.
-4. Lo que salga en `vram_reads`, `transfers` y `cpu_vram_writes` va a **F15**.
+**F11, para el logo, el título y el menú (M2 parcial)**
 
-Hipótesis previas, de fuentes externas. **Ninguna está medida todavía**; los dumps las confirman o
-las descartan:
+1. **El GE por software alcanza para el logo de KP y el menú, pero no para la intro ni el "Press
+   Start"** (4.1).
+   - Esas dos pantallas llegan como framebuffers 8888 que no escribe el GE (tres buffers que rotan).
+   - Por eso F11 incluye un **stub de `sceMpeg`/`scePsmf`** que entrega frames en negro, informa bien
+     el estado y el fin del stream y deja que el juego acepte Start.
+   - El display tiene que presentar 8888 además de 5551.
+2. 2D en modo through: `TRIANGLE_FAN` (`0x80011E`), `RECTANGLES` sin textura (`0x80011C`) y
+   `TRIANGLE_STRIP`.
+3. Texturas **CLUT4** (el menú) y **CLUT8** (el logo y el codec), con paleta 8888, **swizzle** y cargas de CLUT
+   de 64 y 1 024 bytes desde RAM.
+4. `MODULATE` rgba con **doblado de color**, alpha test `GREATER 0`, blending `ADD(SRCALPHA,
+   INVSRCALPHA)` y aditivo `ADD(SRCALPHA, FIX 0xFFFFFF)`.
+5. Salida **5551** con doble buffer (`0x000000` y `0x044000`), clear completo y clear solo de Z.
+6. Filtro lineal, wrap repeat y clamp, y scissor de pantalla completa.
 
-| Función | Fase | Fuente |
-|---|---|---|
-| Líneas (radar y mapa), con el comportamiento de `[CenteredLines]` | F12, F15 | [S] `compat.ini` y [#20142](https://github.com/hrydgard/ppsspp/issues/20142) |
-| Splines y beziers con skinning (suelo cerca de la cámara, "vtype 12000780, bones: 1") | F12, F15 | [S] [#1884](https://github.com/hrydgard/ppsspp/issues/1884), [#3343](https://github.com/hrydgard/ppsspp/issues/3343) |
-| Clamp de profundidad y guard-band | F12, F15 | [S] [#12348](https://github.com/hrydgard/ppsspp/issues/12348) |
-| Render-to-texture y textura desde el target actual | F12, F15 | [S] [#2438](https://github.com/hrydgard/ppsspp/issues/2438), [#1202](https://github.com/hrydgard/ppsspp/issues/1202) |
-| `sceGeEdramSetAddrTranslation` | F11 | [S] `RESEARCH.md` §4 |
-| CLUT de 4 y 8 bits con paleta RGBA8888 y swizzle (`.txp`) | F11, F12 | [S] `waspothegreat/MGS-MPO-Noesis` |
-| Funciones de textura REPLACE y MODULATE con doblado de color, y blending (flags de `.txp`) | F12 | [S] `waspothegreat/MGS-MPO-Noesis` |
+**F12, para las cinemáticas, la misión y el codec (el resto del histograma)**
+
+1. **Splines** 4×4, división 6×6, tipo 3×3, con patch culling y normales invertidas, sin skinning ni
+   iluminación. Son el **49 % de las draws** (el suelo y el escenario).
+2. Profundidad: test `GEQUAL`, rango `0x2710-0xC350` y **depth clamp** (todos los splines).
+3. Fog y dither sobre 5551.
+4. Skinning con pesos de 8 bits (×2, ×4 y ×8) y 3 luces direccionales con difusa y especular.
+5. `REVERSE_SUBTRACT(SRCALPHA, FIX 0xFFFFFF)`.
+6. **Líneas** `LINE_STRIP` through con posición float (el radar), con el comportamiento de
+   `[CenteredLines]`.
+7. Casos raros: índices de 16 bits, `RECTANGLES` en modo transform, `MODULATE` sin doblado y filtro
+   NEAREST.
+8. Sacar de F12 lo que no aparece: mipmaps, DXT, CLUT16/32, texturas de color directo, logic ops,
+   stencil, color test, máscaras, beziers, puntos, morphing, matriz de textura y environment map. No
+   se implementan antes de que una captura los muestre. Si aparece algo nuevo, el intérprete de
+   comandos lo registra de forma visible.
+
+**F14, Vulkan base**
+
+1. Hay poco estado distinto:
+   - 11 vtypes;
+   - 2 formatos de textura (CLUT4 y CLUT8 con paleta 8888, que se resuelven en el shader o al
+     subir);
+   - 3 modos de blending más "sin blending";
+   - 3 modos de profundidad;
+   - fog, alpha test y doblado de color en el shader.
+   Una caché de pipelines pequeña alcanza.
+2. Todo el blending visto **cabe en el blending fijo de Vulkan**: `FIX 0xFFFFFF` es `ONE`, y
+   `REVERSE_SUBTRACT` existe. No hace falta blending por shader para estas escenas.
+3. Depth clamp con `depthClamp` y el rango de viewport `0x2710-0xC350`, y comparación
+   `GREATER_OR_EQUAL`.
+4. Destino 5551 con dither. Hay que decidir si se renderiza en un formato de 16 bits o en RGBA8 con
+   cuantización y dither al presentar (afecta a F15 y a la comparación con el renderer por software).
+5. Splines: teselado en CPU (como el software) o en GPU. Son el 49 % de las draws.
+
+**F15, framebuffers y efectos**
+
+1. **No hay render-to-texture en las escenas capturadas**, así que la prioridad baja frente a lo que
+   suponía `RESEARCH.md`. Antes de implementarlo hace falta una captura que lo muestre.
+2. Caché de texturas residentes en VRAM (`0x0CC000` en adelante): hay que invalidarla cuando la CPU,
+   `sceDmac` o el GE escriban en VRAM.
+3. Los tres framebuffers 8888 de la intro y del título, escritos fuera del GE: el renderer Vulkan
+   tiene que poder presentar un framebuffer de VRAM que no dibujó él, con otro formato y en otra
+   dirección que los del juego.
+4. El comportamiento de `[CenteredLines]` en las líneas del radar.
+
+### 5.1 Las hipótesis previas contra los dumps
+
+| Hipótesis (fuente) | Resultado |
+|---|---|
+| Líneas para el radar y el mapa, `[CenteredLines]` ([S] `compat.ini`, [#20142](https://github.com/hrydgard/ppsspp/issues/20142)) | **[V] Hay líneas**: 4 `LINE_STRIP` through en las misiones. **[?]** El efecto de `[CenteredLines]` necesita una comparación visual, y falta el mapa a pantalla completa. |
+| Splines y beziers **con skinning** para el suelo ([S] [#1884](https://github.com/hrydgard/ppsspp/issues/1884), [#3343](https://github.com/hrydgard/ppsspp/issues/3343)) | **[V] Hay splines** (1 942, el 49 %). **[V] No se vieron ni splines con skinning ni beziers**: los splines usan `0x00011E`, sin pesos, y el skinning solo aparece en triangle strips. El "vtype 12000780" del issue no aparece. |
+| Clamp de profundidad y guard-band ([S] [#12348](https://github.com/hrydgard/ppsspp/issues/12348)) | **[V] Clamp**: 2 053 draws, todos los splines, con rango `0x2710-0xC350`. **[?]** El guard-band no se puede medir con un dump; se ve comparando imágenes. |
+| Render-to-texture y textura desde el target actual ([S] [#2438](https://github.com/hrydgard/ppsspp/issues/2438), [#1202](https://github.com/hrydgard/ppsspp/issues/1202)) | **[V] No se vio** en ninguna escena capturada: lo que se lee de VRAM es una caché de texturas CLUT. **[?]** Puede aparecer en otras escenas (pausa, efectos, transiciones). |
+| `sceGeEdramSetAddrTranslation` ([S] `RESEARCH.md` §4) | **[V]** El valor se quedó en `0x400` (el de por defecto) en los 11 frames. **[?]** Si el juego llama a la función (con ese valor u otro) en otro momento lo muestra el histograma HLE de F08. |
+| CLUT de 4 y 8 bits con paleta RGBA8888 y swizzle (`.txp`) ([S] Noesis) | **[V]** El 100 % de las draws texturizadas. |
+| `REPLACE` o `MODULATE` con doblado de color, y blending (flags de `.txp`) ([S] Noesis) | **[V]** `MODULATE` ×2 en 3 821 draws y `MODULATE` en 20. **[V] No se vio `REPLACE`.** Blending: 3 modos (4.2). |
 
 ## 6. Guía de captura (para el usuario)
 
@@ -217,3 +396,21 @@ Con PPSSPP **v1.20.4** para Windows, en inglés (la configuración del usuario t
    o copiarse a `dumps/` en la raíz del checkout, que está en `.gitignore`.
 8. Después se ejecuta `python3 -I profiles/mpo/tools/ge_usage.py --format markdown --per-file <carpeta>`
    y se completan las secciones 4 y 5 de esta página.
+
+### Capturas que faltan
+
+Ninguna bloquea F11. Sirven para confirmar las [?] de la sección 5.1:
+
+- **El mapa o el radar a pantalla completa**, para ver las líneas a otra escala y comparar
+  `[CenteredLines]`. Las misiones solo traen el radar del HUD (4 `LINE_STRIP`).
+- **El log HLE de PPSSPP en la intro y en el "Press Start"**, que confirma que el video es PMF y qué
+  archivo se reproduce. Para eso hay que:
+  - activar "Enable debug logging" y subir los canales `ME` y `HLE` en Settings › Tools › Developer
+    tools › Logging channels;
+  - abrir Debug › Log console;
+  - anotar las llamadas `sceMpeg*` y `scePsmf*` y el `sceIoOpen` del `.pmf`.
+- **Escenas candidatas a render-to-texture**, que en estas capturas no apareció: el menú de pausa
+  sobre el juego, las transiciones entre áreas, efectos de pantalla completa (stun, chaff, granada
+  aturdidora) y la cámara o la mira si existen.
+- **El primer frame al entrar a una etapa**, para ver cómo se suben las texturas a la caché de VRAM
+  (`MEMCPY` o transferencias en el dump).
