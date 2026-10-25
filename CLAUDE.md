@@ -10,6 +10,16 @@ un **runtime HLE** que sustituye el sistema operativo y el hardware de la PSP.
 - Los hallazgos completos, con todas las fuentes, están en [`docs/RESEARCH.md`](docs/RESEARCH.md).
   Antes de tomar una decisión técnica, léelo.
 
+## 0. Trabajo por fases (léelo primero)
+
+- El trabajo se hace en **fases de una sesión**, definidas en [`docs/PLAN.md`](docs/PLAN.md). El
+  usuario ejecuta `/clear` entre fases y arranca con "Inicia la fase FXX según docs/PLAN.md".
+- **Al empezar una sesión**: leer `docs/PLAN.md` (la tabla de estado y la ficha de la fase) y la nota
+  de cierre de la fase anterior en `docs/sessions/`. Después, comprobar los requisitos.
+- **Al terminar**: verificar los criterios de hecho con evidencia, escribir `docs/sessions/FXX.md`
+  (a partir de `TEMPLATE.md`), actualizar el estado en `docs/PLAN.md` y hacer commit con `/commit`.
+- No se adelanta trabajo de fases futuras. Lo que se descubra se anota en la nota de sesión.
+
 ---
 
 ## 1. Reglas que no se negocian
