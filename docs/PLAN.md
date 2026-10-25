@@ -298,6 +298,12 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Rasterizador por software portado de softgpu de PPSSPP, con cabeceras de origen.
 - **Criterios de hecho**: se ven el logo y el menú del título. Las capturas comparadas contra PPSSPP
   quedan en local y se describen en la nota de sesión. **M2 parcial.**
+- **Notas (F05)**: lo que hay que cubrir sale de `docs/analysis/ge-usage.md` (escenas `title` y
+  `menu`). Los frame dumps **no guardan la estructura de las listas** (`CALL`, `JUMP`, `RET`,
+  `SIGNAL`, `FINISH`, `BASE`, `ORIGIN`, `OFFSETADDR`, `BOUNDINGBOX`, `BJUMP`), así que los signals,
+  los stalls y los saltos por bounding box se miden con el histograma HLE. `ge_usage.vertex_size()`
+  sigue las reglas de tamaño de vértice de PPSSPP y coincide con los dumps reales; sirve como
+  referencia para el decodificador.
 
 ### F12 — GE por software: completo
 
@@ -312,6 +318,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Render-to-texture.
 - **Criterios de hecho**: el histograma de F05 queda cubierto al 100 % y las escenas de los dumps se
   ven igual que en PPSSPP.
+- **Notas (F05)**: la lista de comprobación es la sección `features` de
+  `python3 -I profiles/mpo/tools/ge_usage.py` sobre los dumps de todas las escenas. Los mismos dumps
+  sirven para comparar contra PPSSPP, que los reproduce si se abren como un juego (**File › Load**,
+  Ctrl+O).
 
 ### F13 — Overlays de etapa en runtime
 
@@ -343,6 +353,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Elegir el renderer con una opción: `--renderer=soft|vulkan`.
 - **Criterios de hecho**: el título y la primera etapa se ven en Vulkan sin errores de validación,
   en Windows y Linux.
+- **Notas (F05)**: las combinaciones de estado que se ven en las secciones `blend`, `logic_op`,
+  `stencil`, `depth` y `tex_*` del informe de F05 sirven para dimensionar la caché de pipelines y
+  para decidir qué va por shader (logic ops, factores dobles, MIN/MAX/ABSDIFF).
 
 ### F15 — Renderer Vulkan: framebuffers y efectos
 
@@ -357,6 +370,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Toggles A/B por variable de entorno para cada optimización.
 - **Criterios de hecho**: en las escenas de F05, la diferencia entre los dos renderers está por debajo
   del umbral. **M3 cerrado.**
+- **Notas (F05)**: el render-to-texture, el self-texturing, las CLUT desde VRAM y las transferencias
+  de VRAM a VRAM salen de las secciones `vram_reads`, `transfers` y `cpu_vram_writes`. Lo que **no**
+  queda en un dump son las transferencias del GE hacia RAM y las lecturas de VRAM de la CPU: eso
+  necesita una traza del runtime.
 
 ---
 

@@ -399,6 +399,10 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
   `sceGeEdramSetAddrTranslation`. Hubo bugs históricos con flashes negros
   ([#2438](https://github.com/hrydgard/ppsspp/issues/2438),
   [#1202](https://github.com/hrydgard/ppsspp/issues/1202)).
+- **Medición directa**: lo de arriba son reportes de terceros. El inventario medido con frame dumps
+  de PPSSPP (método, herramienta `ge_usage.py` y resultados) está en
+  [`docs/analysis/ge-usage.md`](analysis/ge-usage.md). Al cerrar F05 los resultados seguían
+  pendientes de que se capturaran los dumps.
 - **Borrado de saves**: el diálogo de borrar save podía vaciar SAVEDATA
   ([#6600](https://github.com/hrydgard/ppsspp/issues/6600)). Hay que implementar bien el modo delete.
 
