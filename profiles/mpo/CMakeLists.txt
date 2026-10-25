@@ -4,6 +4,8 @@
 # under this directory (CLAUDE.md §1.3). Generated code (generated/) is built
 # from the user's own executable and is never versioned.
 
+add_subdirectory(host)
+
 if(PSPRECOMP_BUILD_PROFILE_TESTS)
     add_subdirectory(tests)
 endif()

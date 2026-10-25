@@ -32,6 +32,7 @@ traces/
 
 # Builds.
 build/
+build-*/
 out/
 cmake-build-*/
 .cache/

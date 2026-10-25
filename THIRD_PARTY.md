@@ -4,11 +4,12 @@ El proyecto es **GPL-3.0-or-later** (ver `LICENSE`). Toda dependencia nueva se r
 versión fijada y su licencia, y lleva su `LICENSE` o `NOTICE` al lado en `third_party/<nombre>/`. No
 se aceptan dependencias GPL-2.0-only ni con licencias incompatibles con GPLv3.
 
-Estado: solo **PSPRecomp** está incorporado; el resto está **planificado**. La columna "Versión" se llena al incorporar cada uno.
+Estado: **PSPRecomp** y **toml++** están incorporados; el resto está **planificado**. La columna "Versión" se llena al incorporar cada uno.
 
 | Componente | Uso | Licencia | Versión / commit | Notas |
 |---|---|---|---|---|
 | PSPRecomp | Framework de recompilación y runtime base | MIT | `f6e7d415c7f447b934cc3865a31eb725f353d659` (2026-08-14) | Submódulo en `framework/psprecomp` (incorporado en F00; su `LICENSE` está dentro). Nuestros cambios genéricos se quedan en MIT para enviarlos upstream. |
+| toml++ (tomlplusplus) | Leer `profiles/mpo/config/supported.toml` | MIT | `v3.4.0` (single header, SHA-256 `6b5172ad4dd6519aec67b919181fa7a38a2234131e5b2afa232dfe444819783e`) | En `third_party/tomlplusplus/` con su `LICENSE` (incorporado en F01). Se compila con `TOML_EXCEPTIONS=0`. |
 | SDL3 | Ventana, input y audio | zlib | — | |
 | Vulkan-Headers | API gráfica | Apache-2.0 / MIT | — | |
 | volk | Loader de Vulkan | MIT | — | |

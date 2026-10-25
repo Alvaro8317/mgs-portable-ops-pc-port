@@ -4,7 +4,22 @@ Perfil de PSPRecomp para **MGS: Portable Ops** (base `ULUS-10202`, disco 1.02). 
 depende de una dirección, un hash o un layout del juego (`CLAUDE.md` §1.3). El framework
 (`framework/psprecomp`) tiene que seguir compilando sin este perfil y sin el juego.
 
-Estado: **esqueleto (F00)**. Por ahora solo hay un smoke test que enlaza contra `psprecomp_core`.
+Estado: **F01**. Están el instalador (`mpo --install`) y los tests de disco con ISOs sintéticos.
+
+## Instalar la copia del usuario
+
+```bash
+mpo --install game/ULUS-10202.iso      # valida y extrae a game/disc/ y escribe game/install.toml
+mpo --list game/ULUS-10202.iso         # lista nombres y tamaños
+mpo --manifest game/ULUS-10202.iso \
+    --ignore PSP_GAME/SYSDIR/UPDATE/ --ignore PSP_GAME/SYSDIR/BOOT.BIN   # bloque para supported.toml
+```
+
+- `--install` compara el `DISC_ID` y el `DISC_VERSION` de `PARAM.SFO`, y después el conjunto exacto de
+  archivos, con sus tamaños y SHA-256, contra `config/supported.toml`. Si algo no coincide, rechaza la
+  imagen (código de salida 1) y no escribe nada.
+- Solo extrae lo que piden las fases de análisis: `PARAM.SFO`, `EBOOT.BIN` (cifrado) y todos los
+  `*.prx`. El resto se leerá directamente del ISO.
 
 ## Estructura
 

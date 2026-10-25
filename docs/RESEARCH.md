@@ -304,9 +304,10 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
 **Confirmado [V]:**
 
 - **Gráficos y texto**: GE completo (incluidos splines, beziers y líneas) y `sceFont`.
-- **Audio y video**: `sceAtrac` (ATRAC3), `sceSas` (ADSR) y `sceMpeg` (solo el video del título;
-  las cinemáticas son in-engine,
-  [#3659](https://github.com/hrydgard/ppsspp/issues/3659)).
+- **Audio y video**: `sceAtrac` (ATRAC3), `sceSas` (ADSR) y `sceMpeg`. Muchas cinemáticas son
+  in-engine ([#3659](https://github.com/hrydgard/ppsspp/issues/3659)), pero **no todas**: el disco
+  trae **30 videos PMF** en `USRDIR/mpg/` (342 MB), con el título (`MPO_OP*.pmf`), los créditos
+  (`staffroll.pmf`) y cinemáticas `sNN_MM*.pmf` [V, F01, `docs/formats/disc-layout.md`].
 - **Sistema**: `sceUtility` Savedata y OSK, y `sceKernelLoadModule`.
 - **Red**: `sceNetAdhoc*` (con Matching y Discover), `sceNetApctl*`, `sceNetInet`,
   `sceNetResolver`, `sceHttp*` (`…WithURL`), `sceUri*` y `sceNpAuth`.
@@ -316,7 +317,7 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
 - `sceUsbGps` (solo en US y JP).
 - `sceUtilityNetconf`.
 - Cuánto usa la VFPU.
-- `PSP_SYSTEM_VER` de cada región.
+- `PSP_SYSTEM_VER` de cada región. US 1.02 trae `2.81` [V, F01].
 
 ### AP Scan: reclutar con APs de Wi-Fi
 
@@ -385,13 +386,18 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
 ## 5. Huecos que quedan para M0
 
 1. Confirmar que `EBOOT.BIN` es `mgp_main`, si está cifrado (casi seguro que sí, con ~PSP) y cuál es
-   su base de carga.
+   su base de carga. **F01 [V]**: está cifrado (`~PSP`) y el nombre de módulo en la cabecera es
+   `mgp_main`. Falta la base de carga (F02).
 2. Ver si los `stage/*.prx` están cifrados y entender el formato `.rlc`: ¿es una relocación propia
-   de Konami además de la de PRX?
+   de Konami además de la de PRX? **F01 [V]**: los 106 `stage/<s>/<s>.prx` son **ELF sin cifrar**, y
+   **no hay ningún `.rlc` en el disco** (cada etapa trae solo `<s>.prx` y `_zar`). Hay que averiguar
+   de dónde sale el `.rlc` (F04).
 3. Hacer el inventario de imports por librería y versión de firmware (`PSP_SYSTEM_VER`).
 4. Medir la VFPU, los branch-likely, los `jr`/`jalr` y los saltos sin resolver en `mgp_main` y en una
    etapa.
-5. Averiguar si `KCEJ_SOUND2` es un PRX aparte o va dentro del ejecutable.
+5. Averiguar si `KCEJ_SOUND2` es un PRX aparte o va dentro del ejecutable. **F01 [V]**: hay un
+   `USRDIR/modules/sound2.prx` aparte (ELF sin cifrar), junto a `kjfs.prx` y `zlibdec.prx`, y 22
+   librerías de Sony cifradas (`~SCE`/`~PSP`). Falta confirmar que `sound2.prx` es `KCEJ_SOUND2`.
 6. Ver si los GCX de MPO están cifrados.
 7. Ver por qué el AP Scan se cuelga en PPSSPP, comparando contra JPCSP.
 8. Revisar el repo y la versión de ghidra-allegrex. No se encontró en búsqueda; gow-psp-recomp usa
