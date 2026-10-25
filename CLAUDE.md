@@ -130,7 +130,8 @@ los hilos y fibras, en vez de depender de `ulimit`.
 
 ### Código
 
-- **El módulo principal es `mgp_main`** (seguramente `PSP_GAME/SYSDIR/EBOOT.BIN`, falta verificarlo).
+- **El módulo principal es `mgp_main`** (`PSP_GAME/SYSDIR/EBOOT.BIN`, cifrado con `~PSP`). Es un
+  **PRX relocatable** (`e_type 0xFFA0`), y PPSSPP lo carga en `0x08804000` (verificado en F02).
 - Además hay **overlays de código por etapa**: `disc0:/PSP_GAME/USRDIR/stage/<s>/<s>.prx` (módulo
   `mgp_stage`), con una tabla de relocación propia en `.rlc`. Se cargan y descargan con
   `sceKernelLoadModule` en tiempo de ejecución.
@@ -138,8 +139,9 @@ los hilos y fibras, en vez de depender de `ulimit`.
     hash.
   - Hay que entender el formato `.rlc`.
   - El intérprete cubre lo que no se haya recompilado.
-- Hay otros módulos de Konami: `KCEJ_FS` (el sistema de archivos) y `KCEJ_SOUND2` (el driver de
-  sonido). Falta verificar si son PRX aparte o si van enlazados dentro de `mgp_main`.
+- Hay otros módulos de Konami, que son PRX aparte en `USRDIR/modules/` y no van cifrados (verificado
+  en F02): `KCEJ_FS` (`kjfs.prx`, el sistema de archivos), `KCEJ_SOUND2` (`sound2.prx`, el driver de
+  sonido) y `ZLIB` (`zlibdec.prx`).
 - El juego trae su propia zlib (`inflate*`) y la carga de datos pasa por el manifiesto `data.cnf`.
 - Los scripts son **GCL/GCX de la variante MGS3**, basada en Tcl. La herramienta `Jayveer/Gcx` los
   decompila. Es probable que haya un intérprete GCL dentro de `mgp_main`, que es un buen punto de
@@ -233,7 +235,7 @@ La PSP-1000 es el objetivo: el juego es de 2006 y no usa la RAM extra.
 | Scratchpad | `0x00010000–0x00013FFF` | 16 KiB |
 | VRAM (EDRAM) | `0x04000000–0x041FFFFF` | 2 MiB. Los framebuffers y texturas viven aquí. Ojo con los espejos y con `EdramSetAddrTranslation`. |
 | RAM de kernel | `0x08000000–0x087FFFFF` | 8 MiB. El HLE puede usarla para sus estructuras. |
-| RAM de usuario | `0x08800000–0x09FFFFFF` | 24 MiB. El EBOOT no relocatable se carga en `0x08804000`. |
+| RAM de usuario | `0x08800000–0x09FFFFFF` | 24 MiB. `mgp_main` es un PRX relocatable, y PPSSPP lo carga en `0x08804000` (`0x2F7800` bytes). |
 
 - Los espejos (`0x4xxxxxxx` sin caché y `0x8xxxxxxx` de kernel) se enmascaran con
   `addr & 0x1FFFFFFF` sobre una arena reservada de una vez.

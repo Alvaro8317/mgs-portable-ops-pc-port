@@ -11,8 +11,12 @@
 #
 # `ignored`: the firmware updater (SYSDIR/UPDATE) and SYSDIR/BOOT.BIN are not
 # used by the game and are commonly blanked in dumps, so they are not checked.
-# `extract`: copied to <game-dir>/disc/ by `mpo --install` for decryption and
-# analysis (F02-F04). "*.ext" matches by suffix.
+# `extract`: copied to <game-dir>/disc/ by `mpo --install` for analysis
+# (F02-F04). "*.ext" matches by suffix.
+# `decrypt`: ~PSP modules that `mpo --install` decrypts to <game-dir>/elf/
+# (F02). `size` and `sha256` are those of the decrypted ELF, which must match
+# PPSSPP's "Dump decrypted EBOOT.BIN" (its first `size` bytes; PPSSPP also
+# writes the decryption buffer residue after the ELF).
 
 [[version]]
 disc_id = "ULUS10202"
@@ -26,6 +30,9 @@ extract = [
     "PSP_GAME/PARAM.SFO",
     "PSP_GAME/SYSDIR/EBOOT.BIN",
     "*.prx",
+]
+decrypt = [
+    { path = "PSP_GAME/SYSDIR/EBOOT.BIN", module = "mgp_main", output = "mgp_main.elf", size = 2693412, sha256 = "ca700ea516a98949763410da537a75a08f9723718fab302bcd7ef1e6185cadf8" },
 ]
 file = [
     { path = "PSP_GAME/ICON0.PNG", size = 5804, sha256 = "e2a6c3268c9bb92bcfdd3488e91ec6fa203f00b3bb369444d8a08e7832d2168a" },

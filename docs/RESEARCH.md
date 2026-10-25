@@ -1,6 +1,6 @@
 # Investigación — Port nativo de MGS: Portable Ops
 
-Fecha: 2026-10-24. Las etiquetas indican de dónde sale cada dato:
+Fecha: 2026-10-24 (con hechos añadidos en F01 y F02). Las etiquetas indican de dónde sale cada dato:
 
 - **[V]**: verificado en la fuente primaria (redump, código fuente, README o strings de un binario).
 - **[S]**: viene de una fuente secundaria o de prensa.
@@ -194,6 +194,51 @@ tclamb/mhp2g-decomp y "PSP Web Recomp". Los trackers donde aparecen son
 - **`mgp_main`** es el módulo principal [V]. Los plugins de TheFloW y savempo lo enganchan, y
   [MGSRemastered](https://github.com/TheOfficialFloW/RemasteredControls/blob/master/MetalGearSolid/main.c)
   también engancha `mgp_stage`. Peace Walker comparte esa convención de nombres.
+- **Identidad de los módulos, vista en el ELF descifrado (F02) [V]**:
+  - `EBOOT.BIN` es un `~PSP` con módulo `mgp_main`, tag `0xC0CB167C` y `decrypt_mode` 9. Está sin
+    comprimir y mide `psp_size` 2 693 760 bytes. `PrxDecrypter` de PPSSPP lo descifra con la entrada
+    `g_keyEBOOT2xx` (código KIRK `0x5D`) de su tabla `g_tagInfo`, la que usan los tipos 0 y 1.
+  - El ELF de `mgp_main` mide 2 693 412 bytes, con SHA-256
+    `ca700ea516a98949763410da537a75a08f9723718fab302bcd7ef1e6185cadf8`. Coincide con los primeros
+    `elf_size` bytes del "Dump decrypted EBOOT.BIN" de PPSSPP.
+    - PPSSPP vuelca el buffer entero de `max(elf_size, psp_size)` bytes, así que su archivo tiene 348
+      bytes más de residuo del descifrado. El buffer completo también coincide byte a byte.
+  - `mgp_main` es un **PRX relocatable** (`e_type 0xFFA0`), no un `ET_EXEC` de dirección fija:
+    - `e_entry` es `0x128` y `e_flags` es `0x10A23001`.
+    - Tiene dos `LOAD`: el primero con vaddr `0x0`, filesz y memsz `0x1EED14` y flags RWX; el
+      segundo con vaddr `0x1EED40`, filesz `0xD154`, memsz `0x108A80` y flags RW, que es casi todo
+      `.bss`.
+    - Tiene un segmento `0x700000A0`, que son las relocaciones PRX del formato clásico (`PT_PRXRELOC`; no es el
+      `0x700000A1` comprimido), de `0x95298` bytes, y
+      34 secciones con nombre (`.text`, `.sceStub.text`, `.lib.stub`, `.rodata.sceNid`, `.rel.*`,
+      etc.).
+  - Su `sceModuleInfo` está en el offset de archivo `0x1D7130` (vaddr relativa `0x1D7070`):
+    - nombre `mgp_main`, atributo `0x0000` (modo usuario) y versión 1.1;
+    - `gp` en `0x15150`;
+    - exports en `0x1D6DD4–0x1D6DE4` (16 bytes) e imports en `0x1D6DEC–0x1D706C` (640 bytes).
+  - **Base de carga**: el debugger de PPSSPP (en el Windows del usuario, con el juego ya en marcha)
+    lista estos módulos:
+
+    | Módulo | Dirección | Tamaño |
+    |---|---|---|
+    | `mgp_main` | `0x08804000` | `0x2F7800` |
+    | `ZLIB` | `0x08B20000` | `0x4100` |
+    | `KCEJ_SOUND2` | `0x08B24100` | `0x51400` |
+    | `KCEJ_FS` | `0x08B75500` | `0x11A00` |
+    | `mgp_stage` | `0x08B8F900` | `0x3C600` |
+
+    - El tamaño de `mgp_main` cuadra con el ELF: `0x1EED40 + 0x108A80 = 0x2F77C0`, redondeado a
+      0x100.
+    - Entre el final de `mgp_main` (`0x08AFB800`) y `ZLIB` quedan `0x24800` bytes que reserva otra
+      cosa [?].
+    - Como el módulo es relocatable, la recompilación tiene que **aplicar sus relocaciones en
+      `0x08804000`**, igual que el `pspelf.py` de gow-psp-recomp.
+  - Los módulos de Konami en `USRDIR/modules/` son PRX relocatables sin cifrar:
+    - `kjfs.prx` es `KCEJ_FS` (`gp` `0x87A0`);
+    - `sound2.prx` es `KCEJ_SOUND2` (`gp` `0x8B00`);
+    - `zlibdec.prx` es `ZLIB`.
+  - Los 106 `stage/<s>/<s>.prx` son `mgp_stage` (`0xFFA0`).
+  - Se obtiene con `python -I profiles/mpo/tools/prx_info.py <elf>`.
 - Hay **overlays de código por etapa** [V], según las strings del plugin
   [savempo](https://github.com/snakeswiss/MPO-Guide):
   - Las strings son `disc0:/PSP_GAME/USRDIR/stage/%s/%s.prx`, `%sstage/%s/%s.rlc`,
@@ -387,7 +432,8 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
 
 1. Confirmar que `EBOOT.BIN` es `mgp_main`, si está cifrado (casi seguro que sí, con ~PSP) y cuál es
    su base de carga. **F01 [V]**: está cifrado (`~PSP`) y el nombre de módulo en la cabecera es
-   `mgp_main`. Falta la base de carga (F02).
+   `mgp_main`. **F02 [V]**: es un PRX relocatable y PPSSPP lo carga en `0x08804000` (ver §4,
+   Código). Resuelto.
 2. Ver si los `stage/*.prx` están cifrados y entender el formato `.rlc`: ¿es una relocación propia
    de Konami además de la de PRX? **F01 [V]**: los 106 `stage/<s>/<s>.prx` son **ELF sin cifrar**, y
    **no hay ningún `.rlc` en el disco** (cada etapa trae solo `<s>.prx` y `_zar`). Hay que averiguar
@@ -397,7 +443,8 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
    etapa.
 5. Averiguar si `KCEJ_SOUND2` es un PRX aparte o va dentro del ejecutable. **F01 [V]**: hay un
    `USRDIR/modules/sound2.prx` aparte (ELF sin cifrar), junto a `kjfs.prx` y `zlibdec.prx`, y 22
-   librerías de Sony cifradas (`~SCE`/`~PSP`). Falta confirmar que `sound2.prx` es `KCEJ_SOUND2`.
+   librerías de Sony cifradas (`~SCE`/`~PSP`). **F02 [V]**: `sound2.prx` es `KCEJ_SOUND2` y
+   `kjfs.prx` es `KCEJ_FS`. Resuelto.
 6. Ver si los GCX de MPO están cifrados.
 7. Ver por qué el AP Scan se cuelga en PPSSPP, comparando contra JPCSP.
 8. Revisar el repo y la versión de ghidra-allegrex. No se encontró en búsqueda; gow-psp-recomp usa

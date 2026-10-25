@@ -255,6 +255,35 @@ void test_supported_parsing() {
                "invalid supported.toml must be rejected:\n" + text);
     }
 
+    const auto with_decrypt = [&](const std::string &entry) {
+        return ok + "decrypt = [" + entry + "]\n";
+    };
+    const std::string good_decrypt =
+        "{ path = \"A\", module = \"m\", output = \"m.elf\", size = 4, sha256 = \"" + sha + "\" }";
+    expect(mpo::install::parse_supported_versions(with_decrypt(good_decrypt), versions, error) &&
+               versions.size() == 1 && versions[0].decrypt.size() == 1 &&
+               versions[0].decrypt[0].output == "m.elf" && versions[0].decrypt[0].size == 4,
+           "decrypt entry is parsed: " + error);
+    const std::string decrypt_cases[] = {
+        // Missing sha256.
+        "{ path = \"A\", module = \"m\", output = \"m.elf\", size = 4 }",
+        // Not a listed disc file.
+        "{ path = \"B\", module = \"m\", output = \"m.elf\", size = 4, sha256 = \"" + sha + "\" }",
+        // Output escaping <game_dir>/elf/.
+        "{ path = \"A\", module = \"m\", output = \"../m.elf\", size = 4, sha256 = \"" + sha +
+            "\" }",
+        "{ path = \"A\", module = \"m\", output = \"..\", size = 4, sha256 = \"" + sha + "\" }",
+        "{ path = \"A\", module = \"m\", output = \"\", size = 4, sha256 = \"" + sha + "\" }",
+        // Empty ELF.
+        "{ path = \"A\", module = \"m\", output = \"m.elf\", size = 0, sha256 = \"" + sha + "\" }",
+        // Duplicate output.
+        good_decrypt + ", " + good_decrypt,
+    };
+    for (const std::string &entry : decrypt_cases) {
+        expect(!mpo::install::parse_supported_versions(with_decrypt(entry), versions, error),
+               "invalid decrypt entry must be rejected:\n" + entry);
+    }
+
     mpo::install::SupportedVersion version;
     version.ignored = {"PSP_GAME/SYSDIR/UPDATE/"};
     version.extract = {"*.prx", "PSP_GAME/PARAM.SFO"};
@@ -271,11 +300,17 @@ void test_profile_supported_table() {
     expect(mpo::install::load_supported_versions(MPO_SUPPORTED_TOML, versions, error),
            "profiles/mpo/config/supported.toml: " + error);
     bool found = false;
+    bool decrypts_main = false;
     for (const auto &version : versions) {
         if (version.disc_id != "ULUS10202" || version.disc_version != "1.02") continue;
         for (const auto &file : version.files) found |= file.path == "PSP_GAME/SYSDIR/EBOOT.BIN";
+        for (const auto &module : version.decrypt) {
+            decrypts_main |=
+                module.path == "PSP_GAME/SYSDIR/EBOOT.BIN" && module.module == "mgp_main";
+        }
     }
     expect(found, "supported.toml lists ULUS10202 1.02 with its EBOOT.BIN hash");
+    expect(decrypts_main, "supported.toml decrypts EBOOT.BIN (mgp_main)");
 }
 
 void test_validation() {
@@ -364,6 +399,36 @@ void test_install() {
     remove_quietly(iso_path);
 }
 
+// The synthetic EBOOT.BIN is not a real ~PSP module, so a decrypt entry for it
+// must fail (or be refused when decryption is not built in) before anything is
+// written: no extracted files and no ELF.
+void test_install_decrypt_failure() {
+    const auto files = sample_disc();
+    auto versions = supported_for(files);
+    versions[0].decrypt.push_back(
+        {"PSP_GAME/SYSDIR/EBOOT.BIN", "mgp_main", "mgp_main.elf", 16, std::string(64, 'a')});
+    const fs::path iso_path =
+        mpo::test::write_temp_file("mpo_disc_test_decrypt.iso", mpo::test::build_iso(files).bytes);
+    const fs::path game_dir = fs::temp_directory_path() / "mpo_disc_test_decrypt_game";
+    remove_quietly(game_dir);
+
+    mpo::disc::IsoImage iso;
+    std::string error;
+    mpo::install::ValidationResult result;
+    expect(iso.open(iso_path, error), "decrypt install: open: " + error);
+    expect(mpo::install::validate_image(iso, versions, result, error) && result.accepted(),
+           "decrypt install: validate");
+    expect(!mpo::install::install_image(iso, iso_path, result, game_dir, error),
+           "install_image must fail when a module cannot be decrypted");
+    expect(error.find("EBOOT.BIN") != std::string::npos,
+           "decrypt failure names the file: " + error);
+    expect(!fs::exists(game_dir), "a failed decryption writes nothing");
+
+    iso.close();
+    remove_quietly(game_dir);
+    remove_quietly(iso_path);
+}
+
 } // namespace
 
 int main() {
@@ -376,6 +441,7 @@ int main() {
         test_profile_supported_table();
         test_validation();
         test_install();
+        test_install_decrypt_failure();
     } catch (const std::exception &exception) {
         std::fprintf(stderr, "FAIL: uncaught exception: %s\n", exception.what());
         return EXIT_FAILURE;

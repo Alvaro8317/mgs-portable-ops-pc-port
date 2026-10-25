@@ -47,6 +47,63 @@ bool read_string_array(const toml::table &table, std::string_view key,
     return true;
 }
 
+// A bare file name, so it can only land directly inside <game_dir>/elf/.
+bool is_plain_file_name(std::string_view name) {
+    return !name.empty() && name != "." && name != ".." &&
+           std::all_of(name.begin(), name.end(), [](char c) {
+               return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                      c == '.' || c == '_' || c == '-';
+           });
+}
+
+bool parse_decrypt(const toml::table &table, const std::set<std::string> &disc_files,
+                   SupportedVersion &version, std::string &error) {
+    const toml::node *node = table.get("decrypt");
+    if (node == nullptr) return true;
+    const toml::array *entries = node->as_array();
+    if (entries == nullptr) {
+        error = version.disc_id + ": decrypt must be an array of tables";
+        return false;
+    }
+    std::set<std::string> outputs;
+    for (const toml::node &item : *entries) {
+        const toml::table *entry = item.as_table();
+        const auto path = entry != nullptr ? (*entry)["path"].value<std::string>() : std::nullopt;
+        const auto module =
+            entry != nullptr ? (*entry)["module"].value<std::string>() : std::nullopt;
+        const auto output =
+            entry != nullptr ? (*entry)["output"].value<std::string>() : std::nullopt;
+        const auto size = entry != nullptr ? (*entry)["size"].value<std::int64_t>() : std::nullopt;
+        const auto sha256 =
+            entry != nullptr ? (*entry)["sha256"].value<std::string>() : std::nullopt;
+        if (!path || !module || !output || !size || !sha256) {
+            error = version.disc_id + ": every decrypt entry needs path, module, output, size and "
+                                      "sha256";
+            return false;
+        }
+        if (disc_files.count(*path) == 0) {
+            error = version.disc_id + ": decrypt path is not a listed file: " + *path;
+            return false;
+        }
+        if (!is_plain_file_name(*output)) {
+            error = version.disc_id + ": decrypt output must be a plain file name: " + *output;
+            return false;
+        }
+        if (*size <= 0 || *size > std::numeric_limits<std::uint32_t>::max() ||
+            !is_sha256_hex(*sha256)) {
+            error = version.disc_id + ": invalid decrypt size or sha256 for " + *path;
+            return false;
+        }
+        if (!outputs.insert(*output).second) {
+            error = version.disc_id + ": duplicate decrypt output " + *output;
+            return false;
+        }
+        version.decrypt.push_back(
+            {*path, *module, *output, static_cast<std::uint32_t>(*size), *sha256});
+    }
+    return true;
+}
+
 bool parse_version(const toml::table &table, SupportedVersion &version, std::string &error) {
     const auto disc_id = table["disc_id"].value<std::string>();
     const auto disc_version = table["disc_version"].value<std::string>();
@@ -88,7 +145,7 @@ bool parse_version(const toml::table &table, SupportedVersion &version, std::str
         }
         version.files.push_back({*path, static_cast<std::uint32_t>(*size), *sha256});
     }
-    return true;
+    return parse_decrypt(table, seen, version, error);
 }
 
 } // namespace

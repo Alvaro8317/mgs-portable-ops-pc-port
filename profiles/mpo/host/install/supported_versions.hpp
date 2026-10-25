@@ -18,6 +18,15 @@ struct ExpectedFile {
     std::string sha256; // Lower-case hex.
 };
 
+// A ~PSP module that the installer decrypts into <game_dir>/elf/<output>.
+struct DecryptedFile {
+    std::string path;       // Encrypted file on the disc; also listed in `files`.
+    std::string module;     // Module name in the ~PSP header.
+    std::string output;     // Plain file name under <game_dir>/elf/.
+    std::uint32_t size = 0; // Size of the decrypted ELF.
+    std::string sha256;     // Of the decrypted ELF, lower-case hex.
+};
+
 struct SupportedVersion {
     std::string disc_id;      // PARAM.SFO DISC_ID, e.g. "ULUS10202".
     std::string disc_version; // PARAM.SFO DISC_VERSION, e.g. "1.02".
@@ -28,6 +37,7 @@ struct SupportedVersion {
     // Files copied to the game directory. "*.ext" matches by suffix.
     std::vector<std::string> extract;
     std::vector<ExpectedFile> files;
+    std::vector<DecryptedFile> decrypt;
 };
 
 [[nodiscard]] bool path_matches(std::string_view path, std::string_view pattern);

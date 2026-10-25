@@ -43,8 +43,10 @@ bool hash_iso_file(disc::IsoImage &iso, const disc::IsoEntry &entry, std::string
 bool validate_image(disc::IsoImage &iso, const std::vector<SupportedVersion> &versions,
                     ValidationResult &result, std::string &error);
 
-// Copies the files selected by `version.extract` to <game_dir>/disc/<path> and
-// writes <game_dir>/install.toml. Call only with an accepted validation.
+// Decrypts the modules in `version.decrypt` to <game_dir>/elf/<output>, copies
+// the files selected by `version.extract` to <game_dir>/disc/<path> and writes
+// <game_dir>/install.toml. Every decrypted ELF is checked against its pinned
+// SHA-256 before anything is written. Call only with an accepted validation.
 bool install_image(disc::IsoImage &iso, const std::filesystem::path &iso_path,
                    const ValidationResult &result, const std::filesystem::path &game_dir,
                    std::string &error);

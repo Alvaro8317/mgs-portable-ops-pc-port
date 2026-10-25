@@ -2,12 +2,14 @@
 
 #include "install/installer.hpp"
 
+#include "crypto/psp_module.hpp"
 #include "disc/param_sfo.hpp"
 #include "util/sha256.hpp"
 
 #include <algorithm>
 #include <fstream>
 #include <map>
+#include <span>
 #include <system_error>
 
 namespace mpo::install {
@@ -27,16 +29,17 @@ std::string toml_quote(const std::string &value) {
     return out + "\"";
 }
 
-bool extract_file(disc::IsoImage &iso, const disc::IsoEntry &entry,
-                  const std::filesystem::path &destination, std::string &error) {
+// Writes through a temporary name first so an interrupted install never leaves
+// a truncated file under the final name.
+template <typename Writer>
+bool write_atomically(const std::filesystem::path &destination, Writer &&write,
+                      std::string &error) {
     std::error_code ec;
     std::filesystem::create_directories(destination.parent_path(), ec);
     if (ec) {
         error = "cannot create " + destination.parent_path().string() + ": " + ec.message();
         return false;
     }
-    // Write to a temporary name first so an interrupted install never leaves a
-    // truncated file under the final name.
     std::filesystem::path temporary = destination;
     temporary += ".partial";
     {
@@ -45,14 +48,7 @@ bool extract_file(disc::IsoImage &iso, const disc::IsoEntry &entry,
             error = "cannot write " + temporary.string();
             return false;
         }
-        std::vector<std::uint8_t> chunk;
-        for (std::uint64_t offset = 0; offset < entry.size; offset += kChunkSize) {
-            chunk.resize(
-                static_cast<std::size_t>(std::min<std::uint64_t>(kChunkSize, entry.size - offset)));
-            if (!iso.read(entry, offset, chunk, error)) return false;
-            out.write(reinterpret_cast<const char *>(chunk.data()),
-                      static_cast<std::streamsize>(chunk.size()));
-        }
+        if (!write(out, error)) return false;
         if (!out) {
             error = "write error in " + temporary.string();
             return false;
@@ -61,6 +57,68 @@ bool extract_file(disc::IsoImage &iso, const disc::IsoEntry &entry,
     std::filesystem::rename(temporary, destination, ec);
     if (ec) {
         error = "cannot rename " + temporary.string() + ": " + ec.message();
+        return false;
+    }
+    return true;
+}
+
+bool extract_file(disc::IsoImage &iso, const disc::IsoEntry &entry,
+                  const std::filesystem::path &destination, std::string &error) {
+    return write_atomically(
+        destination,
+        [&](std::ofstream &out, std::string &write_error) {
+            std::vector<std::uint8_t> chunk;
+            for (std::uint64_t offset = 0; offset < entry.size; offset += kChunkSize) {
+                chunk.resize(static_cast<std::size_t>(
+                    std::min<std::uint64_t>(kChunkSize, entry.size - offset)));
+                if (!iso.read(entry, offset, chunk, write_error)) return false;
+                out.write(reinterpret_cast<const char *>(chunk.data()),
+                          static_cast<std::streamsize>(chunk.size()));
+            }
+            return true;
+        },
+        error);
+}
+
+bool write_bytes(const std::filesystem::path &destination, std::span<const std::uint8_t> data,
+                 std::string &error) {
+    return write_atomically(
+        destination,
+        [&](std::ofstream &out, std::string &) {
+            out.write(reinterpret_cast<const char *>(data.data()),
+                      static_cast<std::streamsize>(data.size()));
+            return true;
+        },
+        error);
+}
+
+// Decrypts one ~PSP module of an accepted image and checks it against the
+// pinned identity. The encrypted file was already validated by SHA-256, which
+// is the precondition of crypto::decrypt_psp_module().
+bool decrypt_module(disc::IsoImage &iso, const DecryptedFile &file, crypto::DecryptedModule &module,
+                    std::string &error) {
+    const disc::IsoEntry *entry = iso.find(file.path);
+    if (entry == nullptr) {
+        error = "missing " + file.path;
+        return false;
+    }
+    std::vector<std::uint8_t> data;
+    if (!iso.read_all(*entry, entry->size, data, error)) return false;
+    if (!crypto::decrypt_psp_module(data, module, error)) {
+        error = "cannot decrypt " + file.path + ": " + error;
+        return false;
+    }
+    if (module.header.module_name != file.module) {
+        error = file.path + ": module " + module.header.module_name + ", expected " + file.module;
+        return false;
+    }
+    if (module.header.elf_size != file.size) {
+        error = file.path + ": decrypted ELF is " + std::to_string(module.header.elf_size) +
+                " bytes, expected " + std::to_string(file.size);
+        return false;
+    }
+    if (sha256_hex(module.elf()) != file.sha256) {
+        error = file.path + ": SHA-256 mismatch after decryption";
         return false;
     }
     return true;
@@ -160,16 +218,34 @@ bool install_image(disc::IsoImage &iso, const std::filesystem::path &iso_path,
         error = "refusing to install an image that did not validate";
         return false;
     }
+    const SupportedVersion &version = *result.version;
+    if (!version.decrypt.empty() && !crypto::decryption_available()) {
+        error = "this build cannot decrypt " + version.decrypt.front().path +
+                " (configured with MPO_ENABLE_PRX_DECRYPT=OFF); nothing was installed";
+        return false;
+    }
+    // Decrypt and verify everything in memory before writing anything.
+    std::vector<crypto::DecryptedModule> modules(version.decrypt.size());
+    for (std::size_t i = 0; i < version.decrypt.size(); ++i) {
+        if (!decrypt_module(iso, version.decrypt[i], modules[i], error)) return false;
+    }
+
     const std::filesystem::path disc_dir = game_dir / "disc";
     std::size_t extracted = 0;
     for (const disc::IsoEntry &entry : iso.entries()) {
-        if (entry.directory || !is_extracted(*result.version, entry.path)) continue;
+        if (entry.directory || !is_extracted(version, entry.path)) continue;
         // Entry paths are validated by IsoImage: no "..", separators or drive
         // letters inside a component, so this stays below disc_dir.
         if (!extract_file(iso, entry, disc_dir / std::filesystem::path(entry.path), error)) {
             return false;
         }
         ++extracted;
+    }
+    for (std::size_t i = 0; i < modules.size(); ++i) {
+        // Outputs are plain file names (checked when supported.toml is parsed).
+        if (!write_bytes(game_dir / "elf" / version.decrypt[i].output, modules[i].elf(), error)) {
+            return false;
+        }
     }
 
     std::error_code ec;
@@ -185,7 +261,8 @@ bool install_image(disc::IsoImage &iso, const std::filesystem::path &iso_path,
              << "iso_size = " << iso.image_size() << "\n"
              << "disc_id = " << toml_quote(result.identity.disc_id) << "\n"
              << "disc_version = " << toml_quote(result.identity.disc_version) << "\n"
-             << "extracted_files = " << extracted << "\n";
+             << "extracted_files = " << extracted << "\n"
+             << "decrypted_modules = " << modules.size() << "\n";
     if (!manifest) {
         error = "write error in " + manifest_path.string();
         return false;

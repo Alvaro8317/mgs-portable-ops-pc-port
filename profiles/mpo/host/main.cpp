@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// `mpo` entry point. For now it only covers disc installation (F01):
+// `mpo` entry point. For now it only covers disc installation (F01, F02):
 //   mpo --install <iso> [--game-dir DIR] [--supported FILE]
 //   mpo --list <iso>
 //   mpo --manifest <iso> [--ignore PATTERN]...
@@ -147,6 +147,10 @@ int install(mpo::disc::IsoImage &iso, const Options &options) {
     if (!mpo::install::install_image(iso, options.iso, result, options.game_dir, error)) {
         std::fprintf(stderr, "error: %s\n", error.c_str());
         return kExitError;
+    }
+    for (const auto &module : result.version->decrypt) {
+        std::printf("Decrypted: %s (%s) -> %s\n", module.path.c_str(), module.module.c_str(),
+                    (options.game_dir / "elf" / module.output).string().c_str());
     }
     std::printf("Installed to %s\n", options.game_dir.string().c_str());
     return kExitOk;
