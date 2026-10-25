@@ -239,15 +239,23 @@ tclamb/mhp2g-decomp y "PSP Web Recomp". Los trackers donde aparecen son
     - `zlibdec.prx` es `ZLIB`.
   - Los 106 `stage/<s>/<s>.prx` son `mgp_stage` (`0xFFA0`).
   - Se obtiene con `python -I profiles/mpo/tools/prx_info.py <elf>`.
-- Hay **overlays de código por etapa** [V], según las strings del plugin
-  [savempo](https://github.com/snakeswiss/MPO-Guide):
-  - Las strings son `disc0:/PSP_GAME/USRDIR/stage/%s/%s.prx`, `%sstage/%s/%s.rlc`,
-    `kjfs: stage module %s -> %s` y `rlc: preloaded %s.rlc ... entries`.
-  - O sea, cada etapa trae un **PRX con su tabla de relocación `.rlc`**.
+- Hay **overlays de código por etapa** [V]: cada etapa trae un **PRX con su tabla de relocación
+  `.rlc`**.
+  - **F04 [V]**: el `.rlc` es la última entrada del DAR que va dentro de `stage/<s>/_zar` (y la
+    última línea de su `data.cnf`), no un archivo suelto. Tiene el formato de `PT_PRXRELOC`, pero
+    enlaza la etapa con `mgp_main`: `ofs_base` es un segmento de la etapa y `addr_base`, uno de
+    `mgp_main`. Ver [`docs/formats/rlc.md`](formats/rlc.md) y
+    [`docs/analysis/stages.md`](analysis/stages.md).
+  - Las strings `%sstage/%s/%s.rlc`, `kjfs: stage module %s -> %s` y `rlc: preloaded %s.rlc ...
+    entries` **no son del juego** [V]. Son del plugin homebrew `savempo_plugin.prx`
+    ([savempo](https://github.com/snakeswiss/MPO-Guide)), que en MPO+ sirve las etapas desde la
+    Memory Stick.
   - Hay un `title.prx` que es un ELF
     ([XeNTaX](https://github.com/XeNTaXBackup/XeNTaXBackup.github.io/blob/master/markdown/MGSportable%20Ops%20texture%20format._2560.md)).
   - Se cargan con `sceKernelLoadModule`
-    ([logs](https://report.ppsspp.org/logs/game/ULJM05193_1.02)).
+    ([logs](https://report.ppsspp.org/logs/game/ULJM05193_1.02)). **F04 [V]**: en `ULUS-10202`,
+    `mgp_main` importa `sceKernelLoadModuleByID` (no `sceKernelLoadModule`), además de
+    `sceKernelStartModule`, `sceKernelStopModule` y `sceKernelUnloadModule`.
 - Otros nombres que aparecen [V, strings]:
   - Los módulos `KCEJ_FS` (FS) y `KCEJ_SOUND2` (sonido).
   - Los hooks `ntmenu2` (menú de red), `mpogate` y `mpostun`.
@@ -276,9 +284,11 @@ Fuente principal: [waspothegreat/MGS-MPO-Noesis](https://github.com/waspothegrea
   - **No necesita `.key`**, a diferencia del de PW.
   - Los nombres no se guardan: solo hay hashes.
 - **`stage/<s>/_zar`**: un `u32` con el tamaño descomprimido seguido de zlib que contiene un DAR.
-  Dentro van `cache.dar/qar` y `resident.dar/qar`.
+  Dentro van `cache.dar/qar` y `resident.dar/qar`. **F04 [V]**: el DAR también trae `data.cnf`,
+  `scenerio.gcx` y el `<s>.rlc` (ver [`docs/formats/rlc.md`](formats/rlc.md)).
 - **DAR**: un `u32 count`, y por cada archivo un nombre (terminado en NUL y alineado a 4), un
-  `u32 size` y los datos alineados a 16.
+  `u32 size` y los datos alineados a 16. **F04 [V]**: después de los datos de cada entrada va un
+  byte NUL, y la siguiente entrada empieza justo después, sin alinear.
 - **QAR**: el último `u32` es el offset de la lista. La lista es `count` seguido de `(hash, size)` y
   los nombres, con los datos alineados a 0x80.
 
@@ -437,7 +447,9 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
 2. Ver si los `stage/*.prx` están cifrados y entender el formato `.rlc`: ¿es una relocación propia
    de Konami además de la de PRX? **F01 [V]**: los 106 `stage/<s>/<s>.prx` son **ELF sin cifrar**, y
    **no hay ningún `.rlc` en el disco** (cada etapa trae solo `<s>.prx` y `_zar`). Hay que averiguar
-   de dónde sale el `.rlc` (F04).
+   de dónde sale el `.rlc` (F04). **F04 [V]**: va dentro del `_zar`. Es una relocación propia de
+   Konami, con el formato de `PT_PRXRELOC`, que enlaza la etapa con `mgp_main` y complementa las
+   relocaciones del PRX (ver `docs/formats/rlc.md`). Falta confirmar en Ghidra quién la aplica.
 3. Hacer el inventario de imports por librería y versión de firmware (`PSP_SYSTEM_VER`).
 4. Medir la VFPU, los branch-likely, los `jr`/`jalr` y los saltos sin resolver en `mgp_main` y en una
    etapa.
