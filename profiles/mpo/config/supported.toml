@@ -30,6 +30,7 @@ extract = [
     "PSP_GAME/PARAM.SFO",
     "PSP_GAME/SYSDIR/EBOOT.BIN",
     "*.prx",
+    "*_zar",  # stage/<s>/_zar: holds <s>.rlc (F04, docs/formats/rlc.md).
 ]
 decrypt = [
     { path = "PSP_GAME/SYSDIR/EBOOT.BIN", module = "mgp_main", output = "mgp_main.elf", size = 2693412, sha256 = "ca700ea516a98949763410da537a75a08f9723718fab302bcd7ef1e6185cadf8" },

@@ -19,8 +19,8 @@ mpo --manifest game/ULUS-10202.iso \
 - `--install` compara el `DISC_ID` y el `DISC_VERSION` de `PARAM.SFO`, y después el conjunto exacto de
   archivos, con sus tamaños y SHA-256, contra `config/supported.toml`. Si algo no coincide, rechaza la
   imagen (código de salida 1) y no escribe nada.
-- Solo extrae lo que piden las fases de análisis: `PARAM.SFO`, `EBOOT.BIN` (cifrado) y todos los
-  `*.prx`. El resto se leerá directamente del ISO.
+- Solo extrae lo que piden las fases de análisis: `PARAM.SFO`, `EBOOT.BIN` (cifrado), todos los
+  `*.prx` y los `stage/<s>/_zar` (F04). El resto se leerá directamente del ISO.
 - Descifra los módulos de la lista `decrypt` de `supported.toml` (hoy solo `EBOOT.BIN` →
   `game/elf/mgp_main.elf`) y compara el ELF con su SHA-256 fijado **antes de escribir nada**. El
   descifrado usa libkirk y `PrxDecrypter.cpp` de PPSSPP, que CMake descarga al configurar porque
@@ -28,6 +28,14 @@ mpo --manifest game/ULUS-10202.iso \
 - `python -I profiles/mpo/tools/prx_info.py game/elf/mgp_main.elf` muestra la identidad de un módulo
   descifrado: la cabecera ELF, los program headers y `sceModuleInfo`. Solo imprime números y
   nombres.
+- Herramientas de etapas (F04), en `tools/`, con tests sintéticos en `ctest`:
+  - `zar.py` lista y extrae las entradas del DAR de un `stage/<s>/_zar`;
+  - `rlc.py check` valida el `<s>.rlc` contra su PRX y `mgp_main`;
+  - `rlc.py relocate` escribe la imagen relocalizada de una etapa. Es contenido del juego: va a
+    `analysis/` y nunca al repo;
+  - `psp_prx.py` es el lector de PRX que usan los demás;
+  - `stage_inventory.py` genera `docs/analysis/stages.md`.
+  Ver `docs/formats/rlc.md`. `--install` extrae también los `_zar` de las etapas.
 
 ## Estructura
 
