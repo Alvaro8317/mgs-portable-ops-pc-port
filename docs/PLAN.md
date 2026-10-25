@@ -37,7 +37,7 @@ código.
 | F01 | Lector de ISO, validador e instalador | M0 | ✅ hecha |
 | F02 | Descifrado de EBOOT y PRX | M0 | ✅ hecha |
 | F03 | Análisis de `mgp_main` en Ghidra | M0 | ✅ hecha |
-| F04 | Overlays de etapa y formato `.rlc` | M0 | 🟨 en curso |
+| F04 | Overlays de etapa y formato `.rlc` | M0 | ✅ hecha |
 | F05 | Inventario del GE con dumps de PPSSPP | M0 | ✅ hecha |
 | F06 | `psp_analyze` sobre MPO y brechas del framework | M0 | ⬜ pendiente |
 | F07 | Generación AOT, intérprete y difftest | M1 | ⬜ pendiente |
