@@ -32,8 +32,9 @@ mpo --manifest game/ULUS-10202.iso \
 - Herramientas de etapas (F04), en `tools/`, con tests sintéticos en `ctest`:
   - `zar.py` lista y extrae las entradas del DAR de un `stage/<s>/_zar`;
   - `rlc.py check` valida el `<s>.rlc` contra su PRX y `mgp_main`;
-  - `rlc.py relocate` escribe la imagen relocalizada de una etapa. Es contenido del juego: va a
-    `analysis/` y nunca al repo;
+  - `rlc.py relocate` escribe la imagen relocalizada de una etapa, y `rlc.py link`, el PRX de la
+    etapa con el `.rlc` ya aplicado (para Ghidra o el recompilador). Los dos son contenido del
+    juego: van a `analysis/` y nunca al repo;
   - `psp_prx.py` es el lector de PRX que usan los demás;
   - `stage_inventory.py` genera `docs/analysis/stages.md`.
   Ver `docs/formats/rlc.md`. `--install` extrae también los `_zar` de las etapas.
@@ -63,6 +64,13 @@ profiles/mpo/tools/ghidra/run_analysis.sh game/elf/mgp_main.elf mgp_main 0880400
 MPO_ANCHORS=profiles/mpo/config/anchors_modules.txt \
   profiles/mpo/tools/ghidra/run_analysis.sh game/disc/PSP_GAME/USRDIR/modules/sound2.prx sound2 08B24100
 
+# Una etapa (F04): el PRX ya enlazado, con un bloque de relleno donde está mgp_main.
+python -I profiles/mpo/tools/rlc.py link --stage game/disc/PSP_GAME/USRDIR/stage/st01/st01.prx \
+    --zar game/disc/PSP_GAME/USRDIR/stage/st01/_zar --main game/elf/mgp_main.elf \
+    --output analysis/f04/linked/st01
+MPO_EXTERNAL_BLOCK="mgp_main 08804000 2F7800" MPO_ANCHORS=profiles/mpo/config/anchors_modules.txt \
+  profiles/mpo/tools/ghidra/run_analysis.sh analysis/f04/linked/st01 stage_st01 08B8F900
+
 # 3. Tablas en Markdown (solo números y nombres) para docs/analysis/.
 python -I profiles/mpo/tools/ghidra_summary.py analysis/out/mgp_main
 
@@ -80,6 +88,9 @@ python -I profiles/mpo/tools/prx_imports.py --nids analysis/nids/ppsspp-v1.20.4.
   - `MpoExportRecompInput.java`: funciones, rangos, tablas de saltos y `jalr` resueltos, para el
     recompilador (F06).
   - `MpoFindAnchors.java`: los anclajes de `config/anchors.txt` (cadenas, direcciones e imports).
+  - `MpoExternalBlock.java` (opcional, con `MPO_EXTERNAL_BLOCK`): crea un bloque relleno de
+    `jr ra; nop`, no ejecutable, donde va otro módulo. Así, las llamadas de una etapa a `mgp_main`
+    no cortan el desensamblado.
 - Todo lo que generan (el proyecto de Ghidra, los JSON y `*.strings.tsv`) queda en `analysis/`, que
   git ignora. `*.strings.tsv` contiene texto del juego: no se cita en `docs/`.
 - Las bases de los módulos de Konami son las que muestra el debugger de PPSSPP (`RESEARCH.md` §4).

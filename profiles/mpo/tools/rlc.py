@@ -24,8 +24,10 @@ Usage:
       (--rlc <s>.rlc | --zar <_zar>) --main mgp_main.elf
   python -I profiles/mpo/tools/rlc.py relocate --stage <s>.prx --zar <_zar> \
       --main mgp_main.elf --stage-base 0x08B8F900 --output analysis/<s>.bin
-`check` prints only counts. `relocate` writes game bytes: keep the output in
-an ignored directory (analysis/) and never commit it.
+  python -I profiles/mpo/tools/rlc.py link --stage <s>.prx --zar <_zar> \
+      --main mgp_main.elf --output analysis/<s>.linked.prx
+`check` prints only counts. `relocate` and `link` write game bytes: keep the
+output in an ignored directory (analysis/) and never commit it.
 """
 
 import argparse
@@ -300,6 +302,28 @@ def relocate(stage, table, main, stage_base, main_base):
   return image
 
 
+def link(stage, table, main, main_base):
+  """Returns the stage PRX file with the `.rlc` already applied.
+
+  The words the `.rlc` patches get their final values for mgp_main at
+  `main_base`; the PRX's own relocations are left untouched. Loading the
+  result at any base (sceKernelLoadModule, Ghidra's PSP loader or a
+  recompiler) then gives the same image the game builds at run time, without
+  running the game's linker (mgp_main 0x08805C0C).
+  """
+  if main_base & 0xFF:
+    raise RlcError(f'mgp_main base 0x{main_base:08X} is not 256-byte aligned')
+  check(stage, table, main)
+  entries = parse(table)
+  check_bounds(entries, [s.filesz for s in stage.load_segments],
+               _segment_sizes(main))
+  data = bytearray(stage.data)
+  file_bases = [s.offset for s in stage.load_segments]
+  main_bases = [main_base + s.vaddr for s in main.load_segments]
+  apply(data, 0, entries, file_bases, main_bases)
+  return bytes(data)
+
+
 def _read_table(args, stage_path, zar):
   if args.rlc:
     with open(args.rlc, 'rb') as rlc_file:
@@ -317,7 +341,10 @@ def main(argv):
   relocate_parser = commands.add_parser(
       'relocate', help='write the relocated stage image (for local '
       'comparison against a PPSSPP memory dump; never commit it)')
-  for sub in (check_parser, relocate_parser):
+  link_parser = commands.add_parser(
+      'link', help='write the stage PRX with the .rlc pre-applied (game '
+      'bytes: keep it in analysis/)')
+  for sub in (check_parser, relocate_parser, link_parser):
     sub.add_argument('--stage', required=True, help='stage PRX')
     source = sub.add_mutually_exclusive_group(required=True)
     source.add_argument('--rlc', help='extracted .rlc table')
@@ -325,9 +352,10 @@ def main(argv):
     sub.add_argument('--main', required=True, help='mgp_main ELF')
   relocate_parser.add_argument('--stage-base', required=True,
                                type=lambda text: int(text, 0))
-  relocate_parser.add_argument('--main-base', default=0x08804000,
-                               type=lambda text: int(text, 0))
-  relocate_parser.add_argument('--output', required=True)
+  for sub in (relocate_parser, link_parser):
+    sub.add_argument('--main-base', default=0x08804000,
+                     type=lambda text: int(text, 0))
+    sub.add_argument('--output', required=True)
   args = parser.parse_args(argv)
 
   psp_prx = _load_sibling('psp_prx')
@@ -341,14 +369,17 @@ def main(argv):
     if args.command == 'check':
       print('\n'.join(check(stage, table, main_module)))
       return 0
-    image = relocate(stage, table, main_module, args.stage_base,
-                     args.main_base)
+    if args.command == 'link':
+      image = link(stage, table, main_module, args.main_base)
+    else:
+      image = relocate(stage, table, main_module, args.stage_base,
+                       args.main_base)
   except (RlcError, psp_prx.PrxError, zar.ZarError) as error:
     print(f'error: {error}', file=sys.stderr)
     return 1
   with open(args.output, 'wb') as output_file:
     output_file.write(image)
-  print(f'wrote {len(image)} bytes for 0x{args.stage_base:08X}')
+  print(f'wrote {len(image)} bytes')
   return 0
 
 
