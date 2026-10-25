@@ -49,6 +49,19 @@ bool is_safe_component(std::string_view name) {
 } // namespace
 
 bool IsoImage::open(const std::filesystem::path &path, std::string &error) {
+    if (open_and_index(path, error)) return true;
+    close();
+    return false;
+}
+
+void IsoImage::close() {
+    file_.close();
+    image_size_ = 0;
+    volume_ = {};
+    entries_.clear();
+}
+
+bool IsoImage::open_and_index(const std::filesystem::path &path, std::string &error) {
     file_ = std::ifstream(path, std::ios::binary);
     entries_.clear();
     volume_ = {};

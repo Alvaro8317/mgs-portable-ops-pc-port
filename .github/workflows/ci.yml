@@ -21,6 +21,7 @@ concurrency:
 jobs:
   lint:
     name: Lint (SPDX, clang-format)
+    timeout-minutes: 30
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -39,6 +40,7 @@ jobs:
 
   linux:
     name: Linux ${{ matrix.compiler }} ${{ matrix.variant }}
+    timeout-minutes: 30
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -79,10 +81,11 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --timeout 300
 
   windows:
     name: Windows ${{ matrix.toolset }} ${{ matrix.config }}
+    timeout-minutes: 30
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -107,4 +110,4 @@ jobs:
       - name: Build
         run: cmake --build build --config ${{ matrix.config }} --parallel
       - name: Test
-        run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure
+        run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure --timeout 300

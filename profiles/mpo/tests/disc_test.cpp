@@ -12,10 +12,12 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -30,6 +32,14 @@ void expect(bool condition, const std::string &message) {
         std::fprintf(stderr, "FAIL: %s\n", message.c_str());
         ++g_failures;
     }
+}
+
+// Cleanup must not throw: on Windows a file that is still open cannot be
+// removed, and that is reported as a failed check instead of an abort.
+void remove_quietly(const fs::path &path) {
+    std::error_code ec;
+    fs::remove_all(path, ec);
+    expect(!ec, "cannot remove " + path.string() + ": " + ec.message());
 }
 
 std::vector<SyntheticFile> sample_disc(const std::string &disc_version = "1.02") {
@@ -88,7 +98,8 @@ mpo::install::ValidationResult validate(const std::vector<std::uint8_t> &image,
     expect(iso.open(path, error), name + ": open failed: " + error);
     expect(mpo::install::validate_image(iso, versions, result, error),
            name + ": validate_image failed: " + error);
-    fs::remove(path);
+    iso.close();
+    remove_quietly(path);
     return result;
 }
 
@@ -172,7 +183,8 @@ void test_iso_reader() {
     std::size_t file_count = 0;
     for (const auto &entry : iso.entries()) file_count += entry.directory ? 0 : 1;
     expect(file_count == files.size(), "every file is listed");
-    fs::remove(path);
+    iso.close();
+    remove_quietly(path);
 }
 
 void expect_open_fails(std::vector<std::uint8_t> bytes, const std::string &name) {
@@ -181,7 +193,7 @@ void expect_open_fails(std::vector<std::uint8_t> bytes, const std::string &name)
     std::string error;
     expect(!iso.open(path, error), name + ": malformed ISO must be rejected");
     expect(!error.empty(), name + ": rejection must explain why");
-    fs::remove(path);
+    remove_quietly(path); // A failed open must not keep the file open.
 }
 
 void test_malformed_iso() {
@@ -319,7 +331,7 @@ void test_install() {
     const fs::path iso_path =
         mpo::test::write_temp_file("mpo_disc_test_install.iso", mpo::test::build_iso(files).bytes);
     const fs::path game_dir = fs::temp_directory_path() / "mpo_disc_test_game";
-    fs::remove_all(game_dir);
+    remove_quietly(game_dir);
 
     mpo::disc::IsoImage iso;
     std::string error;
@@ -330,10 +342,12 @@ void test_install() {
            "install_image failed: " + error);
 
     const fs::path eboot = game_dir / "disc/PSP_GAME/SYSDIR/EBOOT.BIN";
-    std::ifstream in(eboot, std::ios::binary);
-    const std::vector<std::uint8_t> copied((std::istreambuf_iterator<char>(in)),
-                                           std::istreambuf_iterator<char>());
-    expect(copied == files[1].data, "EBOOT.BIN is extracted byte for byte");
+    {
+        std::ifstream in(eboot, std::ios::binary);
+        const std::vector<std::uint8_t> copied((std::istreambuf_iterator<char>(in)),
+                                               std::istreambuf_iterator<char>());
+        expect(copied == files[1].data, "EBOOT.BIN is extracted byte for byte");
+    }
     expect(fs::exists(game_dir / "disc/PSP_GAME/USRDIR/stage/n01/n01.prx"), "PRX extracted");
     expect(fs::exists(game_dir / "disc/PSP_GAME/PARAM.SFO"), "PARAM.SFO extracted");
     expect(!fs::exists(game_dir / "disc/PSP_GAME/USRDIR/stage/n01/_zar"), "data not extracted");
@@ -345,21 +359,27 @@ void test_install() {
     expect(!mpo::install::install_image(iso, iso_path, rejected, game_dir, error),
            "install_image must refuse a rejected validation");
 
-    fs::remove_all(game_dir);
-    fs::remove(iso_path);
+    iso.close();
+    remove_quietly(game_dir);
+    remove_quietly(iso_path);
 }
 
 } // namespace
 
 int main() {
-    test_sha256_vectors();
-    test_param_sfo();
-    test_iso_reader();
-    test_malformed_iso();
-    test_supported_parsing();
-    test_profile_supported_table();
-    test_validation();
-    test_install();
+    try {
+        test_sha256_vectors();
+        test_param_sfo();
+        test_iso_reader();
+        test_malformed_iso();
+        test_supported_parsing();
+        test_profile_supported_table();
+        test_validation();
+        test_install();
+    } catch (const std::exception &exception) {
+        std::fprintf(stderr, "FAIL: uncaught exception: %s\n", exception.what());
+        return EXIT_FAILURE;
+    }
     if (g_failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return EXIT_FAILURE;

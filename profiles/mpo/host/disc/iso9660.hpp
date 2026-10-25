@@ -37,8 +37,11 @@ struct IsoVolumeInfo {
 
 class IsoImage {
 public:
-    // Opens and indexes the image. Returns false and fills `error` on failure.
+    // Opens and indexes the image. Returns false and fills `error` on failure;
+    // the file is closed again in that case.
     bool open(const std::filesystem::path &path, std::string &error);
+    // Releases the file handle (Windows cannot delete or replace an open file).
+    void close();
 
     [[nodiscard]] const IsoVolumeInfo &volume() const noexcept { return volume_; }
     // Every file and directory below the root, sorted by path.
@@ -57,6 +60,7 @@ public:
                   std::string &error);
 
 private:
+    bool open_and_index(const std::filesystem::path &path, std::string &error);
     bool read_sectors(std::uint32_t lba, std::uint32_t count, std::vector<std::uint8_t> &out,
                       std::string &error);
     bool read_directory(std::uint32_t lba, std::uint32_t size, const std::string &prefix, int depth,
