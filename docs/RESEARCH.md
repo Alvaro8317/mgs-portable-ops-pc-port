@@ -246,6 +246,9 @@ tclamb/mhp2g-decomp y "PSP Web Recomp". Los trackers donde aparecen son
     enlaza la etapa con `mgp_main`: `ofs_base` es un segmento de la etapa y `addr_base`, uno de
     `mgp_main`. Ver [`docs/formats/rlc.md`](formats/rlc.md) y
     [`docs/analysis/stages.md`](analysis/stages.md).
+  - **F04 [V]**: lo aplica `mgp_main` en `0x08805C0C`, después de `sceKernelStartModule` y antes de
+    invalidar la icache y entrar a la etapa. Coincide con `rlc.py`, y un savestate de PPSSPP con
+    `st02` en `0x08B8F900` coincide byte a byte en todo `.text`.
   - Las strings `%sstage/%s/%s.rlc`, `kjfs: stage module %s -> %s` y `rlc: preloaded %s.rlc ...
     entries` **no son del juego** [V]. Son del plugin homebrew `savempo_plugin.prx`
     ([savempo](https://github.com/snakeswiss/MPO-Guide)), que en MPO+ sirve las etapas desde la
@@ -288,7 +291,8 @@ tclamb/mhp2g-decomp y "PSP Web Recomp". Los trackers donde aparecen son
     casos:
     - al arrancar, convierte tres funciones de depuración en `jr ra`;
     - al cargar una etapa, le aplica una tabla de relocaciones contra sus propias bases (el candidato
-      a ser el `.rlc`) e invalida la caché de instrucciones con `cache 0x04`.
+      a ser el `.rlc`) e invalida la caché de instrucciones con `cache 0x04`. **F04 [V]**: es el
+      `.rlc` (ver `docs/formats/rlc.md`).
   - **El intérprete GCL** se localizó por sus tablas de comandos (`strcode24` y handler):
     - `0x089F51D4`, con `if`, `switch`, `eval`, `call`, `return` y `print`;
     - `0x089F2F34`, con `load`, `command`, `chara`, `restart`, `trap` y `mesg`.
@@ -522,7 +526,7 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
    **no hay ningún `.rlc` en el disco** (cada etapa trae solo `<s>.prx` y `_zar`). Hay que averiguar
    de dónde sale el `.rlc` (F04). **F04 [V]**: va dentro del `_zar`. Es una relocación propia de
    Konami, con el formato de `PT_PRXRELOC`, que enlaza la etapa con `mgp_main` y complementa las
-   relocaciones del PRX (ver `docs/formats/rlc.md`). Falta confirmar en Ghidra quién la aplica.
+   relocaciones del PRX (ver `docs/formats/rlc.md`). La aplica `mgp_main` (`0x08805C0C`). Resuelto.
 3. Hacer el inventario de imports por librería y versión de firmware (`PSP_SYSTEM_VER`).
    **F03 [V]**: inventario completo de `mgp_main` y de los módulos de Konami en
    `docs/analysis/mgp_main.md` §5 y §7, y resumen de las 106 etapas en el §8. Resuelto para

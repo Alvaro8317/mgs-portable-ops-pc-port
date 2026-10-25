@@ -133,11 +133,13 @@ los hilos y fibras, en vez de depender de `ulimit`.
 - **El módulo principal es `mgp_main`** (`PSP_GAME/SYSDIR/EBOOT.BIN`, cifrado con `~PSP`). Es un
   **PRX relocatable** (`e_type 0xFFA0`), y PPSSPP lo carga en `0x08804000` (verificado en F02).
 - Además hay **overlays de código por etapa**: `disc0:/PSP_GAME/USRDIR/stage/<s>/<s>.prx` (módulo
-  `mgp_stage`), con una tabla de relocación propia en `.rlc`. Se cargan y descargan con
-  `sceKernelLoadModule` en tiempo de ejecución.
+  `mgp_stage`). Se cargan con `sceKernelLoadModuleByID` y se descargan al cargar la siguiente (hay
+  una sola a la vez).
+  - El `.rlc` no es un archivo aparte: va **dentro del `_zar`** de la etapa. Es una tabla con el
+    formato de las relocaciones PRX que enlaza la etapa con `mgp_main`, y **la aplica `mgp_main`**
+    (`0x08805C0C`) al cargarla (ver `docs/formats/rlc.md`, verificado en F04).
   - Hay que recompilar cada PRX de etapa por separado, como una librería compartida identificada por
-    hash.
-  - Hay que entender el formato `.rlc`.
+    hash, a partir del PRX ya enlazado (`rlc.py link`).
   - El intérprete cubre lo que no se haya recompilado.
 - Hay otros módulos de Konami, que son PRX aparte en `USRDIR/modules/` y no van cifrados (verificado
   en F02): `KCEJ_FS` (`kjfs.prx`, el sistema de archivos), `KCEJ_SOUND2` (`sound2.prx`, el driver de
@@ -266,9 +268,13 @@ Son de gow-psp-recomp y valen aunque usemos PSPRecomp.
   - `vsin`, `vcos`, `vrsq` y otras usan **las tablas o aproximaciones de PPSSPP**, para que el
     resultado coincida bit a bit.
   - Antes de diseñar, se mide cuánto usa VFPU `mgp_main`.
-- **Sin código automodificable**: se confirma en M0 buscando imports de
-  `sceKernelIcacheInvalidate*`. Los overlays se tratan con el mecanismo de overlays, no como código
-  que se modifica a sí mismo.
+- **Sin código automodificable** en sentido estricto (F03 y F04), pero hay dos parches de código:
+  - al arrancar, `mgp_main` convierte tres funciones de depuración en `jr ra`;
+  - al cargar una etapa, `mgp_main` le aplica el `.rlc` y después invalida la icache con
+    `cache 0x04` (no importa `sceKernelIcacheInvalidate*`).
+
+  Los dos se resuelven antes de recompilar: el primero con overrides del perfil y el segundo
+  recompilando la etapa ya enlazada. Los overlays se tratan con el mecanismo de overlays.
 
 ### Hilos
 

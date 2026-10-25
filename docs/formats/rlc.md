@@ -21,8 +21,10 @@ verificar.
 - Las etapas **no importan nada de `mgp_main` por NID** [V]. Sus únicos imports son librerías de Sony
   (`ThreadManForUser`, `sceUtility`, `sceNet*`, `sceMpeg`…). Todo el enlace con `mgp_main` pasa por
   el `.rlc`.
-- Quién lo aplica y en qué momento todavía falta confirmarlo en Ghidra (F04, parte 2) [?]. Ver
-  "Lo que falta confirmar".
+- **Lo aplica `mgp_main`** (`0x08805C0C`), justo después de `sceKernelStartModule` de la etapa, y
+  después invalida la caché de instrucciones [V, Ghidra]. Su semántica da el mismo resultado que
+  `rlc.py` en las 106 tablas, y un savestate de PPSSPP con `st02` cargada coincide byte a byte con
+  `rlc.py relocate` en todo `.text` [V]. Ver "Cómo lo aplica el juego".
 
 ## De dónde sale
 
@@ -167,24 +169,118 @@ Se midió sobre las 106 etapas con los scripts de `profiles/mpo/tools/` (ver aba
    - `module_start` (`e_entry 0x6C`) **no** toca `mgp_main`. Lee un puntero de su `argp` y escribe
      ahí tres direcciones de la propia etapa: dos a `.text+0x0` y una al inicio de su segmento de
      datos.
-   - Hipótesis [?]: `mgp_main` pasa una estructura en `sceKernelStartModule(argp)`, la etapa la
-     rellena y `mgp_main` entra a la etapa por `.text+0x0` después de aplicar el `.rlc`.
+   - Confirmado en Ghidra: `mgp_main` pasa esa estructura en `sceKernelStartModule(argp)` y usa sus
+     dos primeros punteros como bases de los segmentos de la etapa al aplicar el `.rlc`. Después
+     entra por el tercero (ver "Cómo lo aplica el juego").
    - En los exports, las etapas solo tienen `syslib` (`module_start`, `module_stop` y `module_info`).
 
-## Carga observada
+## Cómo lo aplica el juego [V]
 
-- La lista de módulos de PPSSPP (F02) muestra `mgp_stage` en `0x08B8F900` con tamaño `0x3C600` [V].
-- `0x3C600` es exactamente la imagen de **`title`** (`0x3C5C0` redondeado a `0x100`), y ninguna otra
-  etapa tiene ese tamaño. Esa captura era, entonces, de la pantalla de título [V].
-- Falta ver si todas las etapas se cargan en la misma base [?].
-- `mgp_main` importa de `ModuleMgrForUser`:
-  - `sceKernelLoadModuleByID`, no `sceKernelLoadModule`, así que carga la etapa desde un descriptor
-    ya abierto;
-  - `sceKernelStartModule`, `sceKernelStopModule` y `sceKernelUnloadModule`;
-  - `sceKernelGetModuleId`, `sceKernelGetModuleIdByAddress` y
-    `sceKernelStopUnloadSelfModuleWithStatus`.
-- De `UtilsForUser` importa `sceKernelDcacheWritebackAll`, `…WritebackRange` y
-  `…WritebackInvalidateRange`, pero **ningún `sceKernelIcacheInvalidate*`** [V].
+Se vio en Ghidra, sobre `mgp_main` en `0x08804000` (el proyecto de F03) y sobre `title` y `st01`,
+importadas ya enlazadas en `0x08B8F900`. Las direcciones son de `mgp_main`, salvo que se diga otra
+cosa.
+
+### Cadena de carga
+
+1. **`data.cnf`**. El intérprete (`0x0883D40C`, dentro de la máquina de estados `0x0883D6E4`) lee
+   cada línea:
+   - las directivas `.n…` (nocache), `.c…` (cache) y `.r…` (resident) fijan el modo del recurso, y
+     `.s…` (slot) va a `0x0883D234`;
+   - cada nombre (sin el `@` o el `*` de delante) se abre con `0x08804B54`, que arma `"%s%s"` con el
+     prefijo de la etapa y llama a `kjfs_93E9297F` (la apertura de `kjfs`).
+2. **`kjfs` sirve los archivos de la etapa desde `_zar`**.
+   - Su tabla de directorios marca los que tienen `_zar` (o `_arc`). Al abrir un archivo de uno de
+     ellos, cambia el nombre por el del archivo comprimido (`kjfs` `0x08B75C08`).
+   - Lo descomprime por streaming con `zlibdec`, en un FPL `KFS_Arc` de 1 MiB + `0xB298` bytes
+     (`kjfs` `0x08B78050`).
+   - El acceso fino no se siguió [?].
+3. **Despacho por tipo**.
+   - Los `.dar` y `.qar` se recorren entrada por entrada (estados 3 y 4 de `0x0883D6E4`), con el
+     mismo layout de DAR de arriba y el QAR alineado a `0x80`.
+   - Cada recurso va al handler de su tipo (el byte alto del hash de recursos).
+   - El tipo `0x32` (`rlc`) lo registra `0x0880495C` con `0x0883FBFC(0x32, 0x08805E04, 0)`.
+   - El handler `0x08805E04` solo guarda el puntero y el tamaño de la tabla en
+     `0x08A00154`/`0x08A00158`.
+4. **El PRX**. `0x08804B54` abre `<s>.prx` con `kjfs` y `0x08804CC4`:
+   - si hay una etapa cargada (`0x08A00150`), hace `sceKernelStopModule(id, 0, NULL, …)` y
+     `sceKernelUnloadModule(id)`. **Solo hay una etapa cargada a la vez**;
+   - llama a `sceKernelLoadModuleByID(fd, 0, NULL)`, **sin flags y sin `SceKernelLMOption`**: la
+     partición y la posición son las de por defecto y las elige el kernel. Si falla, reintenta cada
+     segundo.
+5. **Enlace y arranque** (`0x08805E1C`):
+   1. Llama a `sceKernelStartModule(id, 4, &p)`, con `p = 0x08A0015C`. El `module_start` de la etapa
+      escribe ahí tres punteros:
+      - `[0]` = `.text+0x0`, que es la base del segmento 0;
+      - `[1]` = la base del segmento 1 (datos);
+      - `[2]` = la entrada, que también es `.text+0x0`.
+   2. Llama a `0x08805C0C(bases_main, p, tabla, tamaño >> 3)`:
+      - `bases_main = {0x08804000, 0x089F2D40}` son los segmentos 0 y 1 de `mgp_main`;
+      - `p` son las bases de la etapa.
+   3. Hace `sceKernelDcacheWritebackAll()` e invalida toda la icache: `cache 0x04` (por índice)
+      cada 64 bytes durante 16 KiB, desde la base de la etapa.
+   4. Llama a la entrada (`[2]`). En las 106 etapas esa función:
+      - guarda en el global `0x08A5CBE0` la base de los datos de la etapa;
+      - llama al `printf` de depuración (`0x089CFE80`, que se anula al arrancar);
+      - limpia el `.bss` con `memset` (`0x089CF880`).
+   5. Libera el buffer del `.rlc` con `0x0883E80C`, que baja el contador de referencias del recurso.
+6. **La entrada se vuelve a llamar** desde `0x088063C8` (reinicio de la escena), a través de
+   `0x088079C8`, que además cuenta las entradas de la tabla de la etapa.
+7. **La descarga no es un paso aparte**: es el `StopModule`/`UnloadModule` de la carga siguiente.
+   - `0x08807968` vuelve a apuntar `0x08A5CBE0` a una tabla vacía de `mgp_main` (`0x08AFB7C0`).
+   - `sceKernelStopUnloadSelfModuleWithStatus` no tiene que ver con las etapas: lo usan `mgp_main`
+     (`0x089DA360`, para su propia salida) y `kjfs` (`0x08B78518`).
+
+### La tabla de la etapa
+
+- Los datos de cada etapa empiezan con una tabla de pares `(u32 clave, u32 puntero)`, terminada en
+  un puntero 0 y **ordenada por clave** en las 106 etapas.
+- `0x088079F4(clave)` la busca (con `0x08842018`) y devuelve el puntero. Así llega `mgp_main` al
+  código de la etapa: por punteros a función, o sea, por `jalr`.
+- Tiene entre 3 y 232 entradas (mediana 192; `title` 79 y `st01` 219), 16 531 en total:
+  - 8 114 apuntan a la etapa, con `R_MIPS_32` propios;
+  - **8 417 apuntan a `mgp_main`, y son exactamente los 8 417 `R_MIPS_32` del `.rlc`**. Es decir,
+    todos los `R_MIPS_32` del `.rlc` están en esta tabla.
+
+### `0x08805C0C` contra `rlc.py`
+
+| Aspecto | `0x08805C0C` | `rlc.py` (`apply`) | ¿Mismo resultado en las 106 tablas? |
+|---|---|---|---|
+| Campos | `type = info & 0xFF`, `ofs_base = (info >> 8) & 0xFF`, `addr_base = (info >> 16) & 0xFF` | Igual | Sí |
+| Bases | Etapa: `p[ofs_base]` (de `module_start`). `mgp_main`: `{0x08804000, 0x089F2D40}` | `base_etapa + vaddr(seg)` y `0x08804000 + vaddr(seg)` | Sí: `p[0]` y `p[1]` son la base y la base más el `vaddr` del segmento 1 |
+| `R_MIPS_32` | `w += base` | Igual | Sí |
+| `R_MIPS_26` | Extiende el signo de `(w << 2)` en 28 bits, suma la base y guarda `>> 2` | `field + (base >> 2)` en 26 bits | Sí, porque las bases son múltiplos de 4 |
+| `R_MIPS_HI16` | Busca hacia adelante la primera entrada de tipo 6 (saltando **cualquier** otro tipo), suma el `(s16)` de su palabra **actual** y deja `(addr - (s16)addr) >> 16` | Busca el siguiente `LO16` saltando solo `HI16`, con la palabra original | Sí: el `LO16` siempre va después de su `HI16` (todavía sin parchear) y nunca hay otro tipo entre los dos |
+| `HI16` sin `LO16` | Usa su propia palabra como parte baja | Error | No aparece |
+| `R_MIPS_LO16` | `imm = (imm + base) & 0xFFFF` | Igual | Sí |
+| Tipo `0xFA` | Cadena de `lui` enlazados por el desplazamiento de su inmediato, con el addend en la entrada siguiente | Se rechaza (error) | No aparece en ninguna tabla |
+| Otros tipos | Se ignoran en silencio | Error | No aparecen |
+| Orden | En el sitio, entrada por entrada | Lee primero todas las palabras originales | Sí: no hay dos entradas sobre la misma palabra |
+
+### Comparación byte a byte [V]
+
+- En la carpeta `PSP/PPSSPP_STATE/` del usuario había un savestate de PPSSPP `v1.20.4`, hecho en el
+  menú de pausa de una misión ("Soviet Patrol Base").
+  - Se descomprimió en local con `zstd_lite.py`: 40 869 620 bytes, con la RAM a partir del offset
+    `0x48`.
+- La etapa cargada es **`st02`, en `0x08B8F900`**:
+  - `0x08A00164` (la entrada) vale `0x08B8F900`;
+  - `0x08A0015C..64` vale `{0x08B8F900, 0x08C675C0, 0x08B8F900}`;
+  - `0x08A5CBE0` vale `0x08C675C0` (la base de sus datos);
+  - el tamaño guardado en `0x08A00158` es `0xDEA8`, el de `st02.rlc` (7 125 entradas).
+- Comparada con `rlc.py relocate --stage-base 0x08B8F900` de `st02`:
+  - **`.text`: 215 884 de 215 884 palabras iguales**;
+  - **las 7 125 palabras que parchea el `.rlc`, iguales**;
+  - en el resto del segmento 0 solo difieren las 8 palabras `syscall` de `.sceStub.text`, que
+    escribe el cargador del kernel al resolver los imports;
+  - en el segmento 1 difieren 3 de 6 518 palabras (estado en ejecución), ninguna de la tabla de la
+    etapa.
+- **La base se repite**: `title` (lista de módulos de PPSSPP, F02) y `st02` (este savestate) se
+  cargaron las dos en `0x08B8F900`. Falta ver un menú [?].
+- El juego no pide esa base, porque no pasa `SceKernelLMOption`.
+  - Es lo primero libre después de `KCEJ_FS`, que termina en `0x08B86F00`, más un hueco de `0x8A00`
+    bytes que no se identificó [?].
+  - No es `libfont`: PPSSPP lo simula por HLE y no le reserva memoria.
+- No se importa ningún `sceKernelIcacheInvalidate*`: la icache se invalida a mano con `cache 0x04`.
 
 ## Herramientas
 
@@ -194,7 +290,7 @@ de usarlo.
 | Script | Para qué |
 |---|---|
 | `zar.py` | Descomprimir un `_zar`, listar el DAR y extraer una entrada (`list`, `extract`) |
-| `rlc.py` | Validar un `.rlc` contra su etapa y `mgp_main` (`check`, solo cuenta), y generar la imagen relocalizada de una etapa en una base dada (`relocate`; la salida es del juego y va a `analysis/`) |
+| `rlc.py` | Validar un `.rlc` contra su etapa y `mgp_main` (`check`, solo cuenta); generar la imagen relocalizada de una etapa en una base dada (`relocate`), y escribir el PRX de la etapa con el `.rlc` ya aplicado (`link`), que cualquier cargador de PRX deja igual que el juego. Las dos últimas salidas son del juego y van a `analysis/` |
 | `psp_prx.py` | Leer un PRX: segmentos, secciones, `sceModuleInfo`, imports, exports y `PT_PRXRELOC` |
 | `stage_inventory.py` | El inventario de `docs/analysis/stages.md` |
 
@@ -208,24 +304,25 @@ python -I profiles/mpo/tools/rlc.py check --stage game/disc/PSP_GAME/USRDIR/stag
     --zar game/disc/PSP_GAME/USRDIR/stage/st01/_zar --main game/elf/mgp_main.elf
 python -I profiles/mpo/tools/rlc.py relocate --stage …/title/title.prx --zar …/title/_zar \
     --main game/elf/mgp_main.elf --stage-base 0x08B8F900 --output analysis/title_08B8F900.bin
+python -I profiles/mpo/tools/rlc.py link --stage …/st01/st01.prx --zar …/st01/_zar \
+    --main game/elf/mgp_main.elf --output analysis/f04/linked/st01
 ```
 
-## Lo que falta confirmar (Ghidra, F04 parte 2)
+- **Importar una etapa en Ghidra**: se importa el PRX enlazado (`rlc.py link`) en `0x08B8F900`, con
+  `MPO_EXTERNAL_BLOCK="mgp_main 08804000 2F7800"` y
+  `MPO_ANCHORS=profiles/mpo/config/anchors_modules.txt`:
+  `profiles/mpo/tools/ghidra/run_analysis.sh analysis/f04/linked/st01 stage_st01 08B8F900`.
+  - El bloque externo (`MpoExternalBlock.java`) es un bloque relleno de `jr ra; nop` y no
+    ejecutable.
+  - Sin él, cada llamada a `mgp_main` corta el desensamblado: `st01` quedaba en el 66 % de `.text`
+    decodificado y `title` en el 77 %. Con él: `title` 100 % (1 851 funciones) y `st01` 99.99 %
+    (4 379 funciones, 1 `jr` sin resolver y 108 `jalr` sin resolver).
 
-1. **La cadena de carga**: quién abre `stage/<s>/<s>.prx` (`kjfs` o `sceIoOpen` en `mgp_main`), con
-   qué `flags` y `SceKernelLMOption` se llama a `sceKernelLoadModuleByID` (partición y posición, que
-   deciden la base) y qué recibe `sceKernelStartModule` en `argp`.
-2. **Dónde se aplica el `.rlc`**:
-   - la función que recorre las entradas de 8 bytes;
-   - cómo obtiene las bases de los segmentos de la etapa y de `mgp_main`;
-   - si sigue la misma semántica de `HI16`/`LO16`;
-   - si lo hace antes o después de `module_start` y antes de entrar por `.text+0x0`.
-3. **Cómo llega el `.rlc` a memoria**: el cargador de recursos de `data.cnf`, la tabla de
-   extensiones, si se libera después de aplicarlo y qué significan `.cache`, `.resident` y `.slot`.
-4. **La descarga**: `sceKernelStopModule` y `UnloadModule`, y qué punteros a la etapa limpia
-   `mgp_main`.
-5. **Si la base es fija**: con PPSSPP, comparar la base de `mgp_stage` en el título, en una misión
-   (`st01`) y en un menú. También ver si una `r_*` (residente) convive cargada con otra etapa.
-6. **Comparar byte a byte**: un volcado de memoria de PPSSPP de `0x08B8F900`–`0x08BCBEC0` en el
-   título, contra `rlc.py relocate` de `title`, sin contar `.bss` ni los datos que cambian en
-   ejecución.
+## Lo que falta confirmar
+
+- La base de `mgp_stage` en un menú (por ejemplo, `gsmenu`) y en una etapa de red. Con `title` y
+  `st02` en `0x08B8F900`, lo más probable es que sea siempre la misma, pero el juego no la fija.
+- Qué ocupa los `0x8A00` bytes entre `KCEJ_FS` y `mgp_stage`.
+- El acceso fino de `kjfs` a `_zar` (cómo ubica una entrada sin descomprimir todo).
+- El papel exacto de las claves de la tabla de la etapa (probablemente `strcode` de comandos GCL o
+  de actores).

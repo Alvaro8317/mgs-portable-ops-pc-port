@@ -29,6 +29,14 @@ sobre los archivos validados con `supported.toml` y sobre el `mgp_main.elf` de F
 - **La imagen más grande ocupa 0xFC400 bytes** (`st09`, con `.bss`). Es lo mínimo que hay que reservar
   para una etapa de misión.
 - **No usan `$gp`**, ni las etapas ni `mgp_main`.
+- **`mgp_main` entra a la etapa por punteros**. Los datos de cada etapa empiezan con una tabla
+  ordenada de pares `(clave, puntero)`, con entre 3 y 232 entradas (16 531 en total). De ellas,
+  8 114 apuntan a la propia etapa y 8 417 a `mgp_main`; esas 8 417 son todos los `R_MIPS_32` del
+  `.rlc`. Ver `docs/formats/rlc.md`.
+- **En Ghidra** (PRX enlazado en `0x08B8F900`, con el bloque de relleno de `mgp_main`):
+  - `title`: 1 851 funciones, 100 % de `.text` decodificado, 0 `jr` sin resolver y 68 `jalr` sin
+    resolver;
+  - `st01`: 4 379 funciones, 99.99 %, 1 `jr` y 108 `jalr` sin resolver.
 - **Los imports son pocos y todos de Sony.** Ninguna etapa importa de `mgp_main`, `kjfs`, `sound2` ni
   `zlibdec`. Las de misión usan solo `ThreadManForUser` (6 NIDs) y `sceSuspendForUser` (2). Las de
   red y las de video traen `sceNet*`, `sceHttp`, `sceUsbGps` o `sceMpeg`.

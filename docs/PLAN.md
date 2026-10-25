@@ -222,6 +222,16 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
       se convierten en `jr ra`;
     - la VFPU completa: 27 657 instrucciones, 89 mnemónicos y 349 prefijos;
     - los stubs de Konami están dentro de `.text`.
+- **Notas (F04)**: ver `docs/formats/rlc.md` y `docs/sessions/F04.md`.
+  - Una etapa se analiza a partir de su PRX **ya enlazado** (`rlc.py link`) en `0x08B8F900`. Las
+    salidas de Ghidra de `title` y `st01` están en `analysis/out/stage_title` y `stage_st01`.
+  - Las etapas llaman a 1 493 funciones de `mgp_main`; 468 no son destino de ningún `jal` de
+    `mgp_main` y hay que sembrarlas (`stage_inventory.py`).
+  - **Brecha de overlays**: el PSPRecomp fijado (`f6e7d41`) no tiene `unregister_functions`, ni un
+    hook de función faltante, ni librerías por overlay. Su `Elf32Image::apply_relocations` sí aplica
+    las relocaciones PRX en una base, que es lo que necesita un PRX enlazado.
+  - **Tamaño**: los 91 PRX distintos suman 28 veces el `.text` de `mgp_main`, pero solo el 3.7 %
+    son funciones distintas. Evaluar la deduplicación (ver el diseño en `F04.md`).
 
 ---
 
@@ -335,6 +345,14 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Instalar y desinstalar los overlays (`unregister_functions`), con el intérprete como respaldo.
 - **Criterios de hecho**: se entra a la primera etapa (aunque sea sin audio) y en el reporte
   final no queda código interpretado en esa etapa. **M2 cerrado.**
+- **Notas (F04)**: el diseño de los overlays está en `docs/sessions/F04.md`.
+  - `mgp_main` usa `sceKernelLoadModuleByID(fd, 0, NULL)` (no `sceKernelLoadModule`) sobre un
+    descriptor de `kjfs`. Después llama a `sceKernelStartModule(id, 4, &p)` y aplica el `.rlc` él
+    mismo (`0x08805C0C`). No hay que hacer HLE del `.rlc`, sino respetar ese contrato.
+  - Hay una sola etapa a la vez, siempre en `0x08B8F900` (`title` y `st02` verificadas; falta un
+    menú). La más grande ocupa `0xFC400` bytes.
+  - Para elegir la librería del overlay, se identifica por el SHA-256 de `<s>.prx` y de `<s>.rlc`
+    (91 distintas).
 
 ---
 
