@@ -167,6 +167,21 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Notas (F01)**: **no hay archivos `.rlc` en el disco**. Primero hay que averiguar de dónde salen
   (dentro de `_zar` o `slot.dat`, generados en memoria o un resto de `host0:`). El inventario de
   etapas ya está en `docs/formats/disc-layout.md` y los hashes en `supported.toml` (106 etapas).
+- **Notas (F03)**: ver `docs/analysis/mgp_main.md` §6.4, §6.6 y §8.
+  - El proyecto de Ghidra está en `analysis/ghidra/mpo` (`mgp_main`, `sound2`, `kjfs` y `zlibdec`).
+    Para importar una etapa en la base que toque:
+    `profiles/mpo/tools/ghidra/run_analysis.sh <prx> <nombre> <base>`.
+  - **`mgp_main` no usa `sceKernelLoadModule`**:
+    - `0x08804CC4` descarga la etapa anterior y carga la nueva con `sceKernelLoadModuleByID` sobre
+      un descriptor (`0x08A00030`) que se lee por trozos con `kjfs` (`0x08804C3C` → `0x08804A90`);
+    - la ruta sale de `%sstage/%s/`.
+  - **El candidato a `.rlc`** está en `0x08805E1C`:
+    - pasa un puntero a `sceKernelStartModule(id, 4, &info)` de la etapa;
+    - aplica en `0x08805C0C` una tabla de entradas de 8 bytes (tamaño en `0x08A00158`) contra las
+      bases de `mgp_main` (`0x08804000`) y de su `.data` (`0x089F2D40`);
+    - invalida toda la caché de instrucciones y salta a un puntero que deja la etapa.
+  - Las etapas no importan nada de `mgp_main`, así que todo enlace pasa por esa tabla.
+  - `prx_imports.py` lista los imports de las 106 etapas sin Ghidra.
 
 ### F05 — Inventario del GE con dumps de PPSSPP
 
@@ -192,6 +207,21 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     se clasifica como "parche genérico upstream" o "código del perfil".
 - **Criterios de hecho**: la diferencia de funciones entre Ghidra y `psp_analyze` está documentada y
   hay un plan de brechas. **M0 cerrado.**
+- **Notas (F03)**: ver `docs/analysis/mgp_main.md` §3, §9 y §10.
+  - La entrada de Ghidra es `analysis/out/mgp_main/mgp_main.recomp.json`, que contiene 8 484
+    funciones con sus rangos, 177 `jr` (uno sin resolver, en `0x088A77C8`, con la tabla
+    `0x089EA590`) y los `jalr` resueltos.
+  - De esas funciones, 2 649 no las encuentra Ghidra solo: 947 salen de las relocaciones, 1 614 de
+    las heurísticas de prólogos y huecos, y 88 del reanálisis posterior. Hay que contrastarlas con
+    `psp_analyze`.
+  - Brechas candidatas:
+    - **módulos residentes múltiples**: `mgp_main` + `zlibdec` + `sound2` + `kjfs`, que se resuelven
+      los imports entre sí por NID (71 de Konami en `mgp_main`). Es la decisión de recompilar
+      `KCEJ_SOUND2`;
+    - **overrides de funciones parcheadas al arrancar**: `0x089CFE80`, `0x089D002C` y `0x089CFF78`
+      se convierten en `jr ra`;
+    - la VFPU completa: 27 657 instrucciones, 89 mnemónicos y 349 prefijos;
+    - los stubs de Konami están dentro de `.text`.
 
 ---
 

@@ -261,6 +261,36 @@ tclamb/mhp2g-decomp y "PSP Web Recomp". Los trackers donde aparecen son
   GCX "puede o no estar cifrado" ([Jayveer/Gcx](https://github.com/Jayveer/Gcx)) [V].
 - Linaje del motor: el formato de modelos MDP es común a Acid, MPO y Peace Walker. El TXP de MPO es
   distinto del de PW: en MPO la paleta va por textura y en PW por frame.
+- **Análisis de `mgp_main` en Ghidra (F03) [V]**. El detalle está en
+  [`docs/analysis/mgp_main.md`](analysis/mgp_main.md).
+  - Son 8 484 funciones y 482 007 instrucciones, y el 99.97 % de `.text` queda decodificado. Ghidra
+    solo llega al 89.49 %; el resto se alcanza sembrando desde relocaciones, prólogos y huecos.
+  - Importa 240 funciones de 32 librerías:
+    - 169 de Sony, de las que PPSSPP `v1.20.4` implementa 165; las 4 que no son
+      `sceUtilityHtmlViewer*`;
+    - 71 de los módulos de Konami (`kjfs` 20, `sound2` 48 y `zlibdec` 3), cuyos stubs están dentro
+      de `.text`.
+  - `module_start` declara SDK `0x02080010` y compilador `0x30306` (GCC 3.3.6). Crea el hilo
+    `user_main`, que a su vez crea `Main` (con VFPU), y el bucle principal es `0x0883F464`.
+  - Al arrancar carga `zlibdec`, `sound2`, `kjfs` y `libfont` desde `USRDIR/modules/`, con
+    `sceKernelLoadModuleByID`. Antes llama a `sceUtilityLoadAvModule(0..3)`.
+  - **El hueco de `0x24800` bytes** antes de `ZLIB` es la alineación, más el heap `UserSbrk`
+    (`0x10000`), más los bloques que PPSSPP reserva para `av_atrac3plus` y `av_mpegbase`.
+  - **No importa `sceKernelLoadModule` ni `sceKernelIcacheInvalidate*`**, pero modifica código en dos
+    casos:
+    - al arrancar, convierte tres funciones de depuración en `jr ra`;
+    - al cargar una etapa, le aplica una tabla de relocaciones contra sus propias bases (el candidato
+      a ser el `.rlc`) e invalida la caché de instrucciones con `cache 0x04`.
+  - **El intérprete GCL** se localizó por sus tablas de comandos (`strcode24` y handler):
+    - `0x089F51D4`, con `if`, `switch`, `eval`, `call`, `return` y `print`;
+    - `0x089F2F34`, con `load`, `command`, `chara`, `restart`, `trap` y `mesg`.
+- **Los módulos de Konami (F03) [V]**:
+  - `sound2.prx` tiene 531 funciones y 24 027 instrucciones, y exporta 48 funciones. Importa
+    `sceSasCore` (21), `sceAtrac3plus` (9) y `sceAudio` (9), todas implementadas en PPSSPP.
+  - `kjfs.prx` tiene 230 funciones y exporta 20. Usa I/O asíncrono e importa `zlibdec`.
+  - `zlibdec.prx` tiene 24 funciones y exporta 3.
+  - **Decisión: los tres se recompilan como módulos residentes**, y la capa de Sony que tienen debajo
+    va por HLE (ver `docs/analysis/mgp_main.md` §9).
 
 ### Formatos de datos
 
@@ -324,6 +354,24 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
 - Widescreen en US: `0x201E9728` es un float de aspect ratio (16:9, 21:9 o 32:9) y se usa con
   "Stretch".
 - El revival online solo permite 20 o 30 fps.
+- **Verificado en el binario (F03) [V]**:
+  - `0x089F5210` (`0x201F5210`) es el mínimo de vblanks por frame. Lo lee la espera de frame
+    (`0x08843A20`, que usa `sceDisplayWaitVblankStartCB` y un contador de vblanks que alimenta una
+    sub-interrupción).
+  - `0x0883DBB0(modo)` fija el modo de frame:
+
+    | Modo | Vblanks por frame | Timestep (`0x089F4FD8`) | fps (`0x08A18E6C`) |
+    |---|---|---|---|
+    | 0 | 1 | 5 | 60 |
+    | 1 | 2 | 10 | 30 |
+    | 2 | 3 | 15 | 20 |
+    | 3 | 4 | 20 | 15 |
+
+  - El arranque usa el modo 1 y el gameplay a 20 fps es el modo 2.
+  - El timestep lo leen 233 funciones.
+  - El float del cheat de widescreen (`0x089ED728`) está en `.rodata`, y Ghidra solo le encuentra una
+    referencia [?].
+  - Detalle en `docs/analysis/mgp_main.md` §6.2.
 
 ### Compatibilidad con PPSSPP y lo que revela del uso del GE
 
@@ -356,12 +404,25 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
 - **Sistema**: `sceUtility` Savedata y OSK, y `sceKernelLoadModule`.
 - **Red**: `sceNetAdhoc*` (con Matching y Discover), `sceNetApctl*`, `sceNetInet`,
   `sceNetResolver`, `sceHttp*` (`…WithURL`), `sceUri*` y `sceNpAuth`.
+- **Dónde está cada cosa (imports, F03)** [V]:
+  - `mgp_main` no importa audio de Sony, `sceMpeg`, savedata, OSK ni diálogos.
+  - El audio lo importa `sound2.prx`: `sceSasCore`, `sceAtrac3plus` y `sceAudio`.
+  - Los PRX de etapa importan:
+    - `sceMpeg`: `title`, `ending` y `flashdemo`;
+    - `sceUtility`: 23 etapas;
+    - `sceUsbGps`: `briefing` y `gpstest`;
+    - el escaneo de `sceNetApctl`: `apscan` y `briefing`.
+  - `mgp_main` sí importa `sceUtilityNetconf*` y `sceUtilityHtmlViewer*` (este último sin
+    implementar en PPSSPP).
+  - Los módulos se cargan con `sceKernelLoadModuleByID`, no con `sceKernelLoadModule`.
+- **VFPU (F03)** [V]: `mgp_main` tiene 27 657 instrucciones VFPU (el 5.7 %) en 1 114 funciones.
+  - Usa 89 mnemónicos y 349 prefijos.
+  - Entre las transcendentes: `vrsq` 280, `vsqrt` 236, `vcos` 99 y `vsin` 95.
 
 **Sin verificar [?]:**
 
-- `sceUsbGps` (solo en US y JP).
-- `sceUtilityNetconf`.
-- Cuánto usa la VFPU.
+- Si `sceUsbGps` se usa de verdad (solo en US y JP). En US lo importan las etapas `briefing` y
+  `gpstest` [V, F03].
 - `PSP_SYSTEM_VER` de cada región. US 1.02 trae `2.81` [V, F01].
 
 ### AP Scan: reclutar con APs de Wi-Fi
@@ -381,6 +442,14 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
   `sceNetApctlGetBSSDescEntryUser`.
 - De cada AP obtiene el BSSID, el SSID, el canal, la intensidad de la señal y el tipo de seguridad
   ([sceNet.cpp](https://github.com/hrydgard/ppsspp/blob/master/Core/HLE/sceNet.cpp)).
+- **Dónde está (F03) [V]**:
+  - `sceNetApctlScanUser`, `GetBSSDescIDListUser` y `GetBSSDescEntryUser` los importan **los PRX de
+    etapa `apscan` y `briefing`**, no `mgp_main`.
+  - `mgp_main` tiene el resto:
+    - `Init` y `AddHandler` en `0x0885D27C`;
+    - el cierre en `0x0885D5F0`;
+    - `GetInfo` y `Netconf` en `0x0885D9A4`;
+    - `GetState`.
 
 **En los emuladores:**
 - PPSSPP finge 4 APs, y eso basta para Peace Walker
@@ -439,8 +508,12 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
    **no hay ningún `.rlc` en el disco** (cada etapa trae solo `<s>.prx` y `_zar`). Hay que averiguar
    de dónde sale el `.rlc` (F04).
 3. Hacer el inventario de imports por librería y versión de firmware (`PSP_SYSTEM_VER`).
+   **F03 [V]**: inventario completo de `mgp_main` y de los módulos de Konami en
+   `docs/analysis/mgp_main.md` §5 y §7, y resumen de las 106 etapas en el §8. Resuelto para
+   `mgp_main`.
 4. Medir la VFPU, los branch-likely, los `jr`/`jalr` y los saltos sin resolver en `mgp_main` y en una
-   etapa.
+   etapa. **F03 [V]**: medido en `mgp_main` y en los tres módulos de Konami
+   (`docs/analysis/mgp_main.md` §4 y §7). Las etapas quedan para F04 y F06.
 5. Averiguar si `KCEJ_SOUND2` es un PRX aparte o va dentro del ejecutable. **F01 [V]**: hay un
    `USRDIR/modules/sound2.prx` aparte (ELF sin cifrar), junto a `kjfs.prx` y `zlibdec.prx`, y 22
    librerías de Sony cifradas (`~SCE`/`~PSP`). **F02 [V]**: `sound2.prx` es `KCEJ_SOUND2` y
@@ -448,6 +521,8 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
 6. Ver si los GCX de MPO están cifrados.
 7. Ver por qué el AP Scan se cuelga en PPSSPP, comparando contra JPCSP.
 8. Revisar el repo y la versión de ghidra-allegrex. No se encontró en búsqueda; gow-psp-recomp usa
-   "v21.4".
+   "v21.4". **F03 [V]**: es [kotcrab/ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex)
+   (Apache-2.0). La release `v21.4` (2026-08-25) es para Ghidra 12.1.3, la última versión de Ghidra
+   que soporta. Resuelto.
 9. Fuentes que fallaron en esta investigación: TCRF (sirvió contenido trampa), el wiki de fandom
    (402), GameFAQs y serialstation (bloqueados) y el hilo 4799 del foro de PPSSPP (404).

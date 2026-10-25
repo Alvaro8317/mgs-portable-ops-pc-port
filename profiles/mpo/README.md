@@ -4,8 +4,9 @@ Perfil de PSPRecomp para **MGS: Portable Ops** (base `ULUS-10202`, disco 1.02). 
 depende de una dirección, un hash o un layout del juego (`CLAUDE.md` §1.3). El framework
 (`framework/psprecomp`) tiene que seguir compilando sin este perfil y sin el juego.
 
-Estado: **F02**. Están el instalador (`mpo --install`), que también descifra el `EBOOT.BIN`, y los
-tests de disco y de descifrado con datos sintéticos.
+Estado: **F03**. Están el instalador (`mpo --install`), que también descifra el `EBOOT.BIN`, los
+tests de disco y de descifrado con datos sintéticos, y las herramientas de análisis en Ghidra
+(`tools/ghidra/`). Los resultados están en `docs/analysis/mgp_main.md`.
 
 ## Instalar la copia del usuario
 
@@ -28,6 +29,52 @@ mpo --manifest game/ULUS-10202.iso \
 - `python -I profiles/mpo/tools/prx_info.py game/elf/mgp_main.elf` muestra la identidad de un módulo
   descifrado: la cabecera ELF, los program headers y `sceModuleInfo`. Solo imprime números y
   nombres.
+
+## Analizar los módulos en Ghidra (F03)
+
+Herramientas locales (no se versionan ni se distribuyen), instaladas fuera del repo, por ejemplo en
+`~/tools/`:
+
+- JDK 21 (Temurin `21.0.13+9`).
+- Ghidra `12.1.3` (`ghidra_12.1.3_PUBLIC_20260817.zip`).
+- [ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex) `v21.4`
+  (`ghidra_12.1.3_PUBLIC_20260825_ghidra-allegrex.zip`), descomprimido en
+  `Ghidra/Extensions/`. Trae el loader "PSP Executable (ELF)" (`PspElfLoader`), que aplica las
+  relocaciones PRX en la base que se le pida.
+
+Los SHA-256 de las descargas están en `docs/sessions/F03.md`.
+
+```bash
+# 1. Tabla de NIDs desde PPSSPP v1.20.4 (descarga Core/HLE/*.cpp del commit fijado).
+python -I profiles/mpo/tools/build_nid_table.py --fetch \
+    analysis/ppsspp-v1.20.4/Core/HLE analysis/nids/ppsspp-v1.20.4.tsv
+
+# 2. Importar, analizar, sembrar funciones y exportar (proyecto en analysis/ghidra/mpo).
+export GHIDRA_INSTALL_DIR=~/tools/ghidra_12.1.3_PUBLIC JAVA_HOME=~/tools/jdk-21.0.13+9
+profiles/mpo/tools/ghidra/run_analysis.sh game/elf/mgp_main.elf mgp_main 08804000
+MPO_ANCHORS=profiles/mpo/config/anchors_modules.txt \
+  profiles/mpo/tools/ghidra/run_analysis.sh game/disc/PSP_GAME/USRDIR/modules/sound2.prx sound2 08B24100
+
+# 3. Tablas en Markdown (solo números y nombres) para docs/analysis/.
+python -I profiles/mpo/tools/ghidra_summary.py analysis/out/mgp_main
+
+# Sin Ghidra: imports y exports de cualquier PRX descifrado.
+python -I profiles/mpo/tools/prx_imports.py --nids analysis/nids/ppsspp-v1.20.4.tsv --summary \
+    game/disc/PSP_GAME/USRDIR/stage/apscan/apscan.prx
+```
+
+- `run_analysis.sh` corre, en una sola sesión headless, los scripts de `tools/ghidra/`:
+  - `MpoMetrics.java`: bloques, cobertura y clases de instrucciones (VFPU, FPU, branch-likely,
+    `jr`/`jalr`). Se toma después de cada paso de siembra.
+  - `MpoSeedFunctions.java`: siembra funciones en tres pasos (`relocations`, `prologues`, `gaps`).
+  - `MpoModuleTables.java`: lee `.lib.stub` y `.lib.ent`, nombra los stubs con la tabla de NIDs y
+    cuenta las llamadas.
+  - `MpoExportRecompInput.java`: funciones, rangos, tablas de saltos y `jalr` resueltos, para el
+    recompilador (F06).
+  - `MpoFindAnchors.java`: los anclajes de `config/anchors.txt` (cadenas, direcciones e imports).
+- Todo lo que generan (el proyecto de Ghidra, los JSON y `*.strings.tsv`) queda en `analysis/`, que
+  git ignora. `*.strings.tsv` contiene texto del juego: no se cita en `docs/`.
+- Las bases de los módulos de Konami son las que muestra el debugger de PPSSPP (`RESEARCH.md` §4).
 
 ## Estructura
 

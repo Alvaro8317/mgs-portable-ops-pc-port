@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Analysis anchors for the Konami modules in USRDIR/modules/ (kjfs.prx,
+# sound2.prx, zlibdec.prx), read by profiles/mpo/tools/ghidra/MpoFindAnchors.java.
+# See docs/analysis/mgp_main.md (KCEJ_SOUND2 and KCEJ_FS sections).
+
+import  load_module      ^sceKernel(Load|Start|Stop|Unload)Module
+import  io               ^sceIo
+import  umd              ^sceUmd
+import  audio            ^sceAudio
+import  sas              ^__sceSas|^sceSas
+import  atrac            ^sceAtrac
+import  threads          ^sceKernel(CreateThread|StartThread|CreateSema|CreateEventFlag|CreateMsgPipe|CreateCallback)
+import  caches           ^sceKernel(Icache|Dcache)
+import  memory_alloc     ^sceKernel(AllocPartitionMemory|CreateFpl|CreateVpl)
+string  stage            (?i)stage|\.prx|\.rlc|rlc:
+string  kjfs             (?i)kjfs|datacnf|data\.cnf|slot
+string  sound            (?i)sound|snd|sas|atrac|\.at3|\.vag|seq

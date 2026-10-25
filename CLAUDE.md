@@ -365,11 +365,14 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
      - SDL3 GPU: es una abstracción que no expone operaciones lógicas y trae menos estado dinámico.
      - OpenGL: los drivers en Windows son peores y es una API de legado.
      - D3D12: no es nativo en Linux.
+4. **`KCEJ_SOUND2` se recompila** (tomada en F03, el 2026-10-25), igual que `KCEJ_FS` y `ZLIB`:
+   - se recompila como módulo residente, y su capa de Sony (`sceSasCore`, `sceAtrac3plus` y
+     `sceAudio`) va por HLE;
+   - la justificación está en `docs/analysis/mgp_main.md` §9.
 
 ### Abiertas
 
-1. **Recompilar o hacer HLE de `KCEJ_SOUND2`**: depende de lo que muestre M0.
-2. **Fibras**: con qué implementación se hacen los cambios de contexto en Windows y Linux (la API
+1. **Fibras**: con qué implementación se hacen los cambios de contexto en Windows y Linux (la API
    Fibers de Win32 y `ucontext`, o una librería como `minicoro`). Se decide en M1.
 
 ---
