@@ -1,0 +1,49 @@
+# Contenido con copyright del juego: NUNCA al repo (ver CLAUDE.md §1).
+*.iso
+*.cso
+*.chd
+*.pbp
+*.prx
+*.rlc
+EBOOT.BIN
+BOOT.BIN
+PARAM.SFO
+game/
+**/game/
+
+# Resultados del análisis y código generado a partir del ejecutable del usuario.
+analysis/
+**/analysis/
+generated/
+**/generated/
+progress/
+**/progress/
+*.gzf
+*.gpr
+*.rep/
+
+# Capturas, dumps y trazas (pueden contener assets del juego).
+captures/
+dumps/
+traces/
+*.ppdmp
+
+# Builds.
+build/
+out/
+cmake-build-*/
+.cache/
+compile_commands.json
+
+# Python.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editores y SO.
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
