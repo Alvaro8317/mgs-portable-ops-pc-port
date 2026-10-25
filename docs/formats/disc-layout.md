@@ -27,9 +27,8 @@ validado con `mpo --install` contra `profiles/mpo/config/supported.toml` (F01, 2
 
 - **`PSP_GAME/SYSDIR/EBOOT.BIN`** (2 693 760 bytes) está cifrado, con cabecera `~PSP`, y el nombre
   de módulo es **`mgp_main`**.
-- **No hay archivos `.rlc` en el disco.** Las strings `%sstage/%s/%s.rlc` y `rlc: preloaded` (ver
-  `RESEARCH.md` §4) tienen que referirse a otra cosa: datos dentro de `_zar` o `slot.dat`, una
-  tabla generada en memoria o un resto de desarrollo (`host0:`). Esto queda para F04.
+- **No hay archivos `.rlc` sueltos en el disco.** F04 [V]: cada `<etapa>.rlc` va dentro del
+  `_zar` de su etapa (es la última entrada del DAR). Ver [`rlc.md`](rlc.md).
 - **106 etapas** en `USRDIR/stage/<etapa>/`, cada una con **`<etapa>.prx` y `_zar`**, nada más.
   - Los `.prx` de etapa son **ELF sin cifrar** (`\x7fELF`). Ocupan entre 2 556 y 1 311 996 bytes
     (mediana 1 103 948) y suman 89 822 112 bytes.
