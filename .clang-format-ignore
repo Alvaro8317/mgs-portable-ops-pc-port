@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The framework keeps its upstream style; generated code is never formatted.
+framework/**
+third_party/**
+**/generated/**

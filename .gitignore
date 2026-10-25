@@ -14,6 +14,8 @@ game/
 # Resultados del análisis y código generado a partir del ejecutable del usuario.
 analysis/
 **/analysis/
+# docs/analysis/ contiene solo prosa y números (F03), sin código del juego.
+!/docs/analysis/
 generated/
 **/generated/
 progress/

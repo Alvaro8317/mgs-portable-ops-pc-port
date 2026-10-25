@@ -4,11 +4,11 @@ El proyecto es **GPL-3.0-or-later** (ver `LICENSE`). Toda dependencia nueva se r
 versión fijada y su licencia, y lleva su `LICENSE` o `NOTICE` al lado en `third_party/<nombre>/`. No
 se aceptan dependencias GPL-2.0-only ni con licencias incompatibles con GPLv3.
 
-Estado: **planificadas**, todavía no incorporadas. La columna "Versión" se llena al incorporarlas.
+Estado: solo **PSPRecomp** está incorporado; el resto está **planificado**. La columna "Versión" se llena al incorporar cada uno.
 
 | Componente | Uso | Licencia | Versión / commit | Notas |
 |---|---|---|---|---|
-| PSPRecomp | Framework de recompilación y runtime base | MIT | — | Nuestros cambios genéricos se quedan en MIT para enviarlos upstream. |
+| PSPRecomp | Framework de recompilación y runtime base | MIT | `f6e7d415c7f447b934cc3865a31eb725f353d659` (2026-08-14) | Submódulo en `framework/psprecomp` (incorporado en F00; su `LICENSE` está dentro). Nuestros cambios genéricos se quedan en MIT para enviarlos upstream. |
 | SDL3 | Ventana, input y audio | zlib | — | |
 | Vulkan-Headers | API gráfica | Apache-2.0 / MIT | — | |
 | volk | Loader de Vulkan | MIT | — | |
