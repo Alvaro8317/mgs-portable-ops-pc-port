@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Analysis anchors for mgp_main (ULUS-10202), read by
+# profiles/mpo/tools/ghidra/MpoFindAnchors.java. See docs/analysis/mgp_main.md.
+#
+#   string  <label> <java regex>    defined strings that match
+#   address <label> <hex address>   references to that address
+#   import  <label> <java regex>    call sites of the matching import stubs
+#                                   (Konami module imports are named
+#                                   <library>_<NID>, e.g. kjfs_2FCD7551)
+
+# Data manifest, file system and paths.
+string  datacnf          (?i)data\.cnf
+string  slot_dat         (?i)slot\.dat
+string  dat_files        (?i)^[a-z]+\.dat$
+string  stage_dir        (?i)stage/
+string  device_paths     ^(disc0|host0|umd1|fatms0|ms0)[:/]|^disc0$
+string  modules_dir      (?i)^modules/
+import  kjfs             ^kjfs_
+import  zlibdec          ^zlibdec_
+import  io               ^sceIo
+import  umd              ^sceUmd
+
+# Module loading (stage overlays are F04; this only lists the call sites).
+import  load_module      ^sceKernel(Load|Start|Stop|Unload|StopUnloadSelf)Module
+
+# GCL script interpreter: (strcode24(name), handler) tables. The hashes of
+# if/switch/eval/call/return/print and of load/command/chara/restart/trap/mesg
+# match strcode() from Jayveer/Gcx (mgs/common/strcode.h).
+address gcl_builtin_cmds 089F51D4
+address gcl_game_cmds    089F2F34
+
+# Sound driver (KCEJ_SOUND2, sound2.prx).
+import  sound2           ^sound2_
+import  sony_audio       ^sce(Audio|Sas|Atrac)
+
+# Main loop, vblank and frame pacing.
+import  vblank           ^sceDisplayWaitVblank
+import  display_frame    ^sceDisplay(SetFrameBuf|SetMode)
+import  ge_list          ^sceGe(ListEnQueue|ListSync|DrawSync|SetCallback|EdramSetAddrTranslation)
+import  ctrl             ^sceCtrl
+import  threads          ^sceKernel(CreateThread|StartThread)
+# CWCheat 0x201F5210 = user RAM offset 0x01F5210 = 0x089F5210 (FPS divisor).
+address fps_divisor      089F5210
+# CWCheat 0x201F4FD8 (timestep 0xF/0xA/5).
+address timestep         089F4FD8
+# CWCheat 0x201E9728 (aspect ratio float, widescreen).
+address aspect_ratio     089ED728
+
+# AP Scan (recruiting from Wi-Fi access points) and network.
+import  apctl            ^sceNetApctl
+import  wlan             ^sceWlan
+import  net_init         ^sceNet(Init|Term)$
+import  utility_net      ^sceUtility(Netconf|LoadNetModule|UnloadNetModule|LoadModule|UnloadModule)
+
+# Code loading and caches (self-modifying code check).
+import  caches           ^sceKernel(Icache|Dcache)
+import  memory_alloc     ^sceKernel(AllocPartitionMemory|FreePartitionMemory|CreateFpl|CreateVpl|MaxFreeMemSize|TotalFreeMemSize)
