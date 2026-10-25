@@ -22,6 +22,11 @@
 #                       (profiles/mpo/tools/build_nid_table.py --fetch ...)
 #   MPO_ANCHORS         default: profiles/mpo/config/anchors.txt
 #   GHIDRA_HEADLESS_MAXMEM  default: 4G
+#   MPO_EXTERNAL_BLOCK  optional "<name> <hex start> <hex size>": a stand-in
+#                       block (jr ra; nop filler, not executable) for a module
+#                       the program calls into (for a stage
+#                       overlay: "mgp_main 08804000 2F7800"; see
+#                       MpoExternalBlock.java and docs/formats/rlc.md)
 set -eu
 
 if [ "$#" -ne 3 ]; then
@@ -39,6 +44,12 @@ analysis_dir=${MPO_ANALYSIS_DIR:-$repo_dir/analysis}
 nid_table=${MPO_NID_TABLE:-$analysis_dir/nids/ppsspp-v1.20.4.tsv}
 anchors=${MPO_ANCHORS:-$repo_dir/profiles/mpo/config/anchors.txt}
 export GHIDRA_HEADLESS_MAXMEM=${GHIDRA_HEADLESS_MAXMEM:-4G}
+
+# Optional pre-script arguments (word splitting is intended).
+pre_script=
+if [ -n "${MPO_EXTERNAL_BLOCK:-}" ]; then
+  pre_script="-preScript MpoExternalBlock.java $MPO_EXTERNAL_BLOCK"
+fi
 
 case "$program" in
   *[!A-Za-z0-9_]* | '') echo "error: program name must be [A-Za-z0-9_]+" >&2; exit 2 ;;
@@ -61,6 +72,7 @@ out=$analysis_dir/out/$program
   -loader PspElfLoader -loader-imagebase "$base" \
   -analysisTimeoutPerFile 3600 \
   -scriptPath "$script_dir" \
+  $pre_script \
   -postScript MpoMetrics.java "$out/1-ghidra" \
   -postScript MpoSeedFunctions.java "$out" relocations \
   -postScript MpoMetrics.java "$out/2-relocations" \
@@ -80,5 +92,5 @@ if grep -qE '^ERROR|[A-Za-z]Exception(:|$)' "$out/headless.log"; then
   echo "error: a script failed, see $out/headless.log" >&2
   exit 1
 fi
-grep -E '(SEED|MODULES|METRICS|RECOMP-INPUT|ANCHORS) ' "$out/headless.log" | sed 's/^INFO  //; s/ (GhidraScript)//'
+grep -E '(EXTERNAL-BLOCK|SEED|MODULES|METRICS|RECOMP-INPUT|ANCHORS) ' "$out/headless.log" | sed 's/^INFO  //; s/ (GhidraScript)//'
 echo "outputs in $out"

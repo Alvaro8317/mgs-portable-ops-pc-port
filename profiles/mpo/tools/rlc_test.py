@@ -233,6 +233,29 @@ class StageTest(unittest.TestCase):
       rlc.relocate(stage, _STAGE_RLC, main, STAGE_BASE + 4, MAIN_BASE)
 
 
+class LinkTest(unittest.TestCase):
+
+  def test_linked_prx_loads_to_the_relocated_image(self):
+    stage, main = _stage_module(), _main_module()
+    linked = psp_prx.Prx(rlc.link(stage, _STAGE_RLC, main, MAIN_BASE))
+    # Loading the linked PRX only needs its own relocations.
+    image = linked.image()
+    bases = [STAGE_BASE + s.vaddr for s in linked.load_segments]
+    rlc.apply(image, STAGE_BASE, rlc.from_prx_relocations(linked.relocations),
+              bases, bases)
+    self.assertEqual(
+        image, rlc.relocate(stage, _STAGE_RLC, main, STAGE_BASE, MAIN_BASE))
+    # Only the words named by the .rlc changed in the file.
+    original = stage.data
+    changed = [i for i in range(0, len(original), 4)
+               if original[i:i + 4] != linked.data[i:i + 4]]
+    self.assertEqual(len(changed), 3)
+
+  def test_link_rejects_unaligned_base(self):
+    with self.assertRaises(rlc.RlcError):
+      rlc.link(_stage_module(), _STAGE_RLC, _main_module(), MAIN_BASE + 4)
+
+
 class FunctionHashTest(unittest.TestCase):
 
   def test_relocated_fields_do_not_change_the_hash(self):
