@@ -33,7 +33,7 @@ código.
 
 | Fase | Nombre | Hito | Estado |
 |---|---|---|---|
-| F00 | Esqueleto del repo, PSPRecomp y CI | M0 | ⬜ pendiente |
+| F00 | Esqueleto del repo, PSPRecomp y CI | M0 | ✅ hecha |
 | F01 | Lector de ISO, validador e instalador | M0 | ⬜ pendiente |
 | F02 | Descifrado de EBOOT y PRX | M0 | ⬜ pendiente |
 | F03 | Análisis de `mgp_main` en Ghidra | M0 | ⬜ pendiente |
@@ -82,7 +82,7 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     sin datos del juego.
 - **Criterios de hecho**: `cmake --build` y `ctest` pasan en Linux y Windows (en local o en CI), y el
   check de SPDX pasa.
-- **Notas**: decidir si Windows también se prueba con clang-cl.
+- **Notas**: decidido, Windows se prueba con MSVC y clang-cl (ver `docs/sessions/F00.md`).
 
 ### F01 — Lector de ISO, validador e instalador
 
