@@ -35,7 +35,7 @@ código.
 |---|---|---|---|
 | F00 | Esqueleto del repo, PSPRecomp y CI | M0 | ✅ hecha |
 | F01 | Lector de ISO, validador e instalador | M0 | ✅ hecha |
-| F02 | Descifrado de EBOOT y PRX | M0 | ⬜ pendiente |
+| F02 | Descifrado de EBOOT y PRX | M0 | ✅ hecha |
 | F03 | Análisis de `mgp_main` en Ghidra | M0 | ⬜ pendiente |
 | F04 | Overlays de etapa y formato `.rlc` | M0 | ⬜ pendiente |
 | F05 | Inventario del GE con dumps de PPSSPP | M0 | ⬜ pendiente |
@@ -116,6 +116,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Notas (F01)**: solo hay que descifrar `EBOOT.BIN` (`~PSP`, módulo `mgp_main`). Los 106 PRX de
   etapa y `kjfs.prx`, `sound2.prx` y `zlibdec.prx` ya son ELF sin cifrar. Las 22 librerías de Sony
   (`~SCE`/`~PSP`) probablemente se cubran con HLE, como en PPSSPP. Ver `docs/sessions/F01.md`.
+- **Notas (F02)**: las claves no se versionan. libkirk y `PrxDecrypter.cpp` se descargan de PPSSPP al
+  configurar, verificados por SHA-256, y solo los enlaza el instalador (ver
+  `third_party/ppsspp_crypto/NOTICE.md`). `mpo --install` deja `game/elf/mgp_main.elf`. Ver
+  `docs/sessions/F02.md`.
 
 ### F03 — Análisis de `mgp_main` en Ghidra
 
@@ -136,6 +140,16 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Criterios de hecho**: `docs/analysis/mgp_main.md` con estadísticas, el inventario de imports, la
   lista de anclajes y el porcentaje de cobertura del desensamblado. Solo números y nombres, nada de
   código del juego. **Decisión sobre `KCEJ_SOUND2`** (recompilar o HLE) tomada o acotada.
+- **Notas (F02)**:
+  - La entrada es `game/elf/mgp_main.elf` (SHA-256 `ca700ea5…`), que deja `mpo --install`.
+  - Es un **PRX relocatable** (`0xFFA0`), no un ELF de dirección fija. Hay que importarlo en Ghidra
+    **relocado en `0x08804000`**, que es la base que muestra el debugger de PPSSPP. Tiene relocaciones
+    `PT_PRXRELOC` (`0x700000A0`) y 34 secciones con nombre.
+  - Con esa base, el `0x089F5210` del código CWCheat cae en el segundo segmento (datos), en la vaddr
+    relativa `0x1F1210`. Es una variable, no una instrucción, y falta verificarlo.
+  - `KCEJ_SOUND2` es `USRDIR/modules/sound2.prx` (ELF sin cifrar), no código de `mgp_main`. Se
+    analiza por separado.
+  - `profiles/mpo/tools/prx_info.py` muestra los segmentos y `sceModuleInfo`.
 
 ### F04 — Overlays de etapa y formato `.rlc`
 
