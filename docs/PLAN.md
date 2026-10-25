@@ -34,7 +34,7 @@ código.
 | Fase | Nombre | Hito | Estado |
 |---|---|---|---|
 | F00 | Esqueleto del repo, PSPRecomp y CI | M0 | ✅ hecha |
-| F01 | Lector de ISO, validador e instalador | M0 | ⬜ pendiente |
+| F01 | Lector de ISO, validador e instalador | M0 | ✅ hecha |
 | F02 | Descifrado de EBOOT y PRX | M0 | ⬜ pendiente |
 | F03 | Análisis de `mgp_main` en Ghidra | M0 | ⬜ pendiente |
 | F04 | Overlays de etapa y formato `.rlc` | M0 | ⬜ pendiente |
@@ -113,6 +113,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Revisar qué claves trae `libkirk` y confirmar que no se distribuyen fuera del instalador.
 - **Criterios de hecho**: el SHA-256 del ELF descifrado coincide con el volcado de PPSSPP. El nombre
   del módulo (`mgp_main`) y su base de carga quedan verificados ([V] en `RESEARCH.md`).
+- **Notas (F01)**: solo hay que descifrar `EBOOT.BIN` (`~PSP`, módulo `mgp_main`). Los 106 PRX de
+  etapa y `kjfs.prx`, `sound2.prx` y `zlibdec.prx` ya son ELF sin cifrar. Las 22 librerías de Sony
+  (`~SCE`/`~PSP`) probablemente se cubran con HLE, como en PPSSPP. Ver `docs/sessions/F01.md`.
 
 ### F03 — Análisis de `mgp_main` en Ghidra
 
@@ -147,6 +150,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Importar 1 o 2 etapas en Ghidra, relocadas.
 - **Criterios de hecho**: el formato `.rlc` está documentado con su parser y tests, el inventario de
   etapas está hecho y el diseño de los overlays para F13 queda esbozado en la nota de sesión.
+- **Notas (F01)**: **no hay archivos `.rlc` en el disco**. Primero hay que averiguar de dónde salen
+  (dentro de `_zar` o `slot.dat`, generados en memoria o un resto de `host0:`). El inventario de
+  etapas ya está en `docs/formats/disc-layout.md` y los hashes en `supported.toml` (106 etapas).
 
 ### F05 — Inventario del GE con dumps de PPSSPP
 
@@ -333,6 +339,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     aporta o se buscan alternativas libres).
 - **Criterios de hecho**: el video del título se reproduce con audio sincronizado y el texto del juego
   se ve correcto.
+- **Notas (F01)**: el disco trae **30 PMF** en `USRDIR/mpg/` (342 MB), cinemáticas incluidas, no
+  solo el título. Probar varias, no solo `MPO_OP*.pmf`.
 
 ### F18 — Savedata, OSK y diálogos
 
