@@ -29,6 +29,24 @@ mpo --manifest game/ULUS-10202.iso \
   descifrado: la cabecera ELF, los program headers y `sceModuleInfo`. Solo imprime números y
   nombres.
 
+## Inventario del GE con frame dumps de PPSSPP (F05)
+
+```bash
+python3 -I profiles/mpo/tools/ge_usage.py --format markdown --per-file dumps/
+```
+
+- `tools/ge_usage.py` lee los `.ppdmp` de PPSSPP (versiones 2 a 6; snappy o zstd) y genera el
+  histograma de lo que usa el GE: primitivas, vtypes, texturas y CLUT, blending, logic ops, stencil,
+  alpha y color test, splines y beziers, render targets, render-to-texture y accesos a VRAM. Salida en
+  texto, Markdown o JSON, solo con números y nombres.
+- `tools/ppdmp.py` (contenedor y snappy) y `tools/zstd_lite.py` (zstd en Python puro) lo acompañan.
+  No hace falta instalar nada. Si `zstandard` está disponible (en un venv **fuera del repo**), se
+  usa para ir más rápido.
+- Los dumps traen datos del juego: se quedan en la carpeta de PPSSPP o en `dumps/` (ignorada por git).
+  El método, la guía de captura y los resultados están en `docs/analysis/ge-usage.md`.
+- Los tests (`mpo_zstd_lite_test` y `mpo_ge_usage_test` en `ctest`) generan dumps sintéticos y no
+  necesitan el juego.
+
 ## Estructura
 
 | Directorio | Contenido | ¿Se versiona? |

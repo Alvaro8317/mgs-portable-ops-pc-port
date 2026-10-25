@@ -16,3 +16,11 @@ add_executable(mpo_crypto_test crypto_test.cpp)
 target_link_libraries(mpo_crypto_test PRIVATE mpo_host)
 mpo_target_warnings(mpo_crypto_test)
 add_test(NAME mpo_crypto_test COMMAND mpo_crypto_test)
+
+# Python tools: synthetic data only, run isolated like the tools themselves.
+if(Python3_FOUND)
+    add_test(NAME mpo_zstd_lite_test
+             COMMAND Python3::Interpreter -I ${CMAKE_CURRENT_SOURCE_DIR}/zstd_lite_test.py)
+    add_test(NAME mpo_ge_usage_test
+             COMMAND Python3::Interpreter -I ${CMAKE_CURRENT_SOURCE_DIR}/ge_usage_test.py)
+endif()
