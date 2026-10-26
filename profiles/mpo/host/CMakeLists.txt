@@ -42,3 +42,7 @@ add_subdirectory(ge)
 add_subdirectory(apscan)
 
 add_subdirectory(frontend)
+
+# F17a: PMF videos and PGF fonts (they use mpo_audio and mpo_ge_replay).
+add_subdirectory(video)
+add_subdirectory(font)
