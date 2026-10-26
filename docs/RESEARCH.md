@@ -461,8 +461,9 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
   `sceNetApctlScanUser`.
 - Después espera `SCAN_COMPLETE` y lee los resultados con `sceNetApctlGetBSSDescIDListUser` y
   `sceNetApctlGetBSSDescEntryUser`.
-- De cada AP obtiene el BSSID, el SSID, el canal, la intensidad de la señal y el tipo de seguridad
-  ([sceNet.cpp](https://github.com/hrydgard/ppsspp/blob/master/Core/HLE/sceNet.cpp)).
+- La API da por AP el BSSID, el SSID, el canal, la intensidad de la señal y el tipo de seguridad
+  ([sceNet.cpp](https://github.com/hrydgard/ppsspp/blob/master/Core/HLE/sceNet.cpp)), pero **MPO
+  solo pide la señal, el BSSID y el SSID**: nunca pide el canal ni la seguridad (F20a) [V].
 - **Dónde está (F03) [V]**:
   - `sceNetApctlScanUser`, `GetBSSDescIDListUser` y `GetBSSDescEntryUser` los importan **los PRX de
     etapa `apscan` y `briefing`**, no `mgp_main`.
@@ -472,11 +473,26 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
     - `GetInfo` y `Netconf` en `0x0885D9A4`;
     - `GetState`.
 
+**Contrato completo (F20a)** [V], en [`docs/analysis/apscan.md`](analysis/apscan.md):
+- El código del escaneo está en las etapas `apscan` y `briefing`; `mgp_main` solo pone la red y los
+  stubs.
+- El handler solo actúa con el estado nuevo `DISCONNECTED`: `SCAN_COMPLETE` (2) marca resultados y
+  `ERROR` (6) guarda el código.
+- Al ver `SCAN_COMPLETE`, el juego lee los resultados y llama **otra vez y en el acto** a `ScanUser`,
+  sin mirar lo que devuelve. Salir de la pantalla y reclutar esperan al siguiente `SCAN_COMPLETE`.
+- Se queda con el AP de señal más fuerte y saca la semilla del recluta del BSSID y el SSID. En US 1.02
+  la tabla de SSID especiales está vacía (la función devuelve -1).
+- **El cooldown que se ve en el código es global y depende del tiempo desde el último recluta**, no
+  es por AP. El "24 h por AP" de los foros puede estar en `0x0883754C` [?].
+
 **En los emuladores:**
 - PPSSPP finge 4 APs, y eso basta para Peace Walker
   ([PR #14345](https://github.com/hrydgard/ppsspp/pull/14345)). **Pero MPO y MPO+ se quedan colgados
   escaneando** ([#20703](https://github.com/hrydgard/ppsspp/issues/20703), abierto). El maintainer
-  sospecha que falta algún evento de Apctl.
+  sospecha que falta algún evento de Apctl. Causa probable, leyendo el código sin ejecutarlo (F20a)
+  [?]: PPSSPP deja el estado en `SCANNING` 100 ms después de `SCAN_COMPLETE`, así que el reescaneo
+  inmediato del juego recibe `NOT_DISCONNECTED`, el juego lo ignora y espera para siempre. Además,
+  `__NetApctlCallbacks` usa referencias al frente de la cola después de `pop_front()`.
 - **JPCSP funciona.** Su implementación es la que hay que estudiar.
 
 **Plan para el port** [?]:

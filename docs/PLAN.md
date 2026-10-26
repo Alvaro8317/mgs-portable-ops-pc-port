@@ -109,7 +109,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F17b | Video del título y fuentes en el juego | M4 | ⬜ pendiente |
 | F18 | Savedata, OSK y diálogos | M4 | ⬜ pendiente |
 | F19 | Primera misión y repetición de input | M5 | ⬜ pendiente |
-| F20a | Generador de APs virtuales (autónomo) | M6 | ⬜ pendiente (ola 2) |
+| F20a | Generador de APs virtuales (autónomo) | M6 | ✅ hecha (ola 2) |
 | F20b | AP Scan, red y GPS en el juego | M6 | ⬜ pendiente |
 | F21 | Partida completa y estabilidad | M6 | ⬜ pendiente |
 | F22 | Empaquetado y release 0.1 | M6 | ⬜ pendiente |
@@ -759,6 +759,20 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Hacer que ad hoc e infraestructura respondan "sin red" de forma limpia.
   - Stub de `sceUsbGps` (no hay receptor).
 - **Criterios de hecho**: se reclutan soldados por AP Scan, sin cuelgues, y el menú de red no cuelga.
+  Se puede escanear varias veces seguidas y salir de la pantalla de AP Scan sin cuelgues (el síntoma
+  de PPSSPP #20703).
+- **Notas (ola 2)**: el modelo es `mpo_apscan` (`profiles/mpo/host/apscan/`) y el contrato de MPO está
+  en `docs/analysis/apscan.md`; ver `docs/sessions/F20a.md`.
+  - Los eventos de `ApctlModel` se entregan desde un hilo de Apctl del kernel, que duerme hasta
+    `next_deadline_us()` y despierta en `scan_user`. **Nunca** se entregan dentro de
+    `sceNetApctlScanUser`.
+  - `sceWlanGetSwitchState` tiene que devolver 1. Hay que aceptar `sceUtilityLoadNetModule(1)` y
+    `(3)`, `sceNetInit`, `sceNetInetInit` y sus `Term`/`Unload`.
+  - Falta decidir la UX de la rotación de APs (el periodo y un control de "cambiar de lugar" con
+    `epoch_offset`) y dónde se guarda la semilla.
+  - Hay que comprobar con el juego las incógnitas de `apscan.md` §6: la unidad del reloj del
+    cooldown y qué comprueba `0x0883754C`.
+  - **El usuario aporta** una partida en la que el AP Scan esté disponible.
 
 ### F21 — Partida completa y estabilidad
 
