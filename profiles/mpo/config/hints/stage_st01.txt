@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Hand-written analysis hints for the st01 stage overlay, linked with its .rlc
+# (rlc.py link) and loaded at 0x08B8F900. Same format as
+# psprecomp::load_analysis_hints(); see docs/analysis/psp_analyze.md.
+
+# Switch with its bound check (sltiu < 5) in a different Ghidra function, like
+# the one in mgp_main: jr at 0x08BF2264, table 0x08C5EFBC. Targets read from
+# the relocated table [V].
+jumptable 0x08BF2264 0x08BF226C 0x08BF226C 0x08BF2390 0x08BF240C 0x08BF24B4

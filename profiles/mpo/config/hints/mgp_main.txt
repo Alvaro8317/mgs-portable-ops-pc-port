@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Hand-written analysis hints for mgp_main (ULUS-10202, disc 1.02), loaded at
+# 0x08804000. Same format as psprecomp::load_analysis_hints(); appended to the
+# Ghidra hints by profiles/mpo/tools/recomp_hints.py --extra. Addresses only.
+# See docs/analysis/psp_analyze.md.
+
+# The switch that Ghidra splits in two functions (docs/analysis/mgp_main.md
+# §4): bound check in 0x088A7780 (sltiu < 11), table 0x089EA590, jr at
+# 0x088A77C8. Targets read from the relocated table [V].
+jumptable 0x088A77C8 0x088A77D0 0x088A77E4 0x088A77EC 0x088A77F4 0x088A77FC 0x088A7824 0x088A7850 0x088A7868 0x088A7870 0x088A7878 0x088A7888

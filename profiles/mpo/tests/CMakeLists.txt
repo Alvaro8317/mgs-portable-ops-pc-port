@@ -23,6 +23,12 @@ if(Python3_FOUND)
         add_test(NAME mpo_${mpo_tool_test}
                  COMMAND Python3::Interpreter -I ${CMAKE_CURRENT_SOURCE_DIR}/${mpo_tool_test}.py)
     endforeach()
+    # F06: Ghidra/PSPRecomp comparison and hints, end to end through the
+    # C++ exporter on a synthetic PRX.
+    add_test(NAME mpo_recomp_tools_test
+             COMMAND Python3::Interpreter -I ${CMAKE_CURRENT_SOURCE_DIR}/recomp_tools_test.py)
+    set_tests_properties(mpo_recomp_tools_test PROPERTIES
+        ENVIRONMENT "MPO_ANALYSIS_EXPORT=$<TARGET_FILE:mpo_analysis_export>")
     foreach(mpo_tool_test IN ITEMS psp_prx_test zar_test rlc_test)
         add_test(NAME mpo_${mpo_tool_test}
                  COMMAND Python3::Interpreter -I

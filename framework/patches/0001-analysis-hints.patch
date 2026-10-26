@@ -1,0 +1,439 @@
+From 826eb187bf474a07465fb0bc4a5035024ff626b4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alvaro=20Garz=C3=B3n?= <eduardo831_@hotmail.com>
+Date: Sun, 25 Oct 2026 19:54:04 -0500
+Subject: [PATCH 1/2] analysis: accept external hints (code ranges, seeds, jump
+ tables)
+
+psp_analyze and psp_recomp --auto only see what their own heuristics find.
+Disassemblers such as Ghidra find more (function starts after returns,
+pointers formed far from their use, switch tables), so let a profile pass
+that knowledge in without putting any title address in the framework:
+
+  code <start> <end>                 replaces the PT_LOAD-derived ranges
+  seed <address> [source]            extra function entry
+  jumptable <jr address> <target>... targets of an indirect jump
+
+load_analysis_hints() reads that text format, analyze_program() gets an
+overload that takes AnalysisHints, and both tools accept --hints <file>.
+Jump-table targets become blocks of the function that owns the jr, so they
+are emitted and registered as dispatcher entries. Without --hints nothing
+changes. PSPRECOMP_ANALYSIS_HINTS lets tools test for the feature.
+
+Code ranges matter for PRX modules: their first PT_LOAD also holds .rodata,
+so the automatic ranges decode data as code.
+---
+ include/psprecomp/program_analysis.hpp | 32 ++++++++++
+ src/program_analysis.cpp               | 86 +++++++++++++++++++++++++-
+ tests/test_main.cpp                    | 70 +++++++++++++++++++++
+ tools/analyzer_main.cpp                | 21 ++++++-
+ tools/codegen_main.cpp                 | 27 ++++++--
+ 5 files changed, 226 insertions(+), 10 deletions(-)
+
+diff --git a/include/psprecomp/program_analysis.hpp b/include/psprecomp/program_analysis.hpp
+index 560a9f2..c39f966 100644
+--- a/include/psprecomp/program_analysis.hpp
++++ b/include/psprecomp/program_analysis.hpp
+@@ -3,6 +3,7 @@
+ #include "psprecomp/elf32.hpp"
+ 
+ #include <cstdint>
++#include <filesystem>
+ #include <map>
+ #include <set>
+ #include <string>
+@@ -35,6 +36,31 @@ struct ProgramAnalysis {
+     std::size_t overlapping_label_count{};
+ };
+ 
++// Feature test for tools that also build against older framework revisions.
++#define PSPRECOMP_ANALYSIS_HINTS 1
++
++// Knowledge about a module that the automatic analysis cannot derive on its
++// own, usually exported from a disassembler (function entries found by its
++// analyzers, jump tables it resolved). Every address is a runtime address.
++struct AnalysisHints {
++    // When non-empty, replaces the executable ranges derived from the
++    // PT_LOAD segments (a PRX's first segment also holds .rodata, so the
++    // automatic ranges decode data as code).
++    std::vector<ExecutableRange> code_ranges;
++    // Extra function entries, address -> source tag.
++    std::map<std::uint32_t, std::string> seeds;
++    // Resolved `jr` sites: the targets become blocks of the function that
++    // owns the jr, so they are emitted and registered as dispatcher entries.
++    std::map<std::uint32_t, std::vector<std::uint32_t>> jump_tables;
++};
++
++// Reads hints from a text file, one directive per line ('#' starts a comment):
++//   code <start> <end>                 executable range [start, end)
++//   seed <address> [source]            function entry
++//   jumptable <jr address> <target>... targets of an indirect jump
++// Numbers are hexadecimal with or without 0x. Throws psprecomp::Error.
++[[nodiscard]] AnalysisHints load_analysis_hints(const std::filesystem::path &path);
++
+ [[nodiscard]] bool is_executable_address(const std::vector<ExecutableRange> &ranges,
+                                          std::uint32_t address) noexcept;
+ 
+@@ -43,4 +69,10 @@ struct ProgramAnalysis {
+                                               std::uint32_t load_base,
+                                               std::size_t max_instructions_per_function = 131072u);
+ 
++[[nodiscard]] ProgramAnalysis analyze_program(const Elf32Image &elf,
++                                              const GuestMemory &memory,
++                                              std::uint32_t load_base,
++                                              const AnalysisHints &hints,
++                                              std::size_t max_instructions_per_function = 131072u);
++
+ } // namespace psprecomp
+diff --git a/src/program_analysis.cpp b/src/program_analysis.cpp
+index 6442e69..24f39cd 100644
+--- a/src/program_analysis.cpp
++++ b/src/program_analysis.cpp
+@@ -1,12 +1,17 @@
+ #include "psprecomp/program_analysis.hpp"
+ 
++#include "psprecomp/common.hpp"
+ #include "psprecomp/decoder.hpp"
+ 
+ #include <algorithm>
+ #include <array>
++#include <charconv>
+ #include <deque>
++#include <fstream>
+ #include <limits>
+ #include <optional>
++#include <sstream>
++#include <string_view>
+ #include <unordered_map>
+ 
+ namespace psprecomp {
+@@ -317,6 +322,7 @@ FunctionAnalysis analyze_function(std::uint32_t entry,
+                                   const GuestMemory &memory,
+                                   const std::vector<ExecutableRange> &ranges,
+                                   const std::map<std::uint32_t, std::string> &known_seeds,
++                                  const std::map<std::uint32_t, std::vector<std::uint32_t>> &jump_tables,
+                                   std::size_t max_instructions) {
+     FunctionAnalysis result{};
+     result.entry = entry;
+@@ -389,7 +395,16 @@ FunctionAnalysis analyze_function(std::uint32_t entry,
+                 break;
+             }
+ 
+-            if (decoded.kind == OpcodeKind::Jr) break;
++            if (decoded.kind == OpcodeKind::Jr) {
++                if (const auto table = jump_tables.find(pc); table != jump_tables.end()) {
++                    for (const auto target : table->second) {
++                        if (is_executable_address(ranges, target) && queued_blocks.insert(target).second) {
++                            pending_blocks.push_back(target);
++                        }
++                    }
++                }
++                break;
++            }
+ 
+             pc += decoded.has_delay_slot() ? 8u : 4u;
+         }
+@@ -411,16 +426,38 @@ ProgramAnalysis analyze_program(const Elf32Image &elf,
+                                 const GuestMemory &memory,
+                                 std::uint32_t load_base,
+                                 std::size_t max_instructions_per_function) {
++    return analyze_program(elf, memory, load_base, AnalysisHints{}, max_instructions_per_function);
++}
++
++ProgramAnalysis analyze_program(const Elf32Image &elf,
++                                const GuestMemory &memory,
++                                std::uint32_t load_base,
++                                const AnalysisHints &hints,
++                                std::size_t max_instructions_per_function) {
+     ProgramAnalysis program{};
+-    program.executable_ranges = executable_ranges_for(elf, load_base);
++    if (hints.code_ranges.empty()) {
++        program.executable_ranges = executable_ranges_for(elf, load_base);
++    } else {
++        for (const auto &range : hints.code_ranges) {
++            if (range.end <= range.start || !memory.contains(range.start, range.end - range.start)) {
++                throw Error("Hint code range is empty or outside guest memory: " + hex32(range.start));
++            }
++            program.executable_ranges.push_back(range);
++        }
++        std::sort(program.executable_ranges.begin(), program.executable_ranges.end(),
++                  [](const auto &a, const auto &b) { return a.start < b.start; });
++    }
+     program.seeds = collect_initial_seeds(elf, memory, load_base, program.executable_ranges);
++    for (const auto &[address, source] : hints.seeds) {
++        if (is_executable_address(program.executable_ranges, address)) program.seeds.try_emplace(address, source);
++    }
+     program.functions.reserve(program.seeds.size());
+ 
+     std::unordered_map<std::uint32_t, std::size_t> label_owners;
+     for (const auto &[entry, source] : program.seeds) {
+         (void)source;
+         auto function = analyze_function(entry, memory, program.executable_ranges, program.seeds,
+-                                         max_instructions_per_function);
++                                         hints.jump_tables, max_instructions_per_function);
+         for (const auto label : function.labels) program.covered_labels.insert(label);
+         for (const auto label : function.entry_labels) {
+             const auto [it, inserted] = label_owners.emplace(label, program.functions.size());
+@@ -432,4 +469,47 @@ ProgramAnalysis analyze_program(const Elf32Image &elf,
+     return program;
+ }
+ 
++namespace {
++
++std::uint32_t parse_hint_number(const std::string &text, std::size_t line) {
++    std::string_view view(text);
++    if (view.starts_with("0x") || view.starts_with("0X")) view.remove_prefix(2u);
++    std::uint32_t value{};
++    const auto result = std::from_chars(view.data(), view.data() + view.size(), value, 16);
++    if (view.empty() || result.ec != std::errc{} || result.ptr != view.data() + view.size()) {
++        throw Error("Invalid number '" + text + "' in hints line " + std::to_string(line));
++    }
++    return value;
++}
++
++} // namespace
++
++AnalysisHints load_analysis_hints(const std::filesystem::path &path) {
++    std::ifstream in(path);
++    if (!in) throw Error("Cannot open analysis hints: " + path.string());
++    AnalysisHints hints;
++    std::string text;
++    std::size_t line = 0u;
++    while (std::getline(in, text)) {
++        ++line;
++        if (const auto comment = text.find('#'); comment != std::string::npos) text.erase(comment);
++        std::istringstream fields(text);
++        std::string directive;
++        if (!(fields >> directive)) continue;
++        std::vector<std::string> args;
++        for (std::string arg; fields >> arg;) args.push_back(arg);
++        if (directive == "code" && args.size() == 2u) {
++            hints.code_ranges.push_back({parse_hint_number(args[0], line), parse_hint_number(args[1], line)});
++        } else if (directive == "seed" && (args.size() == 1u || args.size() == 2u)) {
++            hints.seeds.try_emplace(parse_hint_number(args[0], line), args.size() == 2u ? args[1] : "hint");
++        } else if (directive == "jumptable" && args.size() >= 2u) {
++            auto &targets = hints.jump_tables[parse_hint_number(args[0], line)];
++            for (std::size_t i = 1; i < args.size(); ++i) targets.push_back(parse_hint_number(args[i], line));
++        } else {
++            throw Error("Invalid analysis hints line " + std::to_string(line) + " in " + path.string());
++        }
++    }
++    return hints;
++}
++
+ } // namespace psprecomp
+diff --git a/tests/test_main.cpp b/tests/test_main.cpp
+index 79d190a..a5d3228 100644
+--- a/tests/test_main.cpp
++++ b/tests/test_main.cpp
+@@ -1,3 +1,4 @@
++#include "psprecomp/common.hpp"
+ #include "psprecomp/decoder.hpp"
+ #include "psprecomp/codegen_policy.hpp"
+ #include "psprecomp/elf32.hpp"
+@@ -623,6 +624,74 @@ static void test_materialized_function_pointer_discovery() {
+     require(it->second == "materialized_code_pointer", "Materialized executable pointer source was not classified");
+ }
+ 
++static void test_analysis_hints() {
++    // An unresolved `jr a0` at the entry, two switch cases after it and a
++    // function nothing references. Only hints can reach the last three.
++    auto bytes = make_function_pointer_test_elf();
++    const std::uint32_t code[] = {
++        0x00800008u, // 0x08804000: jr a0
++        0x00000000u, // nop
++        0x24020001u, // 0x08804008: case 0: addiu v0, zero, 1
++        0x03E00008u, // jr ra
++        0x00000000u, // nop
++        0x24020002u, // 0x08804014: case 1: addiu v0, zero, 2
++        0x03E00008u, // jr ra
++        0x00000000u, // nop
++        0x24020003u, // 0x08804020: unreferenced function
++        0x03E00008u, // jr ra
++        0x00000000u, // nop
++        0x00000000u,
++    };
++    for (std::size_t i = 0; i < std::size(code); ++i) put32(bytes, 0x80u + i * 4u, code[i]);
++    auto elf = psprecomp::Elf32Image::from_bytes(bytes, "analysis_hints.elf");
++    psprecomp::GuestMemory memory;
++    (void)elf.load_and_relocate(memory, psprecomp::kDefaultPspUserLoadBase);
++
++    const auto plain = psprecomp::analyze_program(elf, memory, psprecomp::kDefaultPspUserLoadBase);
++    require(!plain.covered_labels.contains(0x08804008u) && !plain.covered_labels.contains(0x08804020u),
++            "Hint test ELF is reachable without hints");
++
++    const auto root = std::filesystem::temp_directory_path() / "psprecomp_analysis_hints_test";
++    std::filesystem::remove_all(root);
++    std::filesystem::create_directories(root);
++    const auto hints_path = root / "hints.txt";
++    {
++        std::ofstream out(hints_path);
++        out << "# generated by a disassembler\n"
++            << "code 0x08804000 0x0880402C\n"
++            << "seed 08804020 test  # unreferenced\n"
++            << "jumptable 0x08804000 0x08804008 0x08804014\n";
++    }
++    const auto hints = psprecomp::load_analysis_hints(hints_path);
++    require(hints.code_ranges.size() == 1u && hints.seeds.size() == 1u && hints.jump_tables.size() == 1u,
++            "Analysis hints were not parsed");
++    const auto program = psprecomp::analyze_program(elf, memory, psprecomp::kDefaultPspUserLoadBase, hints);
++    const auto seed = program.seeds.find(0x08804020u);
++    require(seed != program.seeds.end() && seed->second == "test", "Hint seed was not added with its source");
++    require(program.covered_labels.contains(0x08804020u), "Hint seed was not analyzed");
++    require(program.covered_entry_labels.contains(0x08804008u) &&
++                program.covered_entry_labels.contains(0x08804014u),
++            "Jump table targets did not become dispatcher entries");
++    require(program.functions.front().entry == 0x08804000u &&
++                program.functions.front().labels.contains(0x08804014u),
++            "Jump table targets were not owned by the function with the jr");
++    require(program.executable_ranges.size() == 1u && program.executable_ranges.front().end == 0x0880402Cu,
++            "Hint code ranges did not replace the segment ranges");
++
++    {
++        std::ofstream out(hints_path);
++        out << "seed nothex\n";
++    }
++    bool rejected = false;
++    try {
++        (void)psprecomp::load_analysis_hints(hints_path);
++    } catch (const psprecomp::Error &) {
++        rejected = true;
++    }
++    require(rejected, "Malformed analysis hints were accepted");
++    std::filesystem::remove_all(root);
++}
++
+ static void test_vfpu_branch_cfg_discovery() {
+     const auto bytes = make_vfpu_branch_test_elf();
+     auto elf = psprecomp::Elf32Image::from_bytes(bytes, "vfpu_branch_cfg.elf");
+@@ -1642,6 +1711,7 @@ int main() {
+         test_automatic_cfg_and_codegen();
+         test_automatic_cross_unit_tail_chaining();
+         test_materialized_function_pointer_discovery();
++        test_analysis_hints();
+ 
+         auto relocation_elf = psprecomp::Elf32Image::from_bytes(make_relocation_test_prx(), "synthetic_relocation.prx");
+         psprecomp::GuestMemory relocation_memory;
+diff --git a/tools/analyzer_main.cpp b/tools/analyzer_main.cpp
+index 352dc75..6eda706 100644
+--- a/tools/analyzer_main.cpp
++++ b/tools/analyzer_main.cpp
+@@ -8,8 +8,24 @@
+ #include <fstream>
+ #include <iostream>
+ #include <map>
++#include <string_view>
+ 
+ namespace {
++
++// Removes an optional "--hints <file>" pair from argv (any position) and
++// returns the hints it names; without it the analysis is purely automatic.
++psprecomp::AnalysisHints take_hints_option(int &argc, char **argv) {
++    psprecomp::AnalysisHints hints;
++    for (int i = 1; i < argc; ++i) {
++        if (std::string_view(argv[i]) != "--hints") continue;
++        if (i + 1 >= argc) throw psprecomp::Error("--hints needs a file");
++        hints = psprecomp::load_analysis_hints(argv[i + 1]);
++        for (int j = i; j + 2 < argc; ++j) argv[j] = argv[j + 2];
++        argc -= 2;
++        break;
++    }
++    return hints;
++}
+ std::string json_escape(const std::string &s) {
+     std::string out;
+     for (char c : s) {
+@@ -72,8 +88,9 @@ void write_function_csv(const std::filesystem::path &path,
+ 
+ int main(int argc, char **argv) {
+     try {
++        const auto hints = take_hints_option(argc, argv);
+         if (argc < 2 || argc > 4) {
+-            std::cerr << "Usage: psp_analyze <decrypted ELF/PRX> [report.json] [load_base_hex]\n";
++            std::cerr << "Usage: psp_analyze <decrypted ELF/PRX> [report.json] [load_base_hex] [--hints <file>]\n";
+             return 2;
+         }
+         const std::filesystem::path input = argv[1];
+@@ -88,7 +105,7 @@ int main(int argc, char **argv) {
+         psprecomp::NidRegistry nids;
+         std::vector<psprecomp::PspImport> imports;
+         if (module) imports = elf.scan_imports(memory, *module);
+-        const auto program = psprecomp::analyze_program(elf, memory, load_base);
++        const auto program = psprecomp::analyze_program(elf, memory, load_base, hints);
+ 
+         std::filesystem::create_directories(output.parent_path().empty() ? std::filesystem::path(".") : output.parent_path());
+         const auto stem = output.parent_path() / output.stem();
+diff --git a/tools/codegen_main.cpp b/tools/codegen_main.cpp
+index ed94229..b120dc1 100644
+--- a/tools/codegen_main.cpp
++++ b/tools/codegen_main.cpp
+@@ -23,6 +23,21 @@
+ #include <vector>
+ 
+ namespace {
++
++// Removes an optional "--hints <file>" pair from argv (any position) and
++// returns the hints it names; without it the analysis is purely automatic.
++psprecomp::AnalysisHints take_hints_option(int &argc, char **argv) {
++    psprecomp::AnalysisHints hints;
++    for (int i = 1; i < argc; ++i) {
++        if (std::string_view(argv[i]) != "--hints") continue;
++        if (i + 1 >= argc) throw psprecomp::Error("--hints needs a file");
++        hints = psprecomp::load_analysis_hints(argv[i + 1]);
++        for (int j = i; j + 2 < argc; ++j) argv[j] = argv[j + 2];
++        argc -= 2;
++        break;
++    }
++    return hints;
++}
+ struct Function {
+     std::string name;
+     std::uint32_t address{};
+@@ -1435,7 +1450,8 @@ bool write_text_if_changed(const std::filesystem::path &path, const std::string
+ int generate_auto(const std::filesystem::path &elf_path,
+                   const std::filesystem::path &output_dir,
+                   std::uint32_t load_base,
+-                  std::uint32_t unit_span_bytes) {
++                  std::uint32_t unit_span_bytes,
++                  const psprecomp::AnalysisHints &hints) {
+     const auto elf = psprecomp::Elf32Image::from_file(elf_path);
+     psprecomp::GuestMemory memory;
+     (void)elf.load_and_relocate(memory, load_base);
+@@ -1443,7 +1459,7 @@ int generate_auto(const std::filesystem::path &elf_path,
+     if (const auto module = elf.find_module_info(memory, load_base)) imports = elf.scan_imports(memory, *module);
+     std::set<std::uint32_t> import_stubs;
+     for (const auto &import : imports) import_stubs.insert(import.stub_address);
+-    const auto program = psprecomp::analyze_program(elf, memory, load_base);
++    const auto program = psprecomp::analyze_program(elf, memory, load_base, hints);
+     if (program.executable_ranges.empty()) throw psprecomp::Error("ELF has no executable ranges");
+ 
+     std::filesystem::create_directories(output_dir);
+@@ -1614,9 +1630,10 @@ int generate_auto(const std::filesystem::path &elf_path,
+ 
+ int main(int argc, char **argv) {
+     try {
++        const auto hints = take_hints_option(argc, argv);
+         if (argc >= 4 && std::string_view(argv[2]) == "--auto") {
+             if (argc > 6) {
+-                std::cerr << "Usage: psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes]\n";
++                std::cerr << "Usage: psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes] [--hints <file>]\n";
+                 return 2;
+             }
+             const std::uint32_t load_base = argc >= 5
+@@ -1626,12 +1643,12 @@ int main(int argc, char **argv) {
+                 ? static_cast<std::uint32_t>(std::stoul(argv[5], nullptr, 0))
+                 : 0x20000u;
+             if (unit_span == 0u || (unit_span & 3u) != 0u) throw psprecomp::Error("unit_span_bytes must be non-zero and 4-byte aligned");
+-            return generate_auto(argv[1], argv[3], load_base, unit_span);
++            return generate_auto(argv[1], argv[3], load_base, unit_span, hints);
+         }
+         if (argc == 4) return generate_manual(argv[1], argv[2], argv[3]);
+         std::cerr << "Usage:\n"
+                   << "  psp_recomp <ELF> <functions.csv> <generated_manifest.cpp>\n"
+-                  << "  psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes]\n";
++                  << "  psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes] [--hints <file>]\n";
+         return 2;
+     } catch (const std::exception &e) {
+         std::cerr << "psp_recomp error: " << e.what() << "\n";
+-- 
+2.43.0
+

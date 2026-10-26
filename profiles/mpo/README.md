@@ -113,6 +113,32 @@ python3 -I profiles/mpo/tools/ge_usage.py --format markdown --per-file dumps/
 - Los tests (`mpo_zstd_lite_test` y `mpo_ge_usage_test` en `ctest`) generan dumps sintéticos y no
   necesitan el juego.
 
+## `psp_analyze` contra Ghidra y datos de análisis para PSPRecomp (F06)
+
+```bash
+# 1. Lo que ve PSPRecomp (el mismo analyze_program() de psp_analyze y psp_recomp --auto).
+build/profiles/mpo/tools/mpo_analysis_export game/elf/mgp_main.elf 0x08804000 \
+    analysis/f06/mgp_main/export.json
+# 2. Comparación con la salida de run_analysis.sh (solo números).
+python3 -I profiles/mpo/tools/recomp_compare.py --export analysis/f06/mgp_main/export.json \
+    --ghidra analysis/out/mgp_main
+# 3. Datos de Ghidra como "hints" para PSPRecomp (necesita framework/patches/0001).
+python3 -I profiles/mpo/tools/recomp_hints.py analysis/out/mgp_main/mgp_main.recomp.json \
+    --extra profiles/mpo/config/hints/mgp_main.txt --output analysis/f06/mgp_main/mgp_main.hints.txt
+psp_recomp game/elf/mgp_main.elf --auto generated/mgp_main 0x08804000 \
+    --hints analysis/f06/mgp_main/mgp_main.hints.txt
+```
+
+- `tools/analysis_export.cpp` (`mpo_analysis_export`): exporta en JSON las semillas, las funciones,
+  las entradas de bloque y un censo del decodificador de PSPRecomp. Con el framework parcheado
+  acepta un cuarto argumento con hints.
+- `tools/recomp_compare.py`: funciones y cobertura de cada lado, por paso de siembra de Ghidra,
+  tablas de saltos y lo que el emisor no sabe bajar.
+- `tools/recomp_hints.py`: convierte el `recomp.json` de Ghidra al formato de
+  `psprecomp::load_analysis_hints()` y le añade los hints escritos a mano de `config/hints/`.
+- Los resultados, el diseño y la lista de brechas están en `docs/analysis/psp_analyze.md`. Los
+  parches genéricos del framework (MIT) están en `framework/patches/`.
+
 ## Estructura
 
 | Directorio | Contenido | ¿Se versiona? |
