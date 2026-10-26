@@ -175,7 +175,7 @@ void test_vertex_sizes() {
     const VertexDecoder dec(0x800000 | (5u << 2) | (2u << 7));
     expect(dec.stride() == 8, "5551+s16 stride");
     DecodedVertex out;
-    expect(dec.Decode(m.mem, kVertexAddr, UVScale{}, false, &out), "decode");
+    expect(dec.Decode(m.mem, kVertexAddr, DecodeParams{}, &out), "decode");
     expect(out.pos[0] == -5.0f && out.pos[1] == 7.0f && out.pos[2] == 65534.0f,
            "through s16 position");
     expect(out.color0 == 0xFFFF00FFu, "5551 vertex colour " + hex(out.color0));

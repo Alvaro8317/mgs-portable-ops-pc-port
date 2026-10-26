@@ -186,18 +186,40 @@ std::uint32_t Sampler::Fetch(int u_in, int v_in, int level) const {
     }
 }
 
-Vec4i TextureFunctionOutput(const Vec4i &prim_color, const Vec4i &texcolor,
+// The x86-64 JIT (Jit_ApplyTextureFunc) packs the primary colour to 16 bits
+// with signed saturation (PACKSSDW), works in 16-bit lanes and widens the
+// result with PMOVZXWD. For colours in 0-255 this is the plain formula; it
+// matters for the NaN-interpolated colours of zero-area triangles, which
+// would otherwise overflow.
+Vec4i TextureFunctionOutput(const Vec4i &prim_color_in, const Vec4i &texcolor,
                             const SamplerState &st) {
+    Vec4i prim_color;
+    for (int i = 0; i < 4; ++i) prim_color[i] = std::clamp(prim_color_in[i], -32768, 32767);
+    // A prim lane copied as is: the word, zero-extended.
+    auto word = [](int v) { return static_cast<int>(static_cast<std::uint16_t>(v)); };
     Vec4i out;
     const bool rgba = st.use_texture_alpha;
     switch (st.tex_func) {
-    case TexFunc::kModulate:
-        for (int i = 0; i < 3; ++i) {
-            const int t = st.use_color_doubling ? texcolor[i] * 2 : texcolor[i];
-            out[i] = ((prim_color[i] + 1) * t) / 256;
+    case TexFunc::kModulate: {
+        // PADDW 1, PMULLW, PSRLW 7 (doubling) or 8.
+        int res[4];
+        for (int i = 0; i < 4; ++i) {
+            const auto p1 = static_cast<std::uint16_t>(prim_color[i] + 1);
+            auto r = static_cast<std::uint16_t>(static_cast<std::uint32_t>(p1) *
+                                                static_cast<std::uint32_t>(texcolor[i]));
+            r = static_cast<std::uint16_t>(r >> (st.use_color_doubling ? 7 : 8));
+            res[i] = r;
         }
-        out[3] = rgba ? ((prim_color.a() + 1) * texcolor.a()) / 256 : prim_color.a();
+        for (int i = 0; i < 3; ++i) out[i] = res[i];
+        if (!rgba) {
+            out[3] = word(prim_color.a());
+        } else if (st.use_color_doubling) {
+            out[3] = res[3] >> 1; // alpha was doubled by the shift by 7
+        } else {
+            out[3] = res[3];
+        }
         break;
+    }
     case TexFunc::kDecal:
         if (rgba) {
             const int t = texcolor.a();
@@ -211,7 +233,7 @@ Vec4i TextureFunctionOutput(const Vec4i &prim_color, const Vec4i &texcolor,
                 out[i] = st.use_color_doubling ? texcolor[i] * 2 : texcolor[i];
             }
         }
-        out[3] = prim_color.a();
+        out[3] = word(prim_color.a());
         break;
     case TexFunc::kBlend: {
         const Vec4i env = Vec4i::FromRGBA(st.tex_blend_color);
@@ -219,14 +241,14 @@ Vec4i TextureFunctionOutput(const Vec4i &prim_color, const Vec4i &texcolor,
             const int c = (255 - texcolor[i]) * prim_color[i] + texcolor[i] * env[i] + 255;
             out[i] = st.use_color_doubling ? c / 128 : c / 256;
         }
-        out[3] = rgba ? ((prim_color.a() + 1) * texcolor.a()) / 256 : prim_color.a();
+        out[3] = rgba ? ((prim_color.a() + 1) * texcolor.a()) / 256 : word(prim_color.a());
         break;
     }
     case TexFunc::kReplace:
         for (int i = 0; i < 3; ++i) {
             out[i] = st.use_color_doubling ? texcolor[i] * 2 : texcolor[i];
         }
-        out[3] = rgba ? texcolor.a() : prim_color.a();
+        out[3] = rgba ? texcolor.a() : word(prim_color.a());
         break;
     case TexFunc::kAdd:
     default:
@@ -234,7 +256,7 @@ Vec4i TextureFunctionOutput(const Vec4i &prim_color, const Vec4i &texcolor,
             const int c = prim_color[i] + texcolor[i];
             out[i] = st.use_color_doubling ? c * 2 : c;
         }
-        out[3] = rgba ? ((prim_color.a() + 1) * texcolor.a()) / 256 : prim_color.a();
+        out[3] = rgba ? ((prim_color.a() + 1) * texcolor.a()) / 256 : word(prim_color.a());
         break;
     }
     return out;

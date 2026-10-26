@@ -94,6 +94,16 @@ bool ReplayOne(const fs::path &path, const fs::path &out_dir, bool alpha) {
         static_cast<unsigned long long>(st.rectangles), static_cast<unsigned long long>(st.sprites),
         static_cast<unsigned long long>(st.clear_rects), static_cast<unsigned long long>(st.points),
         static_cast<unsigned long long>(st.culled), static_cast<unsigned long long>(st.clut_loads));
+    std::printf("  lines %llu, patches %llu, clipped triangles %llu, bounding boxes %llu"
+                " (culled %llu)\n",
+                static_cast<unsigned long long>(st.lines),
+                static_cast<unsigned long long>(st.patches),
+                static_cast<unsigned long long>(st.clipped_triangles),
+                static_cast<unsigned long long>(st.bbox_tests),
+                static_cast<unsigned long long>(st.bbox_culled));
+    std::uint64_t unsupported_total = 0;
+    for (const auto &[what, count] : st.unsupported) unsupported_total += count;
+    std::printf("  unsupported total %llu\n", static_cast<unsigned long long>(unsupported_total));
     for (const auto &[what, count] : st.unsupported) {
         std::printf("  not rendered/approximate: %s x%llu\n", what.c_str(),
                     static_cast<unsigned long long>(count));

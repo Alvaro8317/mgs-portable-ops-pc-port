@@ -97,6 +97,8 @@ private:
     [[nodiscard]] std::uint32_t RelativeAddress(std::uint32_t data) const;
     void ExecutePrim(std::uint32_t op);
     void ExecutePatch(std::uint32_t op, bool spline);
+    // Counts the draw state the renderer does not reproduce exactly.
+    void ReportDrawState(std::uint32_t vtype);
     void ExecuteLoadClut();
     void ExecuteBlockTransfer();
     void ExecuteMatrixData(std::uint8_t num_cmd, std::uint8_t data_cmd, float *matrix,

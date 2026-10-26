@@ -249,6 +249,88 @@ struct GeState {
     [[nodiscard]] int PatchDivisionV() const {
         return static_cast<int>((Reg(kCmdPatchDivision) >> 8) & 0x7F);
     }
+    [[nodiscard]] PatchPrimType PatchPrimitiveType() const {
+        return static_cast<PatchPrimType>(Reg(kCmdPatchPrimitive) & 3);
+    }
+    [[nodiscard]] bool PatchFacing() const { return Reg(kCmdPatchFacing) & 1; }
+
+    // Viewport and transform.
+    [[nodiscard]] float ViewportXScale() const { return GetFloat24(Reg(kCmdViewportXScale)); }
+    [[nodiscard]] float ViewportYScale() const { return GetFloat24(Reg(kCmdViewportYScale)); }
+    [[nodiscard]] float ViewportZScale() const { return GetFloat24(Reg(kCmdViewportZScale)); }
+    [[nodiscard]] float ViewportXCenter() const { return GetFloat24(Reg(kCmdViewportXCenter)); }
+    [[nodiscard]] float ViewportYCenter() const { return GetFloat24(Reg(kCmdViewportYCenter)); }
+    [[nodiscard]] float ViewportZCenter() const { return GetFloat24(Reg(kCmdViewportZCenter)); }
+    [[nodiscard]] float OffsetX() const { return static_cast<float>(OffsetX16()) / 16.0f; }
+    [[nodiscard]] float OffsetY() const { return static_cast<float>(OffsetY16()) / 16.0f; }
+    [[nodiscard]] int RegionRateX() const {
+        return 0x100 + static_cast<int>(Reg(kCmdRegion1) & 0x3FF);
+    }
+    [[nodiscard]] int RegionRateY() const {
+        return 0x100 + static_cast<int>((Reg(kCmdRegion1) >> 10) & 0x3FF);
+    }
+    [[nodiscard]] float Fog1() const { return GetFloat24(Reg(kCmdFog1)); }
+    [[nodiscard]] float Fog2() const { return GetFloat24(Reg(kCmdFog2)); }
+    [[nodiscard]] bool AreNormalsReversed() const { return Reg(kCmdReverseNormal) & 1; }
+    [[nodiscard]] TexProjMapMode UVProjMode() const {
+        return static_cast<TexProjMapMode>((Reg(kCmdTexMapMode) >> 8) & 3);
+    }
+    [[nodiscard]] int UVLS0() const { return static_cast<int>(Reg(kCmdTexShadeLs) & 3); }
+    [[nodiscard]] int UVLS1() const { return static_cast<int>((Reg(kCmdTexShadeLs) >> 8) & 3); }
+    // Raw float24 words of TEXSCALEU, TEXSCALEV, TEXOFFSETU and TEXOFFSETV
+    // (gstate_c.UpdateUVScaleOffset).
+    [[nodiscard]] float TexScaleU() const { return GetFloat24(Reg(kCmdTexScaleU)); }
+    [[nodiscard]] float TexScaleV() const { return GetFloat24(Reg(kCmdTexScaleV)); }
+    [[nodiscard]] float TexOffsetU() const { return GetFloat24(Reg(kCmdTexOffsetU)); }
+    [[nodiscard]] float TexOffsetV() const { return GetFloat24(Reg(kCmdTexOffsetV)); }
+
+    // Lighting.
+    [[nodiscard]] bool IsLightChanEnabled(int chan) const {
+        return Reg(static_cast<std::uint8_t>(kCmdLightEnable0 + chan)) & 1;
+    }
+    [[nodiscard]] int LightComputation(int chan) const {
+        return static_cast<int>(Reg(static_cast<std::uint8_t>(kCmdLightType0 + chan)) & 3);
+    }
+    // GE_LIGHTCOMP_ONLYPOWDIFFUSE = 2, GE_LIGHTCOMP_BOTH = 1.
+    [[nodiscard]] bool IsUsingPoweredDiffuseLight(int chan) const {
+        return LightComputation(chan) == 2;
+    }
+    [[nodiscard]] bool IsUsingSpecularLight(int chan) const { return LightComputation(chan) == 1; }
+    [[nodiscard]] int LightType(int chan) const {
+        return static_cast<int>((Reg(static_cast<std::uint8_t>(kCmdLightType0 + chan)) >> 8) & 3);
+    }
+    [[nodiscard]] bool IsDirectionalLight(int chan) const { return LightType(chan) == 0; }
+    [[nodiscard]] bool IsSpotLight(int chan) const { return LightType(chan) >= 2; }
+    [[nodiscard]] bool IsUsingSecondaryColor() const { return Reg(kCmdLightMode) & 1; }
+    [[nodiscard]] std::uint32_t MaterialUpdate() const { return Reg(kCmdMaterialUpdate) & 7; }
+    [[nodiscard]] std::uint32_t MaterialEmissive() const {
+        return Reg(kCmdMaterialEmissive) & 0xFFFFFF;
+    }
+    [[nodiscard]] std::uint32_t MaterialDiffuse() const {
+        return Reg(kCmdMaterialDiffuse) & 0xFFFFFF;
+    }
+    [[nodiscard]] std::uint32_t MaterialSpecular() const {
+        return Reg(kCmdMaterialSpecular) & 0xFFFFFF;
+    }
+    [[nodiscard]] float MaterialSpecularCoef() const {
+        return GetFloat24(Reg(kCmdMaterialSpecularCoef));
+    }
+    [[nodiscard]] std::uint32_t AmbientRGBA() const {
+        return (Reg(kCmdAmbientColor) & 0xFFFFFF) | ((Reg(kCmdAmbientAlpha) & 0xFF) << 24);
+    }
+    [[nodiscard]] std::uint32_t LightAmbientColor(int chan) const {
+        return Reg(static_cast<std::uint8_t>(kCmdLac0 + chan * 3)) & 0xFFFFFF;
+    }
+    [[nodiscard]] std::uint32_t LightDiffuseColor(int chan) const {
+        return Reg(static_cast<std::uint8_t>(kCmdLac0 + 1 + chan * 3)) & 0xFFFFFF;
+    }
+    [[nodiscard]] std::uint32_t LightSpecularColor(int chan) const {
+        return Reg(static_cast<std::uint8_t>(kCmdLac0 + 2 + chan * 3)) & 0xFFFFFF;
+    }
+    // Light vectors as raw float24 (position, direction, attenuation).
+    [[nodiscard]] float LightVec(std::uint8_t base, int chan, int i) const {
+        return GetFloat24(Reg(static_cast<std::uint8_t>(base + chan * 3 + i)));
+    }
 
     // Block transfers.
     [[nodiscard]] std::uint32_t TransferSrcAddress() const {

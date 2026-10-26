@@ -23,7 +23,13 @@ struct Stats {
     std::uint64_t sprites = 0;
     std::uint64_t clear_rects = 0;
     std::uint64_t points = 0;
+    std::uint64_t lines = 0;
     std::uint64_t culled = 0;
+    // Triangles that crossed the -Z plane and went through the clipper.
+    std::uint64_t clipped_triangles = 0;
+    std::uint64_t patches = 0; // BEZIER and SPLINE tessellated
+    std::uint64_t bbox_tests = 0;
+    std::uint64_t bbox_culled = 0;
     std::uint64_t clut_loads = 0;
     std::uint64_t block_transfers = 0;
     // Feature name -> occurrences (draws or commands) that were not executed
