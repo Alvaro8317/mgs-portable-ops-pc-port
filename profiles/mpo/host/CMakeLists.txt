@@ -40,3 +40,5 @@ add_subdirectory(ge)
 
 # F20a: AP Scan model (sceNetApctl) and virtual access points.
 add_subdirectory(apscan)
+
+add_subdirectory(frontend)

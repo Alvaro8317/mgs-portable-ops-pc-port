@@ -67,8 +67,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+      # libx11-dev and libxext-dev: SDL3's X11 video driver (F10a). Without
+      # them SDL3 still builds, with only its dummy/offscreen video drivers.
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
+        run: >
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          ninja-build libx11-dev libxext-dev
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja

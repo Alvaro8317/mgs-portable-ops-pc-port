@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Default input mapping (F10a). Copy it, edit it and pass it with --mapping;
+# the runtime will read it from the user's config folder (F10b).
+#
+# Each PSP input lists the host inputs that drive it, by SDL3 name:
+# - [keyboard]: key names as SDL_GetScancodeFromName accepts them ("Z",
+#   "Space", "Return", "Left Shift"...). Keys are physical positions, so the
+#   map keeps its layout on AZERTY or QWERTZ keyboards.
+# - [gamepad]: SDL gamepad button names ("a" is the bottom face button: cross
+#   on PlayStation, A on Xbox) and axis halves with a sign ("+lefttrigger",
+#   "-leftx" is the stick pushed left, "+lefty" is down).
+# PSP inputs: up down left right cross circle square triangle l r start select
+# home, and analog_up/down/left/right for the stick.
+#
+# A section that is present replaces that device's defaults; a missing one
+# keeps them. The bindings below are PPSSPP v1.20.4's defaults
+# (defaultQwertyKeyboardKeyMap, defaultXInputKeyMap) plus the triggers as L/R,
+# and [analog] holds PPSSPP's stick settings (deadzone, inverse deadzone,
+# sensitivity, square or circular stick, threshold for axes used as buttons).
+# mpo_frontend_sdl_test checks that this file equals InputMapping::Default().
+
+[keyboard]
+up = ["Up"]
+down = ["Down"]
+left = ["Left"]
+right = ["Right"]
+cross = ["Z"]
+circle = ["X"]
+square = ["A"]
+triangle = ["S"]
+l = ["Q"]
+r = ["W"]
+start = ["Space"]
+select = ["V", "Return"]
+analog_up = ["I"]
+analog_down = ["K"]
+analog_left = ["J"]
+analog_right = ["L"]
+
+[gamepad]
+up = ["dpup"]
+down = ["dpdown"]
+left = ["dpleft"]
+right = ["dpright"]
+cross = ["a"]
+circle = ["b"]
+square = ["x"]
+triangle = ["y"]
+l = ["leftshoulder", "+lefttrigger"]
+r = ["rightshoulder", "+righttrigger"]
+start = ["start"]
+select = ["back"]
+analog_up = ["-lefty"]
+analog_down = ["+lefty"]
+analog_left = ["-leftx"]
+analog_right = ["+leftx"]
+
+[analog]
+deadzone = 0.15
+inverse_deadzone = 0.0
+sensitivity = 1.1
+circular = false
+axis_button_threshold = 0.75
