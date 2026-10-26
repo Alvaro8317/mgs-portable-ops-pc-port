@@ -37,3 +37,4 @@ target_compile_definitions(mpo PRIVATE
 mpo_target_warnings(mpo)
 
 add_subdirectory(ge)
+add_subdirectory(frontend)

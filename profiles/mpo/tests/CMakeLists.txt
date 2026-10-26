@@ -163,3 +163,25 @@ add_test(NAME mpo_difftest_unicorn
          COMMAND mpo_difftest --b unicorn --count 4000 --tables "${MPO_VFPU_TABLES_DIR}"
                  --unicorn-command "${mpo_unicorn_command}")
 set_tests_properties(mpo_difftest_unicorn PROPERTIES SKIP_RETURN_CODE 77)
+
+# --- F10a: window, presentation and input -----------------------------------
+# mpo_frontend without SDL; color.hpp from mpo_ge is the reference converter.
+add_executable(mpo_frontend_test frontend_test.cpp)
+target_link_libraries(mpo_frontend_test PRIVATE mpo_frontend mpo_ge)
+mpo_target_warnings(mpo_frontend_test)
+add_test(NAME mpo_frontend_test COMMAND mpo_frontend_test)
+if(TARGET mpo_frontend_sdl)
+    # Headless: SDL's dummy video driver and software renderer, a virtual
+    # gamepad and synthetic events. No display, no real device.
+    add_executable(mpo_frontend_sdl_test frontend_sdl_test.cpp)
+    target_link_libraries(mpo_frontend_sdl_test PRIVATE mpo_frontend_sdl)
+    mpo_target_warnings(mpo_frontend_sdl_test)
+    add_test(NAME mpo_frontend_sdl_test
+             COMMAND mpo_frontend_sdl_test ${CMAKE_CURRENT_SOURCE_DIR}/../config/input.toml)
+    # The manual tool end to end (four test cards, scripted input), headless.
+    add_test(NAME mpo_frontend_demo_smoke
+             COMMAND mpo_frontend_demo --hidden --auto --seconds-per-view 0.3 --synthetic-input
+                     --renderer software
+                     --trace ${CMAKE_CURRENT_BINARY_DIR}/frontend_demo_trace.txt)
+    set_tests_properties(mpo_frontend_demo_smoke PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=dummy")
+endif()
