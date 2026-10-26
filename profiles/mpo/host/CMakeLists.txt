@@ -50,3 +50,6 @@ add_subdirectory(font)
 
 # F14a: Vulkan GE renderer (mpo_vulkan) and --renderer=vulkan in mpo_ppdmp_replay.
 add_subdirectory(vulkan)
+
+# F08b: the kernel HLE on the recompiled CPU, the module loader and mpo_boot.
+add_subdirectory(hle)

@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The resident Konami modules recompiled ahead of time besides mgp_main (F08b,
+# CLAUDE.md §9 decision 4). generate.py --module <name> reads this table.
+#
+# - `file`: the PRX on the disc (plain ELF, not encrypted), checked against its
+#   SHA-256 in supported.toml.
+# - `module`: the name in its sceModuleInfo.
+# - `base`: where PPSSPP loads it (docs/analysis/mgp_main.md §7) and where the
+#   HLE module loader puts it (same allocator, same order of reservations).
+#   The corpus is generated for this address; loaded anywhere else, the
+#   loader reports that the module has no recompiled code.
+# - The corpus symbols get the prefix `name` (psp_recomp --prefix), so the
+#   dense unit table of mgp_main stays its own (gap 8, psp_analyze.md §11).
+
+[[module]]
+name = "zlibdec"
+module = "ZLIB"
+file = "PSP_GAME/USRDIR/modules/zlibdec.prx"
+base = 0x08B20000
+
+[[module]]
+name = "sound2"
+module = "KCEJ_SOUND2"
+file = "PSP_GAME/USRDIR/modules/sound2.prx"
+base = 0x08B24100
+
+[[module]]
+name = "kjfs"
+module = "KCEJ_FS"
+file = "PSP_GAME/USRDIR/modules/kjfs.prx"
+base = 0x08B75500

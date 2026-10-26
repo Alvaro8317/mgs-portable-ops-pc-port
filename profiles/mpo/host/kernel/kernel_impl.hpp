@@ -34,6 +34,7 @@ enum class ObjType {
     kFpl,
     kVpl,
     kPartitionBlock,
+    kHost, // An object the host owns (a loaded module): only its UID and name.
 };
 
 struct Object {
@@ -42,6 +43,12 @@ struct Object {
     ObjType type;
     Uid uid{};
     std::string name; // Truncated to 31 characters, like KERNELOBJECT_MAX_NAME_LENGTH.
+};
+
+struct HostObject final : Object {
+    static constexpr ObjType kType = ObjType::kHost;
+    static constexpr std::uint32_t kMissing = error::kUnknownUid;
+    HostObject() : Object(kType) {}
 };
 
 // The wait state saved while a thread runs callbacks (PPSSPP ActionAfterMipsCall).

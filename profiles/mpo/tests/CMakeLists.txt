@@ -318,3 +318,9 @@ if(Python3_FOUND)
              COMMAND Python3::Interpreter -I
                      ${CMAKE_CURRENT_SOURCE_DIR}/../host/vulkan/shaders/compile_shaders.py --check)
 endif()
+
+# F08b: mpo_hle on synthetic guest code (interpreter), no game data.
+add_executable(mpo_hle_test hle_test.cpp)
+target_link_libraries(mpo_hle_test PRIVATE psprecomp_core mpo_hle)
+mpo_target_warnings(mpo_hle_test)
+add_test(NAME mpo_hle_test COMMAND mpo_hle_test)
