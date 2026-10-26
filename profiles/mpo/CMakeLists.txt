@@ -5,6 +5,7 @@
 # from the user's own executable and is never versioned.
 
 add_subdirectory(host)
+add_subdirectory(tools)
 
 if(PSPRECOMP_BUILD_PROFILE_TESTS)
     add_subdirectory(tests)

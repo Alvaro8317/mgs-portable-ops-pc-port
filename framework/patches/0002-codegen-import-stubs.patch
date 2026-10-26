@@ -1,0 +1,56 @@
+From 88ded9d5184066bdba6bf4221e3eb1261da3e40e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alvaro=20Garz=C3=B3n?= <eduardo831_@hotmail.com>
+Date: Sun, 25 Oct 2026 19:54:04 -0500
+Subject: [PATCH 2/2] codegen: never emit import stubs as guest code; fix the
+ import JAL loop
+
+Two bugs in psp_recomp --auto around PSP import stubs:
+
+- A JAL to an import stub in another unit emitted the dispatcher hand-off
+  and then `continue`d the instruction loop without advancing pc, so code
+  generation looped forever emitting the same lines until it ran out of
+  memory. It now leaves the block with `break`, like every other delay-slot
+  transfer.
+- The stub words (jr ra; nop until the loader patches them) were analysed
+  as ordinary code and became C++ labels, so a JAL or J from the same unit
+  jumped straight into them (`goto L_<stub>`) and returned without ever
+  calling the registered import. Stub words are now left out of the units:
+  every transfer to a stub goes through the outer dispatcher and its
+  import wrapper.
+---
+ tools/codegen_main.cpp | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/tools/codegen_main.cpp b/tools/codegen_main.cpp
+index b120dc1..a57be6c 100644
+--- a/tools/codegen_main.cpp
++++ b/tools/codegen_main.cpp
+@@ -1071,7 +1071,7 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
+                         if (target_is_import) {
+                             body << "    ctx.pc = " << psprecomp::hex32(target) << "u;\n"
+                                  << "    return;\n";
+-                            continue;
++                            break;
+                         }
+                         // Otherwise run the callee inline and resume locally only
+                         // if it came back to our return address.
+@@ -1482,8 +1482,16 @@ int generate_auto(const std::filesystem::path &elf_path,
+         std::set<std::uint32_t> instructions;
+         std::set<std::uint32_t> entries;
+     };
++    // Import stubs are executed by their registered HLE wrappers, never as
++    // guest code. If a stub's own words (jr ra; nop until the loader patches
++    // them) became C++ labels, a same-unit JAL would `goto` them and return
++    // without ever reaching the import.
++    const auto in_import_stub = [&import_stubs](std::uint32_t pc) {
++        return import_stubs.contains(pc) || import_stubs.contains(pc - 4u);
++    };
+     std::map<std::uint32_t, Unit> units_by_bucket;
+     for (const auto pc : program.covered_labels) {
++        if (in_import_stub(pc)) continue;
+         const std::uint32_t bucket = (pc - executable_base) / unit_span_bytes;
+         auto &unit = units_by_bucket[bucket];
+         unit.bucket = bucket;
+-- 
+2.43.0
+

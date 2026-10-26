@@ -4,9 +4,9 @@
 # the given base, runs the auto-analysis, seeds the functions Ghidra misses
 # (relocations, then prologues, then gaps; see MpoSeedFunctions.java), names
 # the imports and exports the analysis (JSON) for docs/analysis/ and the
-# recompiler. The metrics are also taken after each seeding step
-# (out/<program>/1-ghidra, 2-relocations, 3-prologues; the final ones are in
-# out/<program>/). Everything it writes goes under $MPO_ANALYSIS_DIR (ignored by
+# recompiler. The metrics and the recompiler export are also taken after each
+# seeding step (out/<program>/1-ghidra, 2-relocations, 3-prologues; the final
+# ones are in out/<program>/), so F06 can tell which step found each function. Everything it writes goes under $MPO_ANALYSIS_DIR (ignored by
 # git): the project in ghidra/, a copy of the module in input/ and the outputs
 # in out/<program>/.
 #
@@ -74,10 +74,13 @@ out=$analysis_dir/out/$program
   -scriptPath "$script_dir" \
   $pre_script \
   -postScript MpoMetrics.java "$out/1-ghidra" \
+  -postScript MpoExportRecompInput.java "$out/1-ghidra" \
   -postScript MpoSeedFunctions.java "$out" relocations \
   -postScript MpoMetrics.java "$out/2-relocations" \
+  -postScript MpoExportRecompInput.java "$out/2-relocations" \
   -postScript MpoSeedFunctions.java "$out" prologues \
   -postScript MpoMetrics.java "$out/3-prologues" \
+  -postScript MpoExportRecompInput.java "$out/3-prologues" \
   -postScript MpoSeedFunctions.java "$out" gaps \
   -postScript MpoModuleTables.java "$nid_table" "$out" \
   -postScript MpoMetrics.java "$out" \
