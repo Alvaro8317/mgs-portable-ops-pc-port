@@ -267,7 +267,10 @@ tclamb/mhp2g-decomp y "PSP Web Recomp". Los trackers donde aparecen son
   [#18904](https://github.com/hrydgard/ppsspp/issues/18904)).
 - En MPO+ quedan restos de desarrollo: carga de etapas desde `host0:` y "GPI dev switches"
   ([#20191](https://github.com/hrydgard/ppsspp/issues/20191)).
-- Fuente propia: `USRDIR/MGP.PGF` (se usa con `sceFont`) [V].
+- **No hay fuente propia** [V] (F17a): el disco no trae `MGP.PGF` ni ningún `.pgf`, `mgp_main` no
+  nombra ninguno y el juego solo importa `sceFontFindOptimumFont`/`sceFontOpen`, nunca
+  `OpenUserFile`/`OpenUserMemory`. Usa las fuentes del firmware (`flash0:/font/*.pgf`). Ver
+  `docs/formats/pgf.md`.
 - Scripts: **GCL/GCX en la variante MGS3**, compartida con Acid 1 y 2. GCL está basado en Tcl y el
   GCX "puede o no estar cifrado" ([Jayveer/Gcx](https://github.com/Jayveer/Gcx)) [V].
 - Linaje del motor: el formato de modelos MDP es común a Acid, MPO y Peace Walker. El TXP de MPO es

@@ -105,7 +105,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F15 | Renderer Vulkan: framebuffers y efectos | M3 | ⬜ pendiente |
 | F16a | Audio autónomo: SAS, ATRAC3 y salida SDL3 | M4 | ✅ hecha (ola 1) |
 | F16b | Audio en el juego: `sceAudio`, `sceSas` y `sceAtrac` | M4 | ⬜ pendiente |
-| F17a | Decodificador de PMF y fuente PGF (autónomos) | M4 | ⬜ pendiente (ola 2) |
+| F17a | Decodificador de PMF y fuente PGF (autónomos) | M4 | ✅ hecha (ola 2) |
 | F17b | Video del título y fuentes en el juego | M4 | ⬜ pendiente |
 | F18 | Savedata, OSK y diálogos | M4 | ⬜ pendiente |
 | F19 | Primera misión y repetición de input | M5 | ⬜ pendiente |
@@ -709,17 +709,23 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 
 ### F17a — Decodificador de PMF y fuente PGF, autónomos (ola 2)
 
-- **Objetivo**: decodificar los PMF del disco y rasterizar `MGP.PGF`, sin el juego.
+- **Objetivo**: decodificar los PMF del disco y rasterizar fuentes PGF, sin el juego.
 - **Requisitos**: F16a (el audio de los PMF es ATRAC3plus).
 - **Tareas**:
   - Demuxer de PMF/PSMF y un FFmpeg mínimo (LGPL, solo los decoders necesarios) que entregue frames
     8888 y audio.
   - Lector de PGF y rasterizador de glifos (PPSSPP `Core/Font/PGF.cpp` como referencia).
   - Volcar frames y glifos a `analysis/f17a/` (fuera del repo).
-- **Criterios de hecho**: los 30 PMF se decodifican sin errores y los glifos de `MGP.PGF` se
+- **Criterios de hecho**: los 30 PMF se decodifican sin errores y los glifos de una fuente PGF se
   renderizan; ambos quedan descritos en la nota.
 - **Notas (ola 1)**: el audio de los PMF se puede decodificar con el ATRAC3plus de
   `mpo_audio` (`CreateAtracDecoder` o `AtracContext::DecodeLowLevel`).
+- **Notas (ola 2)**: hecha, ver `docs/sessions/F17a.md`.
+  - Los 30 PMF y `ICON1.PMF` se decodifican sin errores: 74 315 frames y 2479.6 s. Los hashes son
+    iguales con GCC y Clang.
+  - **No existe `MGP.PGF`**: el lector se probó con las fuentes del firmware que trae PPSSPP.
+  - FFmpeg 7.1.5 (LGPL) se compila en el build con `MPO_FFMPEG=auto|bundled|system|off`. Con MSVC,
+    `auto` lo omite y el test de decodificación sale como omitido.
 
 ### F17b — Video del título y fuentes en el juego
 
@@ -727,12 +733,21 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Requisitos**: F16b y F17a.
 - **Tareas**:
   - `sceMpeg` y `scePsmf` sobre el decodificador de F17a, en lugar del stub de F11b.
-  - `sceFont` con `MGP.PGF` y las fuentes del sistema que pida el juego (si las pide, el usuario las
-    aporta o se buscan alternativas libres).
+  - `sceFont` con las **fuentes del firmware** (`ltn*.pgf`, `jpn0.pgf`…), portando de PPSSPP la
+    lista de fuentes y `FindOptimumFont` sobre `mpo::font::Pgf`. MPO no trae fuente propia (F17a).
 - **Criterios de hecho**: el video del título se reproduce con audio sincronizado y el texto del juego
   se ve correcto.
 - **Notas (F01)**: el disco trae **30 PMF** en `USRDIR/mpg/` (342 MB), cinemáticas incluidas, no
   solo el título. Probar varias, no solo `MPO_OP*.pmf`.
+- **Notas (ola 2)**: `mpo_video` y `mpo_font` (F17a) tienen la API de PPSSPP. Ver
+  `docs/sessions/F17a.md`.
+  - `sceMpeg` y `scePsmf` se portan sobre `mpo::video::MediaEngine`, que tiene la API del
+    `MediaEngine` de PPSSPP. `writeVideoImage` hace swizzle si el destino es VRAM con `0x00200000`.
+  - Ningún PMF tiene mapa EP. Todos son H.264 480×272 a 29.97 fps con ATRAC3plus estéreo (752 bytes
+    por frame). `ICON1.PMF` solo tiene vídeo (`docs/formats/psmf.md`).
+  - **El usuario aporta** las fuentes `flash0:/font/*.pgf` (desde su PSP o desde PPSSPP) en una
+    carpeta local ignorada por git, y la grabación de referencia del título con su vídeo.
+  - FFmpeg en Windows: vcpkg (`ffmpeg[avcodec,swscale]`) con `MPO_FFMPEG=system`.
 - **Notas (F05)**: el decodificador real sustituye al stub de `sceMpeg`/`scePsmf` de F11.
   - La intro y el "Press Start" se muestran en tres framebuffers 8888 en `0x04000000`, `0x04088000`
     y `0x04110000`, sin draws del GE.

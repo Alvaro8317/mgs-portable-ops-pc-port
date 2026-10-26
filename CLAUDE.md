@@ -179,10 +179,12 @@ los hilos y fibras, en vez de depender de `ulimit`.
 
 **Audio y video:**
 - `sceAtrac` (ATRAC3) y `sceSas` (mezclador por voces, ADSR).
-- `sceMpeg` (solo el video del título; las cinemáticas son in-engine).
+- `sceMpeg`/`scePsmf`: los 30 PMF del disco (H.264 + ATRAC3plus). Son el título, las cinemáticas de
+  cómic y los créditos; las escenas en 3D son in-engine (F17a [V]).
 
 **Sistema y diálogos:**
-- `sceFont`, con la fuente propia `USRDIR/MGP.PGF`.
+- `sceFont`, con las **fuentes del firmware** (`flash0:/font/*.pgf`), que aporta el usuario. El
+  disco no trae ninguna fuente (F17a [V]).
 - `sceUtility`: savedata (guardar, cargar y borrar) y OSK (nombres y contraseñas de reclutamiento).
 
 **Red (no hace falta para jugar):**
