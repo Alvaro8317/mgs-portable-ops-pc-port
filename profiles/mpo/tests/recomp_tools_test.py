@@ -103,18 +103,21 @@ class HintsTest(unittest.TestCase):
   def test_parse(self):
     text = ('# comment\n\ncode 08804000 0x08804010\n'
             'seed 0x08804004 extra  # trailing\nseed 0x08804008\n'
-            'jumptable 0x08804000 0x08804004\n')
+            'jumptable 0x08804000 0x08804004\n'
+            'patch 0x08804008 0x03E00009\n')
     self.assertEqual(recomp_hints.parse_hints(text), [
         ('code', [_BASE, _BASE + 0x10]),
         ('seed', [_BASE + 4, 'extra']),
         ('seed', [_BASE + 8, 'hint']),
         ('jumptable', [_BASE, _BASE + 4]),
+        ('patch', [_BASE + 8, 0x03E00009]),  # the word need not be aligned
     ])
 
   def test_parse_errors(self):
     bad = ['frob 0x0', 'code 0x10', 'code 0x20 0x10', 'seed nothex',
            'seed 0x08804001', 'jumptable 0x08804000', 'seed 0x1FFFFFFFF',
-           'seed 0x0 a b']
+           'seed 0x0 a b', 'patch 0x08804000', 'patch 0x08804002 0x0',
+           'patch 0x08804000 0x0 0x0']
     for line in bad:
       with self.subTest(line=line):
         with self.assertRaises(recomp_hints.HintsError):
@@ -226,7 +229,7 @@ class EndToEndTest(unittest.TestCase):
         0x00000000,  # nop
         0x03E00008,  # jr ra
         0x00000000,  # nop
-        0x0000000D,  # 0x10: break
+        0x0000000C,  # 0x10: syscall (still generic for the emitter)
         0x03E00008,  # jr ra
         0x00000000,  # nop
         0x24020001,  # 0x1C: nothing references this function
@@ -256,7 +259,7 @@ class EndToEndTest(unittest.TestCase):
                        {'gaps': 1})
       self.assertEqual(summary['coverage_words']['ghidra_not_psp'], 3)
       self.assertEqual(summary['decoder']['generic_in_ghidra_code'],
-                       {'break': 1})
+                       {'syscall': 1})
       self.assertEqual(
           {s['name'] for s in export['sections']} & {'.text'}, {'.text'})
       # A hints file needs the framework patch; without it the tool says so.
