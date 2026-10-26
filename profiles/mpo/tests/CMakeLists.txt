@@ -29,3 +29,8 @@ if(Python3_FOUND)
                          ${CMAKE_CURRENT_SOURCE_DIR}/../tools/${mpo_tool_test}.py)
     endforeach()
 endif()
+
+add_executable(mpo_kernel_test kernel_test.cpp)
+target_link_libraries(mpo_kernel_test PRIVATE mpo_kernel)
+mpo_target_warnings(mpo_kernel_test)
+add_test(NAME mpo_kernel_test COMMAND mpo_kernel_test)
