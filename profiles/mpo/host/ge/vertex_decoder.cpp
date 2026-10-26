@@ -10,6 +10,7 @@
 
 #include "color.hpp"
 #include "ge_constants.hpp"
+#include "math3d.hpp"
 
 namespace mpo::ge {
 namespace {
@@ -95,8 +96,10 @@ int VertexDecoder::index_size() const {
     }
 }
 
-bool VertexDecoder::Decode(const MemoryView &mem, std::uint32_t address, const UVScale &uv_scale,
-                           bool prescale_uv, DecodedVertex *out) const {
+bool VertexDecoder::Decode(const MemoryView &mem, std::uint32_t address, const DecodeParams &params,
+                           DecodedVertex *out) const {
+    const UVScale &uv_scale = params.uv_scale;
+    const bool prescale_uv = params.prescale_uv;
     const std::uint8_t *ptr = mem.Translate(address, onesize_);
     if (!ptr) return false;
     *out = DecodedVertex{};
@@ -228,6 +231,29 @@ bool VertexDecoder::Decode(const MemoryView &mem, std::uint32_t address, const U
         default:
             out->pos[0] = out->pos[1] = out->pos[2] = std::numeric_limits<float>::infinity();
             break;
+        }
+        if (weight_ && params.bones != nullptr) {
+            // ComputeSkinMatrix + Step_Pos*Skin + Step_Normal*Skin.
+            float skin[12] = {};
+            for (int j = 0; j < nweights_; ++j) {
+                const float w = out->weights[j];
+                if (w == 0.0f) continue;
+                const float *bone = params.bones + j * 12;
+                for (int i = 0; i < 12; ++i) skin[i] = skin[i] + bone[i] * w;
+            }
+            if (pos_ != 0) {
+                const Vec3f sp = Vec3ByMatrix43(Vec3f{out->pos[0], out->pos[1], out->pos[2]}, skin);
+                out->pos[0] = sp.x;
+                out->pos[1] = sp.y;
+                out->pos[2] = sp.z;
+            }
+            if (nrm_) {
+                const Vec3f n =
+                    Norm3ByMatrix43(Vec3f{out->normal[0], out->normal[1], out->normal[2]}, skin);
+                out->normal[0] = n.x;
+                out->normal[1] = n.y;
+                out->normal[2] = n.z;
+            }
         }
     }
     return true;

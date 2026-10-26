@@ -7,7 +7,9 @@
 #include <cstdio>
 #include <cstring>
 
+#include "bounding_box.hpp"
 #include "rasterizer.hpp"
+#include "spline.hpp"
 #include "vertex_decoder.hpp"
 
 namespace mpo::ge {
@@ -134,10 +136,17 @@ bool Ge::Execute(std::uint32_t op, std::uint32_t diff, DisplayList &list, RunRes
             list.bbox_result = false;
             return true;
         }
-        // The frustum test is F12. Assume the box is visible, as PPSSPP does
-        // when it cannot test.
-        stats_.Unsupported("bounding box test (F12), assumed visible");
-        list.bbox_result = true;
+        ++stats_.bbox_tests;
+        const BoundingBoxResult bbox =
+            TestBoundingBox(state_, mem_, vertex_addr_, index_addr_, count);
+        if (bbox == BoundingBoxResult::kBadMemory) {
+            // PPSSPP takes the box as visible and does not advance VADDR.
+            stats_.Unsupported("bounding box data outside memory, assumed visible");
+            list.bbox_result = true;
+            return true;
+        }
+        list.bbox_result = bbox == BoundingBoxResult::kVisible;
+        if (!list.bbox_result) ++stats_.bbox_culled;
         const std::uint32_t vtype = state_.VertType();
         const bool indexed = (vtype & kVtypeIdxMask) != 0;
         AdvanceVerts(vtype, count,
@@ -366,9 +375,16 @@ void Ge::ExecutePrim(std::uint32_t op) {
         stats_.Unsupported("PRIM with an invalid index address");
         return;
     }
-    if ((vtype & kVtypeMorphCountMask) != 0) stats_.Unsupported("morphing (F12)");
-    if ((vtype & kVtypeWeightMask) != 0 && !(vtype & kVtypeThrough)) {
-        stats_.Unsupported("skinning (F12)");
+    ReportDrawState(vtype);
+    const RasterizerState rs = ComputeRasterizerState(state_, mem_, clut_.data());
+    const std::uint32_t bytes_read =
+        assembler_.Submit(state_, rs, prim, vertex_addr_, index_addr_, count);
+    AdvanceVerts(vtype, count, bytes_read);
+}
+
+void Ge::ReportDrawState(std::uint32_t vtype) {
+    if ((vtype & kVtypeMorphCountMask) != 0) {
+        stats_.Unsupported("morphing (not implemented: first morph target only)");
     }
     if (state_.IsTextureMapEnabled() && !state_.IsModeClear()) {
         const TexFormat fmt = state_.TextureFormat();
@@ -377,18 +393,41 @@ void Ge::ExecutePrim(std::uint32_t op) {
             stats_.Unsupported("mipmaps (ported, not verified)");
         }
     }
-    const RasterizerState rs = ComputeRasterizerState(state_, mem_, clut_.data());
-    const std::uint32_t bytes_read =
-        assembler_.Submit(state_, rs, prim, vertex_addr_, index_addr_, count);
-    AdvanceVerts(vtype, count, bytes_read);
 }
 
 void Ge::ExecutePatch(std::uint32_t op, bool spline) {
     ++stats_.draw_commands;
-    stats_.Unsupported(spline ? "spline (F12)" : "bezier (F12)");
-    const int count = static_cast<int>((op & 0xFF) * ((op >> 8) & 0xFF));
+    // SoftGPU::Execute_Bezier / Execute_Spline: a bad address skips the draw
+    // without advancing VADDR/IADDR.
+    if (!mem_.IsValidRange(vertex_addr_, 1)) {
+        stats_.Unsupported("BEZIER/SPLINE with an invalid vertex address");
+        return;
+    }
     const std::uint32_t vtype = state_.VertType();
-    AdvanceVerts(vtype, count, static_cast<std::uint32_t>(count) * VertexSize(vtype));
+    if ((vtype & kVtypeIdxMask) != 0 && !mem_.IsValidRange(index_addr_, 1)) {
+        stats_.Unsupported("BEZIER/SPLINE with an invalid index address");
+        return;
+    }
+    ReportDrawState(vtype);
+
+    const int num_u = static_cast<int>(op & 0xFF);
+    const int num_v = static_cast<int>((op >> 8) & 0xFF);
+    const int count = num_u * num_v;
+    PatchMesh mesh;
+    bool bad_memory = false;
+    if (TessellatePatch(state_, mem_, op, spline, vertex_addr_, index_addr_, &mesh, &bad_memory)) {
+        ++stats_.patches;
+        const RasterizerState rs = ComputeRasterizerState(state_, mem_, clut_.data());
+        ArrayVertexSource source(mesh.vertices, mesh.indices);
+        assembler_.SubmitVertices(state_, rs, mesh.prim, source, mesh.vtype,
+                                  static_cast<int>(mesh.indices.size()));
+    } else if (bad_memory) {
+        stats_.Unsupported("BEZIER/SPLINE control points outside memory");
+    }
+    // SubmitCurve only sets the bytes read when there are 4 points or more.
+    const std::uint32_t bytes =
+        num_u < 4 || num_v < 4 ? 0u : static_cast<std::uint32_t>(count) * VertexSize(vtype);
+    AdvanceVerts(vtype, count, bytes);
 }
 
 void Ge::ExecuteLoadClut() {

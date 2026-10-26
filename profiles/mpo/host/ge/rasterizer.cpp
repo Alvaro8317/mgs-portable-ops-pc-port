@@ -483,8 +483,12 @@ void Rasterizer::DrawTriangle(const VertexData &v0, const VertexData &v1, const 
                     }
 
                     if (!clear_mode) {
+                        // PADDD: wraps (both can be INT_MIN on zero-area triangles).
                         for (int i = 0; i < 4; ++i) {
-                            for (int c = 0; c < 3; ++c) prim_color[i][c] += sec_color[i][c];
+                            for (int c = 0; c < 3; ++c) {
+                                prim_color[i][c] = Wrap32(
+                                    static_cast<std::int64_t>(prim_color[i][c]) + sec_color[i][c]);
+                            }
                         }
                     }
 
@@ -910,6 +914,183 @@ void Rasterizer::DrawPoint(const VertexData &v0, const BinCoords & /*range*/,
     int fog = 255;
     if (ps.apply_fog) fog = ClampFogDepth(v0.fogdepth);
     DrawPixel(rt, x, y, z, fog, prim_color, ps);
+}
+
+namespace {
+
+// GetTextureCoordinates / GetTextureCoordinatesProj for two vertices.
+void LineTextureCoordinates(const VertexData &v0, const VertexData &v1, float p, bool proj,
+                            float *s, float *t) {
+    const float q0 = 1.f / v0.clipw;
+    const float q1 = 1.f / v1.clipw;
+    const float wq0 = p * q0;
+    const float wq1 = (1.0f - p) * q1;
+    const float q_recip = proj ? 1.0f / (v0.q * wq0 + v1.q * wq1) : 1.0f / (wq0 + wq1);
+    *s = (v0.s * wq0 + v1.s * wq1) * q_recip;
+    *t = (v0.t * wq0 + v1.t * wq1) * q_recip;
+}
+
+// double -> int as CVTTSD2SI (out of range and NaN give INT_MIN).
+int TruncDoubleToInt(double d) {
+    if (!(d > -2147483649.0 && d < 2147483648.0)) return static_cast<int>(0x80000000u);
+    return static_cast<int>(d);
+}
+
+} // namespace
+
+void Rasterizer::DrawLine(const VertexData &v0, const VertexData &v1, const BinCoords &range,
+                          const RasterizerState &state) const {
+    const PixelState &ps = state.pixel;
+    const RenderTarget rt(mem_, ps);
+    const Sampler sampler(mem_, state.sampler);
+
+    const int ax = v0.screenpos.x;
+    const int ay = v0.screenpos.y;
+    const int az = v0.screenpos.z;
+    const int bx = v1.screenpos.x;
+    const int by = v1.screenpos.y;
+    const int bz = v1.screenpos.z;
+
+    int dx = bx - ax;
+    int dy = by - ay;
+    const int dz = bz - az;
+
+    int steps;
+    if (std::abs(dx) < std::abs(dy)) {
+        steps = std::abs(dy) / kScreenScale;
+    } else {
+        steps = std::abs(dx) / kScreenScale;
+    }
+    if (steps <= 0) return;
+
+    // Avoid going too far since we typically don't start at the pixel centre.
+    if (dx < 0 && dx >= -kScreenScale) dx++;
+    if (dy < 0 && dy >= -kScreenScale) dy++;
+
+    const double xinc = static_cast<double>(dx) / steps;
+    const double yinc = static_cast<double>(dy) / steps;
+    const double zinc = static_cast<double>(dz) / steps;
+
+    const bool interpolate_color =
+        state.shade_gouraud && !(v0.color0 == v1.color0 && v0.color1 == v1.color1);
+    const Vec4i v0_c0 = Vec4i::FromRGBA(v0.color0);
+    const Vec4i v1_c0 = Vec4i::FromRGBA(v1.color0);
+    const Vec4i v0_c1 = Vec4i::FromRGBA(v0.color1 & 0xFFFFFF);
+    const Vec4i v1_c1 = Vec4i::FromRGBA(v1.color1 & 0xFFFFFF);
+
+    double x = ax > bx ? ax - 1 : ax;
+    double y = ay > by ? ay - 1 : ay;
+    double z = az;
+    const int steps1 = steps;
+    for (int i = 0; i < steps; ++i) {
+        // TransformUnit::ScreenToDrawing(int, int): truncate, then / 16.
+        const int px = ScreenToDrawing(TruncDoubleToInt(x));
+        const int py = ScreenToDrawing(TruncDoubleToInt(y));
+        const int zi = TruncDoubleToInt(z);
+
+        bool mask_ok = x >= range.x1 && y >= range.y1 && x <= range.x2 && y <= range.y2;
+        if (mask_ok && ps.early_z_checks) {
+            if (ps.apply_depth_range && (z < ps.minz || z > ps.maxz)) mask_ok = false;
+            // CheckDepthTestPassed takes the depth as u16.
+            if (!DepthTestPassed(rt, ps.depth_test_func, px, py, static_cast<std::uint16_t>(zi))) {
+                mask_ok = false;
+            }
+        }
+
+        if (mask_ok) {
+            Vec4i prim_color;
+            Vec4i sec_color;
+            if (interpolate_color) {
+                for (int k = 0; k < 4; ++k) {
+                    prim_color[k] = (v0_c0[k] * (steps - i) + v1_c0[k] * i) / steps1;
+                }
+                for (int k = 0; k < 3; ++k) {
+                    sec_color[k] = (v0_c1[k] * (steps - i) + v1_c1[k] * i) / steps1;
+                }
+            } else {
+                prim_color = v1_c0;
+                sec_color = v1_c1;
+            }
+
+            int fog = 255;
+            if (ps.apply_fog) {
+                fog = ClampFogDepth((v0.fogdepth * static_cast<float>(steps - i) +
+                                     v1.fogdepth * static_cast<float>(i)) /
+                                    static_cast<float>(steps1));
+            }
+
+            if (state.antialias_lines) prim_color[3] = 0x7F;
+
+            if (state.enable_textures) {
+                float s;
+                float s1;
+                float t;
+                float t1;
+                if (state.through_mode) {
+                    const float fa = static_cast<float>(steps - i);
+                    const float fb = static_cast<float>(i);
+                    const float fa1 = static_cast<float>(steps - i - 1);
+                    const float fb1 = static_cast<float>(i + 1);
+                    const auto fs1 = static_cast<float>(steps1);
+                    const float tcs = (v0.s * fa + v1.s * fb) / fs1;
+                    const float tct = (v0.t * fa + v1.t * fb) / fs1;
+                    const float tc1s = (v0.s * fa1 + v1.s * fb1) / fs1;
+                    const float tc1t = (v0.t * fa1 + v1.t * fb1) / fs1;
+                    const float sw = 1.0f / static_cast<float>(1 << state.sampler.width0_shift);
+                    const float th = 1.0f / static_cast<float>(1 << state.sampler.height0_shift);
+                    s = tcs * sw;
+                    s1 = tc1s * sw;
+                    t = tct * th;
+                    t1 = tc1t * th;
+                } else {
+                    const auto fs1 = static_cast<float>(steps1);
+                    LineTextureCoordinates(v0, v1, static_cast<float>(steps - i) / fs1,
+                                           state.texture_proj, &s, &t);
+                    LineTextureCoordinates(v0, v1, static_cast<float>(steps - i - 1) / fs1,
+                                           state.texture_proj, &s1, &t1);
+                }
+
+                // If inc is 0, force the delta to zero. (float * double).
+                const float ds =
+                    xinc == 0.0
+                        ? 0.0f
+                        : static_cast<float>(
+                              static_cast<double>((s1 - s) * static_cast<float>(kScreenScale)) *
+                              (1.0f / xinc));
+                const float dt =
+                    yinc == 0.0
+                        ? 0.0f
+                        : static_cast<float>(
+                              static_cast<double>((t1 - t) * static_cast<float>(kScreenScale)) *
+                              (1.0f / yinc));
+                const float w =
+                    (v0.clipw * static_cast<float>(steps - i) + v1.clipw * static_cast<float>(i)) /
+                    static_cast<float>(steps1);
+
+                int level;
+                int level_frac;
+                bool bilinear;
+                CalculateSamplingParams(ds, dt, w, state, &level, &level_frac, &bilinear);
+                if (state.antialias_lines) {
+                    // PPSSPP: "a naive and wrong implementation".
+                    s = static_cast<float>((static_cast<float>(px) + xinc / 32.0f) / 512.0f);
+                    t = static_cast<float>((static_cast<float>(py) + yinc / 32.0f) / 512.0f);
+                    bilinear = true;
+                }
+                prim_color = bilinear ? sampler.Linear(s, t, prim_color, level, level_frac)
+                                      : sampler.Nearest(s, t, prim_color, level, level_frac);
+            }
+
+            if (!ps.clear_mode) {
+                for (int k = 0; k < 3; ++k) prim_color[k] += sec_color[k];
+            }
+            DrawPixel(rt, px, py, zi, fog, prim_color, ps);
+        }
+
+        x += xinc;
+        y += yinc;
+        z += zinc;
+    }
 }
 
 bool RectangleCanUseSprite(const VertexData &v0, const VertexData &v1,

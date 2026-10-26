@@ -8,13 +8,17 @@
 # for development only (they pull in the vendored zstd decompressor).
 
 add_library(mpo_ge STATIC
+    bounding_box.cpp
     ge.cpp
     ge_state.cpp
+    lighting.cpp
     memory_view.cpp
     pixel.cpp
     primitive_assembler.cpp
     rasterizer.cpp
     sampler.cpp
+    spline.cpp
+    transform.cpp
     vertex_decoder.cpp
 )
 target_include_directories(mpo_ge PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

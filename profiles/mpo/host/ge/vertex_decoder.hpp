@@ -28,6 +28,18 @@ struct UVScale {
     float v_off = 0.0f;
 };
 
+// What a decode applies on top of the raw layout (PPSSPP's choice of steps in
+// VertexDecoder::SetVertexType for the software renderer).
+struct DecodeParams {
+    // Transform mode with UV generation TEXTURE_COORDS (or UNKNOWN): the
+    // Step_Tc*Prescale steps, uv * scale + offset.
+    bool prescale_uv = false;
+    UVScale uv_scale;
+    // Transform mode with weights: skinning in decode (applySkinInDecode is
+    // always on in softgpu). The 8 bone matrices, 4x3 each.
+    const float *bones = nullptr;
+};
+
 // Byte stride of one vertex of `vtype`, including every morph target. This
 // matches `ge_usage.vertex_size()` (F05), verified on real dumps.
 std::uint32_t VertexSize(std::uint32_t vtype);
@@ -47,11 +59,11 @@ public:
     [[nodiscard]] int morph_count() const { return morphcount_; }
     [[nodiscard]] int index_size() const; // 0, 1, 2 or 4 bytes.
 
-    // Decodes the vertex at `address` (first morph target only; morphing is
-    // F12). `uv_scale` applies in transform mode with UV gen TEXTURE_COORDS.
-    // Returns false when the vertex is outside valid memory.
-    bool Decode(const MemoryView &mem, std::uint32_t address, const UVScale &uv_scale,
-                bool prescale_uv, DecodedVertex *out) const;
+    // Decodes the vertex at `address` (first morph target only: morphing is
+    // not implemented and the caller reports it). Returns false when the
+    // vertex is outside valid memory.
+    bool Decode(const MemoryView &mem, std::uint32_t address, const DecodeParams &params,
+                DecodedVertex *out) const;
 
 private:
     std::uint32_t vtype_;

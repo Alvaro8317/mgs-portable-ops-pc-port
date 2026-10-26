@@ -62,6 +62,11 @@ add_executable(mpo_ge_test ge_test.cpp)
 target_link_libraries(mpo_ge_test PRIVATE mpo_ge_replay)
 mpo_target_warnings(mpo_ge_test)
 add_test(NAME mpo_ge_test COMMAND mpo_ge_test)
+# F12: transform mode, splines, lines, lighting, fog, clipping, bounding box.
+add_executable(mpo_ge_transform_test ge_transform_test.cpp)
+target_link_libraries(mpo_ge_transform_test PRIVATE mpo_ge)
+mpo_target_warnings(mpo_ge_transform_test)
+add_test(NAME mpo_ge_transform_test COMMAND mpo_ge_transform_test)
 add_test(NAME mpo_ppdmp_replay_usage COMMAND mpo_ppdmp_replay)
 set_tests_properties(mpo_ppdmp_replay_usage PROPERTIES WILL_FAIL TRUE)
 # --- F07a: VFPU golden vectors and the CPU difftest harness -----------------

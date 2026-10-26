@@ -85,6 +85,13 @@ enum Cmd : std::uint8_t {
     kCmdAmbientColor = 0x5C,
     kCmdAmbientAlpha = 0x5D,
     kCmdLightMode = 0x5E,
+    kCmdLightType0 = 0x5F, // 0x5F-0x62
+    kCmdLx0 = 0x63,        // light positions, 3 per light, 0x63-0x6E
+    kCmdLdx0 = 0x6F,       // light directions, 0x6F-0x7A
+    kCmdLka0 = 0x7B,       // attenuation, 0x7B-0x86
+    kCmdLkS0 = 0x87,       // spot exponent, 0x87-0x8A
+    kCmdLkO0 = 0x8B,       // spot cutoff, 0x8B-0x8E
+    kCmdLac0 = 0x8F,       // ambient, diffuse, specular colours, 0x8F-0x9A
     kCmdCull = 0x9B,
     kCmdFrameBufPtr = 0x9C,
     kCmdFrameBufWidth = 0x9D,
@@ -269,6 +276,20 @@ enum class TexMapMode : std::uint8_t {
     kTextureCoords = 0,
     kTextureMatrix = 1,
     kEnvironmentMap = 2,
+    kUnknown = 3,
+};
+
+enum class TexProjMapMode : std::uint8_t {
+    kPosition = 0,
+    kUv = 1,
+    kNormalizedNormal = 2,
+    kNormal = 3,
+};
+
+enum class PatchPrimType : std::uint8_t {
+    kTriangles = 0,
+    kLines = 1,
+    kPoints = 2,
     kUnknown = 3,
 };
 

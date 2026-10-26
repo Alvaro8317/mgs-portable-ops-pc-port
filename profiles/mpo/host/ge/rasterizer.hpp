@@ -95,6 +95,11 @@ public:
                         const RasterizerState &state) const;
     void DrawPoint(const VertexData &v0, const BinCoords &range,
                    const RasterizerState &state) const;
+    // Rasterizer.cpp DrawLine: a DDA in double precision over the 12.4
+    // coordinates (PPSSPP's own TODO notes it does not handle fractional
+    // endpoints exactly; this reproduces it as it is).
+    void DrawLine(const VertexData &v0, const VertexData &v1, const BinCoords &range,
+                  const RasterizerState &state) const;
 
 private:
     void ApplyTexturing(const RasterizerState &state, const Sampler &sampler, Vec4i prim_color[4],
