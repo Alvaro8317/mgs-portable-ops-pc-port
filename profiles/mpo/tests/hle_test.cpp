@@ -17,7 +17,6 @@
 
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <string>
@@ -203,7 +202,6 @@ struct Fixture {
         config.fiber_stack_size = 1u << 20u;
         register_stubs(runtime);
         system = std::make_unique<mh::System>(runtime, config);
-        if (std::getenv("MPO_HLE_TEST_TRACE") != nullptr) system->hle().set_trace(stderr);
     }
     std::uint32_t word(std::uint32_t address) { return runtime.memory().load32(address); }
 };

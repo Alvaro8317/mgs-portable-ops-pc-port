@@ -19,6 +19,10 @@ target_include_directories(mpo_hle PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_include_directories(mpo_hle SYSTEM PUBLIC
     $<TARGET_PROPERTY:psprecomp_core,INTERFACE_INCLUDE_DIRECTORIES>)
 target_link_libraries(mpo_hle PUBLIC mpo_kernel)
+if(MSVC)
+    # C4324: CpuBridge keeps PSPRecomp's alignas(16) AllegrexContext per thread.
+    target_compile_options(mpo_hle PUBLIC /wd4324)
+endif()
 mpo_target_warnings(mpo_hle)
 
 # The resident Konami modules, recompiled from the user's files like mgp_main

@@ -3,7 +3,7 @@
 #include "hle/cpu_bridge.hpp"
 
 #include <algorithm>
-#include <bit>
+#include <cstring>
 
 namespace mpo::hle {
 
@@ -24,8 +24,10 @@ void reset_thread_context(psprecomp::AllegrexContext &ctx) {
     ctx = psprecomp::AllegrexContext{};
     for (std::size_t i = 0; i < ctx.gpr.size(); ++i) ctx.gpr[i] = kDeadBeef;
     ctx.gpr[0] = 0u;
-    for (float &f : ctx.fpr) f = std::bit_cast<float>(kSignalingNan);
-    for (float &v : ctx.vfpu) v = std::bit_cast<float>(kSignalingNan);
+    // Copied as bits: a compiler may quiet a signaling NaN float constant
+    // (MSVC does, docs/sessions/F07a.md).
+    for (float &f : ctx.fpr) std::memcpy(&f, &kSignalingNan, sizeof(f));
+    for (float &v : ctx.vfpu) std::memcpy(&v, &kSignalingNan, sizeof(v));
     // VFPU control registers: S/T prefixes neutral, D prefix neutral, CC,
     // INF4, two reserved, REV and the eight RCX seeds of the random unit.
     ctx.vfpu_ctrl = {0xE4u,       0xE4u,       0u,          0x3Fu,       0u,          0u,
