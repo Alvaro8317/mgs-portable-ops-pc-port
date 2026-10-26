@@ -392,8 +392,11 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
 - En escritorio está **"Perfect"** para US 1.02 y EU 1.01
   ([US](https://report.ppsspp.org/game/ULUS10202_1.02),
   [EU](https://report.ppsspp.org/game/ULES00645_1.01)).
-- **Líneas**: `compat.ini` tiene `[CenteredLines]` para ULUS10202 y ULES00645, por el radar y el mapa
-  ([#20142](https://github.com/hrydgard/ppsspp/issues/20142)).
+- **Líneas**: se pensaba que `compat.ini` tenía `[CenteredLines]` para ULUS10202 y ULES00645, por el
+  radar y el mapa ([#20142](https://github.com/hrydgard/ppsspp/issues/20142)). **No es así en
+  v1.20.4**: la sección solo lista Echochrome y un homebrew, y el flag solo se lee en
+  `GPU/Common/SoftwareTransformCommon.cpp`, la ruta de los renderers por hardware; softgpu no lo
+  usa [V] (F12). Si #20142 lo añadió después, es posterior al tag fijado [?].
 - **Splines y beziers del GE**: se usan para subdividir el suelo cerca de la cámara, con skinning
   ("vtype 12000780, bones: 1") ([#1884](https://github.com/hrydgard/ppsspp/issues/1884),
   [#3343](https://github.com/hrydgard/ppsspp/issues/3343)).

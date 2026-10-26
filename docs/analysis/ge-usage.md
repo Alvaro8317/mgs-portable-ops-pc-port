@@ -313,8 +313,8 @@ Ordenada por lo que hace falta para cada hito y, dentro de cada fase, por númer
 3. Fog y dither sobre 5551.
 4. Skinning con pesos de 8 bits (×2, ×4 y ×8) y 3 luces direccionales con difusa y especular.
 5. `REVERSE_SUBTRACT(SRCALPHA, FIX 0xFFFFFF)`.
-6. **Líneas** `LINE_STRIP` through con posición float (el radar), con el comportamiento de
-   `[CenteredLines]`.
+6. **Líneas** `LINE_STRIP` through con posición float (el radar). La referencia es el `DrawLine`
+   de softgpu; `[CenteredLines]` no lista MPO en PPSSPP v1.20.4 y solo lo leen los renderers por hardware (F12 [V]).
 7. Casos raros: índices de 16 bits, `RECTANGLES` en modo transform, `MODULATE` sin doblado y filtro
    NEAREST.
 8. Sacar de F12 lo que no aparece: mipmaps, DXT, CLUT16/32, texturas de color directo, logic ops,
@@ -349,7 +349,8 @@ Ordenada por lo que hace falta para cada hito y, dentro de cada fase, por númer
 3. Los tres framebuffers 8888 de la intro y del título, escritos fuera del GE: el renderer Vulkan
    tiene que poder presentar un framebuffer de VRAM que no dibujó él, con otro formato y en otra
    dirección que los del juego.
-4. El comportamiento de `[CenteredLines]` en las líneas del radar.
+4. Las líneas del radar contra el `DrawLine` de `mpo_ge`. `[CenteredLines]` no aplica: no lista MPO
+   en v1.20.4 (F12 [V]).
 
 ### 5.1 Las hipótesis previas contra los dumps
 
@@ -402,7 +403,7 @@ Con PPSSPP **v1.20.4** para Windows, en inglés (la configuración del usuario t
 Ninguna bloquea F11. Sirven para confirmar las [?] de la sección 5.1:
 
 - **El mapa o el radar a pantalla completa**, para ver las líneas a otra escala y comparar
-  `[CenteredLines]`. Las misiones solo traen el radar del HUD (4 `LINE_STRIP`).
+  `DrawLine`. Las misiones solo traen el radar del HUD (4 `LINE_STRIP`).
 - **El log HLE de PPSSPP en la intro y en el "Press Start"**, que confirma que el video es PMF y qué
   archivo se reproduce. Para eso hay que:
   - activar "Enable debug logging" y subir los canales `ME` y `HLE` en Settings › Tools › Developer

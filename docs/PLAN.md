@@ -98,7 +98,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F10b | Presentación e input en el juego | M2 | ⬜ pendiente |
 | F11a | GE por software: reproductor de `.ppdmp` y 2D | M2 | ✅ hecha (ola 1) |
 | F11b | `sceGe*` en el juego y stub de `sceMpeg` | M2 | ⬜ pendiente |
-| F12 | GE por software: completo | M2 | ⬜ pendiente (ola 2) |
+| F12 | GE por software: completo | M2 | ✅ hecha (ola 2) |
 | F13 | Overlays de etapa en runtime | M2 | ⬜ pendiente |
 | F14a | Renderer Vulkan: base sobre los dumps | M3 | ⬜ pendiente (ola 3) |
 | F14b | Renderer Vulkan en el juego | M3 | ⬜ pendiente |
@@ -530,7 +530,7 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Texturas: CLUT 4 y 8 bits, swizzle, mipmaps y DXT si aparece en F05.
   - Blending con colores fijos, color doubling, alpha y color test, operaciones lógicas, stencil y
     clamp de profundidad.
-  - **Líneas** (con el comportamiento de `[CenteredLines]`).
+  - **Líneas** (el `DrawLine` de softgpu).
   - **Splines y beziers con skinning.**
   - Render-to-texture.
 - **Criterios de hecho**: el histograma de F05 queda cubierto al 100 % y las escenas de los dumps se
@@ -556,6 +556,16 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     - el skinning;
     - las 120 líneas del radar;
     - el test de BOUNDINGBOX, que hoy siempre responde "visible".
+- **Notas (ola 2)**: hecha, ver `docs/sessions/F12.md`. Los 4 dumps 3D quedan con 0 comandos
+  `unsupported` y los 23 `features` de `ge_usage.py` tienen camino de código.
+  - **Falta la comparación por píxel contra PPSSPP**: el usuario aporta las capturas, al menos de
+    `mission1_1` y `cutscene_1` (procedimiento en la nota).
+  - `[CenteredLines]` no aplica a MPO en v1.20.4, y softgpu no lo usa [V].
+  - Morphing, DXT y mipmaps quedan como `unsupported` visibles.
+  - **[?] Splines de un solo parche abiertos por los dos lados** (los 1 942 de MPO): los pesos de
+    PPSSPP son asimétricos y no coinciden con los de un B-spline sujeto. Se reproducen tal cual;
+    falta saber qué hace el hardware.
+  - Los dumps están en `/mnt/c/Users/eduar/Documents/PPSSPP/PSP/SYSTEM/DUMP/`, no en `game/`.
 
 ### F13 — Overlays de etapa en runtime
 
@@ -569,6 +579,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Instalar y desinstalar los overlays (`unregister_functions`), con el intérprete como respaldo.
 - **Criterios de hecho**: se entra a la primera etapa (aunque sea sin audio) y en el reporte
   final no queda código interpretado en esa etapa. **M2 cerrado.**
+- **Notas (ola 2)**: `mpo_ge` ya evalúa `BOUNDINGBOX`/`BJUMP` (F12), pero solo con datos sintéticos,
+  porque los dumps no los guardan. Hay que verificarlo con el runtime.
 - **Notas (F04)**: el diseño de los overlays está en `docs/sessions/F04.md`.
   - `mgp_main` usa `sceKernelLoadModuleByID(fd, 0, NULL)` (no `sceKernelLoadModule`) sobre un
     descriptor de `kjfs`. Después llama a `sceKernelStartModule(id, 4, &p)` y aplica el `.rlc` él
@@ -603,7 +615,12 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   diferencia contra el renderer por software queda medida.
 - **Notas (ola 1)**: el banco es `mpo_ppdmp_replay` con `--renderer=soft|vulkan`, y el
   renderer por software es la referencia para comparar frames con `ge_frame_diff.py`.
-- **Notas (ola 2)**: la ventana es de `SdlPresenter` (F10a), con `SDL_VULKAN` encendido. Para
+- **Notas (ola 2)**: la referencia es `mpo_ge` (F12).
+  - La teselación de splines de `spline.cpp` se puede reutilizar. Ojo con la asimetría de los
+    splines de un solo parche ([?] en `docs/sessions/F12.md`).
+  - El depth clamp de Vulkan no es el del GE: el GE recorta solo contra -Z y marca "fuera de rango"
+    los vértices más allá de la guard-band (`transform.cpp`).
+  - La ventana es de `SdlPresenter` (F10a), con `SDL_VULKAN` encendido. Para
   Vulkan, la ventana se crea con `SDL_WINDOW_VULKAN`, o se separa la creación de la ventana del
   renderer de SDL.
 

@@ -170,7 +170,8 @@ los hilos y fibras, en vez de depender de `ulimit`.
 **Gráficos (GE):**
 - Splines y beziers del GE con skinning. El juego los usa para subdividir el suelo cerca de la
   cámara y esquivar el clipper de la PSP.
-- **Primitivas de línea** (radar y mapa): PPSSPP necesita `[CenteredLines]` para este juego.
+- **Primitivas de línea** (radar y mapa). La referencia es el `DrawLine` de softgpu, porque
+  `[CenteredLines]` no lista MPO en PPSSPP v1.20.4 y solo lo leen los renderers por hardware (F12 [V]).
 - Render-to-texture y texturizar desde el render target actual.
 - `sceGeEdramSetAddrTranslation`.
 - Clamp de profundidad y guard-band. Un bug de PPSSPP en esto hacía desaparecer el suelo.
