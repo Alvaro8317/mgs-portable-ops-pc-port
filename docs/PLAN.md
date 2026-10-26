@@ -68,9 +68,9 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 3 | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12 |
 | — | F09 → F10b → F11b → F13 → F14b → F15 → F16b → F17b → F18 → F19 → F20b → F21 → F22 | en serie |
 
-**Pendiente de la ola 1**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC** (run
-`40260589237`). Se corrigió el 2026-10-26 y **falta confirmarlo en la CI de Windows**. Las causas
-eran que MSVC:
+**Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
+(run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
+Debug pasan). Las causas eran que MSVC:
 - convierte en `maxss` la saturación del prefijo D, que pierde el signo de `-0.0`;
 - silencia los SNaN constantes al plegarlos;
 - en Debug llama a `fabsf` de la UCRT.
