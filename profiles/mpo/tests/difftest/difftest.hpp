@@ -40,7 +40,9 @@ struct CpuState {
     alignas(16) float v[128]{};
     std::uint32_t vfpu_ctrl[16]{};
     // Next PC. A lone branch (bvf/bvt/bvfl/bvtl) leaves its target here when
-    // taken, pc + 8 for a likely branch that is not taken, else pc + 4.
+    // taken, pc + 8 for a likely branch that is not taken, else pc + 4. A
+    // kBranch case (branch + delay slot) leaves its target when taken, else
+    // pc + 8.
     std::uint32_t pc = kInitialPc;
     std::uint32_t mem_faults = 0;
     std::array<std::uint8_t, kMemSize> mem{};
@@ -51,10 +53,12 @@ struct CpuState {
     void write8(std::uint32_t address, std::uint32_t value);
 };
 
-enum class InstrClass { kAlu, kMulDiv, kMem, kAllegrex, kFpu, kVfpu, kVfpuSeq };
+// kBranch (F07b): a branch or jump and its delay slot. Appended last, so the
+// per-class seeds of the other classes do not change.
+enum class InstrClass { kAlu, kMulDiv, kMem, kAllegrex, kFpu, kVfpu, kVfpuSeq, kBranch };
 
 [[nodiscard]] std::string_view class_name(InstrClass cls);
-// Parses "alu", "muldiv", "mem", "allegrex", "fpu", "vfpu", "vfpuseq".
+// Parses "alu", "muldiv", "mem", "allegrex", "fpu", "vfpu", "vfpuseq", "branch".
 bool parse_class(std::string_view text, InstrClass *out);
 [[nodiscard]] std::span<const InstrClass> all_classes();
 
@@ -132,6 +136,9 @@ enum SpecFlags : std::uint32_t {
     kSpecDivide = 1u << 6,            // div/divu: MIPS32 leaves x/0 unpredictable.
     kSpecNeedsTables = 1u << 7,       // VFPU op that uses the PPSSPP lookup tables.
     kSpecMoreAccurateVmmul = 1u << 8, // Run with PPSSPP's MoreAccurateVMMUL compat flag.
+    kSpecBranch = 1u << 9,            // Branch/jump: the case is the branch and its delay slot.
+    kSpecLink = 1u << 10,             // ... that writes a return address (jal, jalr, b*al).
+    kSpecAbsolute = 1u << 11,         // ... whose target is absolute (j, jal, jr, jalr).
 };
 
 [[nodiscard]] const std::vector<Spec> &all_specs();

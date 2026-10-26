@@ -212,3 +212,90 @@ if(TARGET mpo_frontend_sdl)
                      --trace ${CMAKE_CURRENT_BINARY_DIR}/frontend_demo_trace.txt)
     set_tests_properties(mpo_frontend_demo_smoke PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=dummy")
 endif()
+
+# --- F07b: the PSPRecomp emitter and interpreter under the difftest ---------
+# mpo_aot_casegen lays the cases out as guest code (difftest/aot_layout.hpp),
+# psp_recomp recompiles them at build time exactly like the game
+# (--auto --hints --vfpu-executor), and mpo_difftest_aot runs the generated
+# code, and the framework's interpreter fallback, against the references.
+set(MPO_AOT_DIFFTEST_COUNT "1000" CACHE STRING
+    "Cases per instruction class compiled into mpo_difftest_aot")
+set(MPO_AOT_DIFFTEST_SEED "5066831" CACHE STRING
+    "Seed of the cases compiled into mpo_difftest_aot (0x4D504F, mpo_difftest's default)")
+if(NOT MPO_AOT_DIFFTEST_COUNT MATCHES "^[1-9][0-9]*$" OR NOT MPO_AOT_DIFFTEST_SEED MATCHES "^[0-9]+$")
+    message(FATAL_ERROR "MPO_AOT_DIFFTEST_COUNT and MPO_AOT_DIFFTEST_SEED must be decimal integers")
+endif()
+
+add_executable(mpo_aot_casegen difftest/aot_casegen.cpp difftest/aot_layout.cpp)
+target_link_libraries(mpo_aot_casegen PRIVATE mpo_difftest_lib)
+mpo_target_warnings(mpo_aot_casegen)
+
+# 8 classes (all_classes()), one 32-byte slot per case, 512 slots per 16 KiB
+# unit: the file names are known before psp_recomp runs (mpo_aot_casegen
+# --expect-units fails the build if that ever stops being true).
+math(EXPR mpo_aot_units "(8 * ${MPO_AOT_DIFFTEST_COUNT} + 511) / 512")
+set(mpo_aot_dir ${CMAKE_CURRENT_BINARY_DIR}/aot_cases)
+set(mpo_aot_sources ${mpo_aot_dir}/generated/generated_registry.cpp)
+math(EXPR mpo_aot_last_unit "${mpo_aot_units} - 1")
+foreach(mpo_aot_unit RANGE ${mpo_aot_last_unit})
+    string(LENGTH "${mpo_aot_unit}" mpo_aot_digits)
+    math(EXPR mpo_aot_pad "4 - ${mpo_aot_digits}")
+    string(REPEAT "0" ${mpo_aot_pad} mpo_aot_zeros)
+    list(APPEND mpo_aot_sources ${mpo_aot_dir}/generated/generated_unit_${mpo_aot_zeros}${mpo_aot_unit}.cpp)
+endforeach()
+add_custom_command(
+    OUTPUT ${mpo_aot_dir}/generated.stamp
+    BYPRODUCTS ${mpo_aot_sources} ${mpo_aot_dir}/cases.elf ${mpo_aot_dir}/cases.hints
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${mpo_aot_dir}/generated
+    COMMAND mpo_aot_casegen --seed ${MPO_AOT_DIFFTEST_SEED} --count ${MPO_AOT_DIFFTEST_COUNT}
+            --elf ${mpo_aot_dir}/cases.elf --hints ${mpo_aot_dir}/cases.hints
+            --expect-units ${mpo_aot_units}
+    COMMAND psp_recomp ${mpo_aot_dir}/cases.elf --auto ${mpo_aot_dir}/generated 0x08A00000 0x4000
+            --hints ${mpo_aot_dir}/cases.hints --vfpu-executor
+    COMMAND ${CMAKE_COMMAND} -E touch ${mpo_aot_dir}/generated.stamp
+    DEPENDS mpo_aot_casegen psp_recomp
+    COMMENT "Recompiling the difftest cases with psp_recomp"
+    VERBATIM)
+add_custom_target(mpo_aot_cases DEPENDS ${mpo_aot_dir}/generated.stamp)
+
+# The generated cases: no project warnings (so no /W4 vs /W0 clash on MSVC),
+# no float contraction (bit-exactness).
+add_library(mpo_aot_cases_obj OBJECT ${mpo_aot_sources})
+add_dependencies(mpo_aot_cases_obj mpo_aot_cases)
+target_include_directories(mpo_aot_cases_obj SYSTEM PRIVATE
+    $<TARGET_PROPERTY:psprecomp_core,INTERFACE_INCLUDE_DIRECTORIES>)
+set_source_files_properties(${mpo_aot_sources} PROPERTIES GENERATED TRUE)
+if(MSVC)
+    target_compile_options(mpo_aot_cases_obj PRIVATE /W0 /bigobj)
+else()
+    target_compile_options(mpo_aot_cases_obj PRIVATE -w -ffp-contract=off)
+endif()
+
+add_executable(mpo_difftest_aot difftest/difftest_main.cpp difftest/aot_executors.cpp
+               difftest/aot_layout.cpp)
+target_link_libraries(mpo_difftest_aot PRIVATE psprecomp_core mpo_recomp mpo_aot_cases_obj)
+if(MPO_BUILD_PPSSPP_REF)
+    target_link_libraries(mpo_difftest_aot PRIVATE mpo_ppsspp_ref)
+    target_compile_definitions(mpo_difftest_aot PRIVATE MPO_HAVE_PPSSPP_REF=1)
+else()
+    target_link_libraries(mpo_difftest_aot PRIVATE mpo_difftest_lib)
+    target_compile_definitions(mpo_difftest_aot PRIVATE MPO_HAVE_PPSSPP_REF=0)
+endif()
+target_compile_definitions(mpo_difftest_aot PRIVATE MPO_HAVE_AOT=1
+    MPO_AOT_CASE_COUNT=${MPO_AOT_DIFFTEST_COUNT} MPO_AOT_CASE_SEED=${MPO_AOT_DIFFTEST_SEED}u)
+mpo_target_warnings(mpo_difftest_aot)
+
+set(mpo_aot_args --count ${MPO_AOT_DIFFTEST_COUNT} --seed ${MPO_AOT_DIFFTEST_SEED}
+    --tables "${MPO_VFPU_TABLES_DIR}")
+add_test(NAME mpo_difftest_emitter COMMAND mpo_difftest_aot --a emitter --b mpo --class all ${mpo_aot_args})
+add_test(NAME mpo_difftest_interpreter COMMAND mpo_difftest_aot --a interp --b mpo --class all ${mpo_aot_args})
+add_test(NAME mpo_difftest_emitter_unicorn
+         COMMAND mpo_difftest_aot --a emitter --b unicorn ${mpo_aot_args}
+                 --unicorn-command "${mpo_unicorn_command}")
+set_tests_properties(mpo_difftest_emitter mpo_difftest_interpreter mpo_difftest_emitter_unicorn
+                     PROPERTIES SKIP_RETURN_CODE 77)
+if(MPO_BUILD_PPSSPP_REF)
+    add_test(NAME mpo_difftest_emitter_ppsspp
+             COMMAND mpo_difftest_aot --a emitter --b ppsspp --class all ${mpo_aot_args})
+    set_tests_properties(mpo_difftest_emitter_ppsspp PROPERTIES SKIP_RETURN_CODE 77)
+endif()

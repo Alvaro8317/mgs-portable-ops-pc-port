@@ -122,7 +122,7 @@ build/profiles/mpo/tools/mpo_analysis_export game/elf/mgp_main.elf 0x08804000 \
 # 2. Comparación con la salida de run_analysis.sh (solo números).
 python3 -I profiles/mpo/tools/recomp_compare.py --export analysis/f06/mgp_main/export.json \
     --ghidra analysis/out/mgp_main
-# 3. Datos de Ghidra como "hints" para PSPRecomp (necesita framework/patches/0001).
+# 3. Datos de Ghidra como "hints" para PSPRecomp (en la rama mpo del fork, F07b).
 python3 -I profiles/mpo/tools/recomp_hints.py analysis/out/mgp_main/mgp_main.recomp.json \
     --extra profiles/mpo/config/hints/mgp_main.txt --output analysis/f06/mgp_main/mgp_main.hints.txt
 psp_recomp game/elf/mgp_main.elf --auto generated/mgp_main 0x08804000 \
@@ -137,7 +137,58 @@ psp_recomp game/elf/mgp_main.elf --auto generated/mgp_main 0x08804000 \
 - `tools/recomp_hints.py`: convierte el `recomp.json` de Ghidra al formato de
   `psprecomp::load_analysis_hints()` y le añade los hints escritos a mano de `config/hints/`.
 - Los resultados, el diseño y la lista de brechas están en `docs/analysis/psp_analyze.md`. Los
-  parches genéricos del framework (MIT) están en `framework/patches/`.
+  parches genéricos del framework (MIT) están desde F07b en la rama `mpo` del fork de PSPRecomp
+  (`framework/psprecomp`).
+
+## Generar y compilar `mgp_main` recompilado (F07b)
+
+```bash
+# 1. Instalado -> análisis -> generated/ (reproducible: generate.json guarda los hashes).
+python3 -I profiles/mpo/scripts/generate.py \
+    --psp-recomp build/framework/psprecomp/psp_recomp \
+    --analysis-export build/profiles/mpo/tools/mpo_analysis_export --coverage
+# Volver a generar y exigir el mismo C++ byte a byte:
+python3 -I profiles/mpo/scripts/generate.py --psp-recomp build/framework/psprecomp/psp_recomp --check
+# 2. Compilar el corpus (118 unidades) y la sonda, con el pool de memoria del framework.
+cmake -S . -B build-rel -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DMPO_GENERATED_DIR=$PWD/profiles/mpo/generated/mgp_main/generated
+cmake --build build-rel -j4 --target mpo_aot_probe
+# 3. Tabla de dispatch, parches de arranque y module_start hasta el primer import.
+build-rel/profiles/mpo/host/recomp/mpo_aot_probe --elf game/elf/mgp_main.elf \
+    --hints profiles/mpo/generated/mgp_main/mgp_main.hints.txt \
+    --tables build-rel/_deps/ppsspp_vfpu_tables/assets/vfpu
+```
+
+- `scripts/generate.py`: comprueba el SHA-256 del ELF instalado contra `config/supported.toml`,
+  arma los hints (`tools/recomp_hints.py` con el export de Ghidra y `config/hints/mgp_main.txt`) y
+  corre `psp_recomp <elf> --auto <out>/generated 0x08804000 0x4000 --hints … --vfpu-executor`.
+  Con `--coverage` mide la cobertura con `tools/recomp_compare.py`. La salida va a `--out`
+  (por defecto `profiles/mpo/generated/mgp_main/`, ignorado por git).
+- `config/hints/mgp_main.txt` lleva también los `patch` de las tres funciones que el juego convierte
+  en `jr ra` al arrancar.
+- `host/recomp/` (`mpo_recomp`): `mpo_vfpu` como ejecutor de la VFPU del framework
+  (`set_vfpu_executor`). Todo el código generado y el intérprete de respaldo ejecutan la VFPU con
+  la semántica de PPSSPP, bit a bit.
+- Con `-DMPO_GENERATED_DIR` se compila `mpo_generated_mgp_main` (sin warnings, sin sanitizers,
+  `-ffp-contract=off` y `-O${PSPRECOMP_GENERATED_OPT_LEVEL}`), en el pool `psprecomp_generated`
+  (`-DPSPRECOMP_GENERATED_JOBS`, por defecto 1 por cada 4 GiB de RAM), y la sonda `mpo_aot_probe`.
+
+### Difftest del emisor (sin el juego, en `ctest`)
+
+`mpo_aot_casegen` coloca los casos del arnés de F07a como código de un ELF sintético,
+`psp_recomp --auto --vfpu-executor` los recompila al compilar (como al juego) y `mpo_difftest_aot`
+los ejecuta:
+
+```bash
+build/profiles/mpo/tests/mpo_difftest_aot --a emitter --b mpo --class all \
+    --count 1000 --seed 5066831 --tables <MPO_VFPU_TABLES_DIR>
+```
+
+- `--a emitter`: el código generado; `--a interp`: el intérprete de respaldo del framework;
+  `--a interp-native`: el intérprete con la VFPU propia del framework (solo para medir).
+- `--b mpo` (intérprete de referencia), `--b ppsspp` y `--b unicorn`, como `mpo_difftest`.
+- El número de casos por clase y la semilla se fijan al configurar
+  (`MPO_AOT_DIFFTEST_COUNT`, `MPO_AOT_DIFFTEST_SEED`).
 
 ## Estructura
 

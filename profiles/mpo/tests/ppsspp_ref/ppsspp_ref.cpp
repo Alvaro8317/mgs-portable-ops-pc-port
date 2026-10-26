@@ -239,6 +239,10 @@ public:
                 spec && (spec->flags & difftest::kSpecMoreAccurateVmmul);
             out[i] = c.initial;
             supported[i] = 1;
+            if (c.cls == difftest::InstrClass::kBranch) {
+                supported[i] = c.num_ops == 2 && step_branch(out[i], c.ops[0], c.ops[1]) ? 1 : 0;
+                continue;
+            }
             for (int k = 0; k < c.num_ops && supported[i]; ++k) {
                 if (!step(out[i], c.ops[static_cast<std::size_t>(k)])) supported[i] = 0;
             }
@@ -247,7 +251,29 @@ public:
     }
 
 private:
-    static bool step(difftest::CpuState &s, u32 op) {
+    // A branch and its delay slot through PPSSPP's own handlers: a taken
+    // branch leaves inDelaySlot/nextPC (DelayBranchTo), a not-taken one
+    // pc + 4, and a likely one that is not taken pc + 8 (SkipLikely).
+    static bool step_branch(difftest::CpuState &s, u32 op, u32 slot) {
+        const u32 pc = s.pc;
+        if (!step(s, op, true)) return false;
+        const MIPSState &m = mipsr4k;
+        if (m.inDelaySlot) {
+            const u32 target = m.nextPC;
+            s.pc = pc + 4;
+            if (!step(s, slot)) return false;
+            s.pc = target;
+        } else if (m.pc == pc + 4) {
+            if (!step(s, slot)) return false;
+        } else {
+            s.pc = m.pc;
+        }
+        return true;
+    }
+
+    // keep_delay leaves s.pc at PPSSPP's PC (the delay state stays in
+    // mipsr4k) instead of folding a taken branch's target into it.
+    static bool step(difftest::CpuState &s, u32 op, bool keep_delay = false) {
         MIPSState &m = mipsr4k;
         std::memcpy(m.r, s.gpr, sizeof(m.r));
         std::memcpy(m.fi, s.fpr, sizeof(m.fi));
@@ -276,7 +302,7 @@ private:
         s.lo = m.lo;
         s.fcr31 = (m.fcr31 & ~(1u << 23)) | ((m.fpcond & 1) << 23);
         // A taken branch leaves its target in nextPC (DelayBranchTo).
-        s.pc = m.inDelaySlot ? m.nextPC : m.pc;
+        s.pc = m.inDelaySlot && !keep_delay ? m.nextPC : m.pc;
         return true;
     }
 };

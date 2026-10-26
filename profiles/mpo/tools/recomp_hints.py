@@ -10,6 +10,7 @@ docs/analysis/psp_analyze.md):
   code <start> <end>                 one per Ghidra executable block
   seed <address> ghidra              one per Ghidra function entry
   jumptable <jr> <target>...         one per resolved Ghidra jump table
+  patch <address> <word>             only from the hand-written hints
 
 Hand-written profile hints (profiles/mpo/config/hints/<program>.txt, same
 format) are validated and appended with --extra; that is where the jump tables
@@ -27,7 +28,8 @@ import argparse
 import json
 import sys
 
-_DIRECTIVES = {'code': (2, 2), 'seed': (1, 2), 'jumptable': (2, None)}
+_DIRECTIVES = {'code': (2, 2), 'seed': (1, 2), 'jumptable': (2, None),
+               'patch': (2, 2)}
 
 
 class HintsError(Exception):
@@ -66,7 +68,8 @@ def parse_hints(text, origin='<hints>'):
       values.append(args[1] if len(args) > 1 else 'hint')
     if name == 'code' and values[1] <= values[0]:
       raise HintsError(f'{origin}:{number}: empty code range')
-    if any(isinstance(v, int) and v & 3 for v in values):
+    addresses = values[:1] if name == 'patch' else values
+    if any(isinstance(v, int) and v & 3 for v in addresses):
       raise HintsError(f'{origin}:{number}: unaligned address')
     directives.append((name, values))
   return directives

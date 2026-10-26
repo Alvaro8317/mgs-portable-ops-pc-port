@@ -4,6 +4,7 @@
 // Encodings follow PPSSPP Core/MIPS/MIPSTables.cpp (v1.20.4).
 
 #include <bit>
+#include <iterator>
 
 #include "difftest/difftest.hpp"
 
@@ -66,6 +67,37 @@ std::vector<Spec> build_specs() {
     add("ori", alu, 0x34000000, kRs | kRt | kImm16);
     add("xori", alu, 0x38000000, kRs | kRt | kImm16);
     add("lui", alu, 0x3C000000, kRt | kImm16);
+
+    // --- Branches and jumps, each with a delay slot (F07b) ---
+    const InstrClass br = InstrClass::kBranch;
+    constexpr std::uint32_t kB = kSpecBranch;
+    constexpr std::uint32_t kBl = kSpecBranch | kSpecLink;
+    constexpr std::uint32_t kJ = kSpecBranch | kSpecAbsolute;
+    constexpr std::uint32_t kJl = kSpecBranch | kSpecAbsolute | kSpecLink;
+    add("beq", br, 0x10000000, kRs | kRt | kImm16, kB);
+    add("bne", br, 0x14000000, kRs | kRt | kImm16, kB);
+    add("blez", br, 0x18000000, kRs | kImm16, kB);
+    add("bgtz", br, 0x1C000000, kRs | kImm16, kB);
+    add("beql", br, 0x50000000, kRs | kRt | kImm16, kB);
+    add("bnel", br, 0x54000000, kRs | kRt | kImm16, kB);
+    add("blezl", br, 0x58000000, kRs | kImm16, kB);
+    add("bgtzl", br, 0x5C000000, kRs | kImm16, kB);
+    add("bltz", br, 0x04000000, kRs | kImm16, kB);
+    add("bgez", br, 0x04010000, kRs | kImm16, kB);
+    add("bltzl", br, 0x04020000, kRs | kImm16, kB);
+    add("bgezl", br, 0x04030000, kRs | kImm16, kB);
+    add("bltzal", br, 0x04100000, kRs | kImm16, kBl);
+    add("bgezal", br, 0x04110000, kRs | kImm16, kBl);
+    add("bltzall", br, 0x04120000, kRs | kImm16, kBl);
+    add("bgezall", br, 0x04130000, kRs | kImm16, kBl);
+    add("bc1f", br, 0x45000000, kImm16, kB);
+    add("bc1t", br, 0x45010000, kImm16, kB);
+    add("bc1fl", br, 0x45020000, kImm16, kB);
+    add("bc1tl", br, 0x45030000, kImm16, kB);
+    add("j", br, 0x08000000, 0x03FFFFFF, kJ);
+    add("jal", br, 0x0C000000, 0x03FFFFFF, kJl);
+    add("jr", br, 0x00000008, kRs, kJ);
+    add("jalr", br, 0x00000009, kRs | kRd, kJl);
 
     // --- Multiply/divide and HI/LO ---
     const InstrClass md = InstrClass::kMulDiv;
@@ -353,8 +385,90 @@ TestCase make_case(Rng &rng, const Spec &spec, std::uint32_t id) {
     random_state(rng, c.initial);
     std::uint32_t op = make_op(rng, spec);
     if (spec.flags & kSpecMemory) place_memory_access(rng, spec, op, c.initial);
+    if (spec.flags & kSpecDivide) {
+        // Random operands almost never hit the special cases (F07b): a zero
+        // divisor, with a dividend on each side of 0xFFFF for divu, and
+        // INT_MIN / -1.
+        const std::uint32_t rs = (op >> 21) & 31;
+        const std::uint32_t rt = (op >> 16) & 31;
+        switch (rng.below(8)) {
+        case 0:
+            c.initial.gpr[rt] = 0;
+            break;
+        case 1:
+            c.initial.gpr[rt] = 0;
+            c.initial.gpr[rs] = rng.below(0x10000);
+            break;
+        case 2:
+            c.initial.gpr[rs] = 0x80000000u;
+            c.initial.gpr[rt] = 0xFFFFFFFFu;
+            break;
+        default:
+            break;
+        }
+        c.initial.gpr[0] = 0;
+    }
     c.ops[0] = op;
     c.num_ops = 1;
+    return c;
+}
+
+// A branch or jump followed by a simple ALU instruction in its delay slot.
+// The delay slot often overwrites a register the branch reads, so the
+// condition and the jr target must be captured before it runs.
+TestCase make_branch_case(Rng &rng, const Spec &spec, std::uint32_t id) {
+    static const char *const kDelaySpecs[] = {"addiu", "addu", "subu", "or",
+                                              "xor",   "sll",  "lui",  "slt"};
+    TestCase c = make_case(rng, spec, id);
+    std::uint32_t op = c.ops[0];
+    std::uint32_t rs = (op >> 21) & 31;
+    const std::uint32_t rt = (op >> 16) & 31;
+    std::uint32_t rd = (op >> 11) & 31;
+    const bool regimm = (op >> 26) == 1;
+    const bool jalr = spec.name == "jalr";
+    // MIPS leaves these unpredictable and compilers never emit them: a
+    // branch-and-link that tests $ra, and jalr with rd == rs.
+    if ((spec.flags & kSpecLink) && regimm && rs == 31) {
+        rs = 1 + rng.below(30);
+        op = (op & ~kRs) | (rs << 21);
+    }
+    if (jalr && rd == rs) {
+        rd = (rs + 1 + rng.below(30)) & 31;
+        if (rd == 0) rd = 1;
+        op = (op & ~kRd) | (rd << 11);
+    }
+    const std::uint32_t link = jalr ? rd : ((spec.flags & kSpecLink) ? 31u : 0u);
+    // Make the conditions interesting: equal operands, zero, a nearby target.
+    if ((spec.name == "beq" || spec.name == "bne" || spec.name == "beql" || spec.name == "bnel") &&
+        rng.chance(50))
+        c.initial.gpr[rt] = c.initial.gpr[rs];
+    if (rng.chance(20)) c.initial.gpr[rs] = 0;
+    if ((spec.name == "jr" || jalr) && rng.chance(50))
+        c.initial.gpr[rs] = kInitialPc + 0x1000 + (rng.below(0x400) << 2);
+    c.initial.gpr[0] = 0;
+
+    const Spec &delay =
+        *find_spec(kDelaySpecs[rng.below(static_cast<std::uint32_t>(std::size(kDelaySpecs)))]);
+    std::uint32_t slot = make_op(rng, delay);
+    const bool r_type = (delay.fixed >> 26) == 0;
+    const std::uint32_t dest_shift = r_type ? 11 : 16;
+    if (rng.chance(40)) {
+        // Overwrite a register the branch reads.
+        const std::uint32_t victim = rng.chance(50) ? rs : rt;
+        slot = (slot & ~(31u << dest_shift)) | (victim << dest_shift);
+    }
+    // The return address differs between executors that place the case at
+    // different addresses, so the delay slot never reads the link register.
+    if (link != 0) {
+        for (const std::uint32_t shift : {21u, 16u}) {
+            if (shift == 16 && !r_type) continue; // rt is the destination of an I-type op
+            if (((slot >> shift) & 31) == link)
+                slot = (slot & ~(31u << shift)) | (((link + 1) & 31) << shift);
+        }
+    }
+    c.ops[0] = op;
+    c.ops[1] = slot;
+    c.num_ops = 2;
     return c;
 }
 
@@ -393,6 +507,15 @@ std::vector<TestCase> generate_cases(InstrClass cls, std::uint64_t seed, int cou
     Rng rng(seed);
     std::vector<TestCase> cases;
     cases.reserve(static_cast<std::size_t>(count));
+    if (cls == InstrClass::kBranch) {
+        const std::vector<const Spec *> specs = specs_of(cls);
+        for (int i = 0; i < count; ++i) {
+            cases.push_back(make_branch_case(rng,
+                                             *specs[static_cast<std::size_t>(i) % specs.size()],
+                                             static_cast<std::uint32_t>(i)));
+        }
+        return cases;
+    }
     if (cls == InstrClass::kVfpuSeq) {
         // One to three vpfx* followed by an arithmetic VFPU op: the prefixes
         // come from real instructions instead of the initial state.

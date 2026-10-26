@@ -658,6 +658,83 @@ static bool reference_step(CpuState &s, u32 op, const vfpu::Options &options) {
     return ok;
 }
 
+// A branch or jump and its delay slot (kBranch), as PPSSPP's Int_RelBranch,
+// Int_RelBranchRI, Int_FPUBranch, Int_JumpType and Int_JumpRegType: the
+// condition, the jr target and the link are computed before the delay slot
+// runs; a likely branch that is not taken skips its delay slot.
+static bool reference_branch(CpuState &s, u32 op, u32 slot, const vfpu::Options &options) {
+    const u32 pc = s.pc;
+    const u32 rs = (op >> 21) & 31;
+    const u32 rt = (op >> 16) & 31;
+    const u32 relative = pc + 4 + (sign_extend16(op) << 2);
+    bool taken = false;
+    bool likely = false;
+    u32 target = relative;
+    switch (op >> 26) {
+    case 0: { // jr, jalr
+        const u32 funct = op & 0x3F;
+        if (funct != 8 && funct != 9) return false;
+        target = s.gpr[rs];
+        const u32 rd = (op >> 11) & 31;
+        if (funct == 9 && rd != 0) s.gpr[rd] = pc + 8;
+        taken = true;
+        break;
+    }
+    case 1: { // REGIMM
+        const u32 kind = rt;
+        if (kind > 3 && (kind < 16 || kind > 19)) return false;
+        // PPSSPP writes $ra before it tests rs (the generator never uses rs = 31).
+        if (kind >= 16) s.gpr[31] = pc + 8;
+        const bool negative = static_cast<s32>(s.gpr[rs]) < 0;
+        taken = (kind & 1) ? !negative : negative;
+        likely = (kind & 2) != 0;
+        break;
+    }
+    case 2:
+    case 3: // j, jal
+        target = (pc & 0xF0000000u) | ((op & 0x03FFFFFFu) << 2);
+        if ((op >> 26) == 3) s.gpr[31] = pc + 8;
+        taken = true;
+        break;
+    case 4:
+    case 20:
+        taken = s.gpr[rt] == s.gpr[rs];
+        likely = (op >> 26) == 20;
+        break;
+    case 5:
+    case 21:
+        taken = s.gpr[rt] != s.gpr[rs];
+        likely = (op >> 26) == 21;
+        break;
+    case 6:
+    case 22:
+        taken = static_cast<s32>(s.gpr[rs]) <= 0;
+        likely = (op >> 26) == 22;
+        break;
+    case 7:
+    case 23:
+        taken = static_cast<s32>(s.gpr[rs]) > 0;
+        likely = (op >> 26) == 23;
+        break;
+    case 17: { // bc1f, bc1t, bc1fl, bc1tl
+        if (rs != 8 || rt > 3) return false;
+        const bool cond = ((s.fcr31 >> 23) & 1) != 0;
+        taken = (rt & 1) ? cond : !cond;
+        likely = (rt & 2) != 0;
+        break;
+    }
+    default:
+        return false;
+    }
+    s.gpr[0] = 0;
+    if (taken || !likely) {
+        s.pc = pc + 4;
+        if (!reference_step(s, slot, options)) return false;
+    }
+    s.pc = taken ? target : pc + 8;
+    return true;
+}
+
 namespace {
 
 class ReferenceInterpreter final : public Executor {
@@ -673,6 +750,11 @@ public:
             options.more_accurate_vmmul = spec && (spec->flags & kSpecMoreAccurateVmmul);
             out[i] = c.initial;
             supported[i] = 1;
+            if (c.cls == InstrClass::kBranch) {
+                supported[i] =
+                    c.num_ops == 2 && reference_branch(out[i], c.ops[0], c.ops[1], options) ? 1 : 0;
+                continue;
+            }
             for (int k = 0; k < c.num_ops; ++k) {
                 if (!reference_step(out[i], c.ops[static_cast<std::size_t>(k)], options)) {
                     supported[i] = 0;

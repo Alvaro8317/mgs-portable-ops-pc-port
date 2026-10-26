@@ -9,3 +9,19 @@
 # §4): bound check in 0x088A7780 (sltiu < 11), table 0x089EA590, jr at
 # 0x088A77C8. Targets read from the relocated table [V].
 jumptable 0x088A77C8 0x088A77D0 0x088A77E4 0x088A77EC 0x088A77F4 0x088A77FC 0x088A7824 0x088A7850 0x088A7868 0x088A7870 0x088A7878 0x088A7888
+
+# Start-up patches (docs/analysis/mgp_main.md §6.6): the main-thread launcher
+# 0x08804834 writes `jr ra; nop` over the first two instructions of three
+# debug-output functions, then creates the Main thread [V]; whether anything
+# calls them before that is not known [?]. Generating the corpus
+# with the patched words makes every call return at once, including direct
+# `goto`s from callers in the same generated unit, which a native override
+# registered at the entry would not intercept.
+patch 0x089CFE80 0x03E00008
+patch 0x089CFE84 0x00000000
+# 0x089CFF78 is not a Ghidra function (a 48-byte gap, mgp_main.md §3).
+seed 0x089CFF78 startup_patch
+patch 0x089CFF78 0x03E00008
+patch 0x089CFF7C 0x00000000
+patch 0x089D002C 0x03E00008
+patch 0x089D0030 0x00000000

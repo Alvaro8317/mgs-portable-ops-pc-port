@@ -1,3 +1,4 @@
 [submodule "framework/psprecomp"]
 	path = framework/psprecomp
-	url = https://github.com/jessicanataliagta/PSPRecomp.git
+	url = https://github.com/Alvaro8317/PSPRecomp.git
+	branch = mpo
