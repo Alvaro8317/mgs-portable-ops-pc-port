@@ -68,6 +68,16 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 3 | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12 |
 | — | F09 → F10b → F11b → F13 → F14b → F15 → F16b → F17b → F18 → F19 → F20b → F21 → F22 | en serie |
 
+**Pendiente de la ola 1 (antes de la ola 2)**: en la CI, `mpo_vfpu_golden_test` falla **solo con MSVC**
+(run `40260589237`); clang-cl, GCC y Clang pasan.
+- En Release fallan 101 entradas `op`, 108 `pin` y 6 `fn` (`vfpu_cos`, `vfpu_sqrt`, `vfpu_rsqrt`,
+  `vfpu_exp2`, `vfpu_log2` y `vfpu_dot`). Fallan incluso `vmov` y `vzero`.
+- En Debug solo fallan los `pin` de `vocp`, que tienen NaN constantes.
+
+Como el patrón depende del optimizador, apunta a carriles leídos sin inicializar o a NaN que el
+optimizador de MSVC reordena, y no a la generación de casos. Hay que corregirlo, o acotarlo y
+documentarlo, antes de F07b, porque el emisor depende de que `mpo_vfpu` sea bit a bit en Windows.
+
 ## Estado
 
 | Fase | Nombre | Hito | Estado |
