@@ -25,9 +25,48 @@ código.
 4. Hacer commit con `/commit`.
 
 **Reglas:**
-- No se adelanta trabajo de fases futuras. Lo que se descubra se anota en la nota de sesión.
+- No se adelanta trabajo de fases futuras **fuera de las olas** (ver abajo). Lo que se descubra se
+  anota en la nota de sesión.
 - Una fase puede cambiar el plan, pero el cambio se explica en la nota de sesión.
 - Nunca se suben ISOs, EBOOTs, PRX, assets, capturas ni dumps (ver `CLAUDE.md` §1).
+
+## Trabajo en paralelo (olas)
+
+Desde el 2026-10-25, las fases que se pueden probar **sin el juego en marcha** se partieron en una
+parte autónoma (`FXXa`) y otra de integración (`FXXb`). Las autónomas se agrupan en **olas** y las de
+una misma ola se hacen a la vez, cada una en su propio worktree (un subagente o una sesión aparte).
+Las fases sin letra y las `FXXb` siguen en serie, como antes.
+
+**Reglas de una fase en paralelo:**
+- **Librería autónoma**: el código va en `profiles/mpo/host/<módulo>/`, como una librería
+  `mpo_<módulo>` con su `CMakeLists.txt`. Sus tests van en `profiles/mpo/tests/`. La API es estrecha:
+  recibe la memoria de la PSP como puntero o `span` y callbacks. **No** registra NIDs ni llama a
+  `register_hle`; eso es trabajo de la `FXXb`.
+- **No depende de otra fase de la misma ola.** Si necesita algo de otra, lo anota y lo deja para la
+  integración.
+- **Solo toca lo suyo**: su módulo, sus tests, su nota `docs/sessions/FXXa.md` y, si añade una
+  dependencia, `third_party/` y `THIRD_PARTY.md`. **No edita la tabla de estado** ni las fichas de
+  otras fases. Lo que haya que cambiar en el plan va en la sección "Para la próxima sesión" de su nota.
+- Cada worktree usa su propio directorio de build y compila con `-j6` como máximo (la máquina tiene
+  15 GB de RAM).
+- Los datos locales (`game/`, `analysis/`, los dumps) están solo en el checkout principal. Se leen
+  con rutas absolutas; cada fase escribe sus salidas locales en `analysis/<fase>/`.
+- El código de PPSSPP de referencia está clonado en `~/tools/ppsspp-v1.20.4` (tag `v1.20.4`, commit
+  `fa50bb19`), fuera del repo.
+
+**Integración** (la hace la sesión principal cuando termina una ola):
+1. Revisar cada rama, mezclarlas una a una y resolver los conflictos (en `CMakeLists.txt`,
+   `THIRD_PARTY.md`…).
+2. Compilar desde cero y correr `ctest` completo en Linux con Clang y GCC.
+3. Actualizar la tabla de estado y copiar a las fichas las notas que dejó cada fase.
+4. Hacer commit.
+
+| Ola | Fases | Requisitos |
+|---|---|---|
+| 1 | F06, F07a, F08a, F11a, F16a | F03, F04 y F05 (cumplidos) |
+| 2 | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno |
+| 3 | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12 |
+| — | F09 → F10b → F11b → F13 → F14b → F15 → F16b → F17b → F18 → F19 → F20b → F21 → F22 | en serie |
 
 ## Estado
 
@@ -39,21 +78,29 @@ código.
 | F03 | Análisis de `mgp_main` en Ghidra | M0 | ✅ hecha |
 | F04 | Overlays de etapa y formato `.rlc` | M0 | ✅ hecha |
 | F05 | Inventario del GE con dumps de PPSSPP | M0 | ✅ hecha |
-| F06 | `psp_analyze` sobre MPO y brechas del framework | M0 | ⬜ pendiente |
-| F07 | Generación AOT, intérprete y difftest | M1 | ⬜ pendiente |
-| F08 | Kernel HLE: memoria, módulos e hilos (fibras) | M1 | ⬜ pendiente |
+| F06 | `psp_analyze` sobre MPO y brechas del framework | M0 | ⬜ pendiente (ola 1) |
+| F07a | Semántica de la VFPU y arnés de difftest | M1 | ⬜ pendiente (ola 1) |
+| F07b | Generación AOT, intérprete y difftest del emisor | M1 | ⬜ pendiente (ola 2) |
+| F08a | Primitivas del kernel sobre minicoro | M1 | ⬜ pendiente (ola 1) |
+| F08b | Kernel HLE: integración, módulos y arranque | M1 | ⬜ pendiente (ola 3) |
 | F09 | IO, tiempo y vblank | M2 | ⬜ pendiente |
-| F10 | Ventana, presentación e input | M2 | ⬜ pendiente |
-| F11 | GE: display lists y renderer por software (base) | M2 | ⬜ pendiente |
-| F12 | GE por software: completo | M2 | ⬜ pendiente |
+| F10a | Ventana, presentación e input (autónomo) | M2 | ⬜ pendiente (ola 2) |
+| F10b | Presentación e input en el juego | M2 | ⬜ pendiente |
+| F11a | GE por software: reproductor de `.ppdmp` y 2D | M2 | ⬜ pendiente (ola 1) |
+| F11b | `sceGe*` en el juego y stub de `sceMpeg` | M2 | ⬜ pendiente |
+| F12 | GE por software: completo | M2 | ⬜ pendiente (ola 2) |
 | F13 | Overlays de etapa en runtime | M2 | ⬜ pendiente |
-| F14 | Renderer Vulkan: base | M3 | ⬜ pendiente |
+| F14a | Renderer Vulkan: base sobre los dumps | M3 | ⬜ pendiente (ola 3) |
+| F14b | Renderer Vulkan en el juego | M3 | ⬜ pendiente |
 | F15 | Renderer Vulkan: framebuffers y efectos | M3 | ⬜ pendiente |
-| F16 | Audio: sceAudio, SAS y ATRAC3 | M4 | ⬜ pendiente |
-| F17 | Video del título y fuentes | M4 | ⬜ pendiente |
+| F16a | Audio autónomo: SAS, ATRAC3 y salida SDL3 | M4 | ⬜ pendiente (ola 1) |
+| F16b | Audio en el juego: `sceAudio`, `sceSas` y `sceAtrac` | M4 | ⬜ pendiente |
+| F17a | Decodificador de PMF y fuente PGF (autónomos) | M4 | ⬜ pendiente (ola 2) |
+| F17b | Video del título y fuentes en el juego | M4 | ⬜ pendiente |
 | F18 | Savedata, OSK y diálogos | M4 | ⬜ pendiente |
 | F19 | Primera misión y repetición de input | M5 | ⬜ pendiente |
-| F20 | AP Scan virtual, red y GPS | M6 | ⬜ pendiente |
+| F20a | Generador de APs virtuales (autónomo) | M6 | ⬜ pendiente (ola 2) |
+| F20b | AP Scan, red y GPS en el juego | M6 | ⬜ pendiente |
 | F21 | Partida completa y estabilidad | M6 | ⬜ pendiente |
 | F22 | Empaquetado y release 0.1 | M6 | ⬜ pendiente |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
@@ -237,10 +284,31 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 
 ## M1 — Arranque
 
-### F07 — Generación AOT, intérprete y difftest
+### F07a — Semántica de la VFPU y arnés de difftest (ola 1)
+
+- **Objetivo**: tener la semántica de la VFPU lista y verificada, y un arnés de difftest que F07b
+  pueda apuntar al emisor.
+- **Requisitos**: ninguno más allá de F03 (conteo de VFPU en `docs/analysis/mgp_main.md`).
+- **Tareas**:
+  - Librería `mpo_vfpu` en `profiles/mpo/host/vfpu/`: el estado de la VFPU (128 registros, prefijos
+    `vpfxs/t/d`, CC) y helpers para las instrucciones complejas (`vsin`, `vcos`, `vrsq`, `vexp2`,
+    `vlog2`, `vdiv`, conversiones, `vrot`…), **portados de PPSSPP** (`Core/MIPS/MIPSVFPUUtils.cpp`,
+    `MIPSIntVFPU.cpp`, con sus tablas) con cabecera de origen.
+  - Priorizar los 89 mnemónicos que usa `mgp_main` (F03), empezando por los más frecuentes.
+  - Tests con vectores dorados generados con el propio código de PPSSPP (compilado aparte en un
+    programa de prueba, nunca enlazado al runtime) y comparados **bit a bit**.
+  - Arnés de difftest de CPU: genera estados aleatorios por clase de instrucción (ALU, extensiones
+    Allegrex, FPU, VFPU) y compara dos ejecutores. La referencia es Unicorn (MIPS32) o el intérprete
+    de PPSSPP. **Verificar la licencia de Unicorn**: si es GPL-2.0-only, se usa solo como herramienta
+    externa (proceso aparte, instalado con pip en un venv), nunca enlazado ni vendorizado.
+- **Criterios de hecho**: los mnemónicos VFPU de `mgp_main` tienen helper y test bit a bit, o quedan
+  listados como pendientes con su frecuencia. El arnés corre en `ctest` (sin datos del juego) contra
+  un ejecutor de prueba.
+
+### F07b — Generación AOT, intérprete y difftest del emisor (ola 2)
 
 - **Objetivo**: `mgp_main` recompilado y compilando en ambos sistemas operativos.
-- **Requisitos**: F06.
+- **Requisitos**: F06 y F07a.
 - **Tareas**:
   - `profiles/mpo/scripts/generate.*`: instalado → análisis → `generated/`. Tiene que ser
     reproducible: el comando y los hashes van en la documentación.
@@ -252,16 +320,36 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Criterios de hecho**: el binario se genera y compila en Windows y Linux, y el difftest pasa sin
   diferencias en N casos por clase.
 
-### F08 — Kernel HLE: memoria, módulos e hilos (fibras)
+### F08a — Primitivas del kernel sobre minicoro (ola 1)
+
+- **Objetivo**: tener hilos, scheduler y objetos de sincronización de la PSP funcionando y probados,
+  sin el juego.
+- **Requisitos**: ninguno. **Decidido el 2026-10-25: las fibras usan `minicoro`** (ver `CLAUDE.md`
+  §9).
+- **Tareas**:
+  - Vendorizar `minicoro` (`edubart/minicoro`, fijado a un commit) en `third_party/minicoro/` con su
+    LICENSE y registrarlo en `THIRD_PARTY.md`. Cada fibra con **pila reservada de forma explícita**
+    (tamaño configurable, generoso por defecto por la trampa de la pila de `CLAUDE.md` §3).
+  - Librería `mpo_kernel` en `profiles/mpo/host/kernel/`: un hilo de la PSP es una fibra; scheduler
+    de prioridad expropiativa de un solo núcleo que conmuta en las llamadas bloqueantes y en los
+    puntos de visibilidad; reloj virtual inyectable para los tests.
+  - Objetos: hilos (crear, arrancar, salir, borrar, esperar fin, suspender, cambiar prioridad),
+    semáforos, event flags, mutex, mensajes/mbx si hace falta, callbacks, delays y alarmas, FPL y VPL
+    y bloques de SysMem (particiones de usuario y kernel). La semántica (orden de despertar, códigos
+    de error, timeouts) sale de PPSSPP `Core/HLE/sceKernel*.cpp`.
+  - Tests deterministas con hilos sintéticos: orden de ejecución, prioridad, inversión, timeouts,
+    códigos de error y estrés. ASan y UBSan en Linux.
+- **Criterios de hecho**: `ctest` pasa con Clang y GCC (con sanitizers) y los resultados de los
+  escenarios coinciden con lo que dice el código de PPSSPP (citado en la nota). La API queda lista
+  para que F08b registre los NIDs.
+
+### F08b — Kernel HLE: integración, módulos y arranque (ola 3)
 
 - **Objetivo**: que el juego llegue a `module_start` y cree sus hilos.
-- **Requisitos**: F07.
+- **Requisitos**: F07b y F08a.
 - **Tareas**:
-  - **Decidir la implementación de las fibras** (Win32 Fibers con `ucontext`, o `minicoro`, u otra),
-    reservando la pila de forma explícita.
-  - Scheduler de prioridad de un solo núcleo.
-  - `sceKernel*`: SysMem (particiones, bloques, FPL y VPL), módulos (`module_start`, `StartModule`),
-    hilos, semáforos, event flags, mutex, callbacks, delays y alarmas.
+  - Conectar `mpo_kernel` con el contexto de CPU de PSPRecomp y registrar los NIDs `sceKernel*`.
+  - Módulos (`module_start`, `StartModule`) y los módulos residentes de Konami.
   - Si un NID no está implementado, que falle de forma visible. Añadir el histograma de llamadas HLE.
 - **Criterios de hecho**: hay una traza del arranque hasta que los hilos se crean y ejecutan, y la
   lista de imports pendientes está ordenada por frecuencia. **M1 cerrado.**
@@ -273,7 +361,7 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 ### F09 — IO, tiempo y vblank
 
 - **Objetivo**: que el juego lea sus datos y que el tiempo avance correctamente.
-- **Requisitos**: F08.
+- **Requisitos**: F08b.
 - **Tareas**:
   - `sceIo*` (síncrono y asíncrono) sobre `disc0:/`, leyendo desde el ISO.
   - `ms0:/` mapeado a una carpeta de usuario por sistema operativo.
@@ -284,28 +372,58 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Criterios de hecho**: la traza muestra al juego abriendo y leyendo `slot.dat` y los `_zar` sin
   errores, con el vblank estable.
 
-### F10 — Ventana, presentación e input
+### F10a — Ventana, presentación e input, autónomo (ola 2)
+
+- **Objetivo**: una ventana SDL3 que presente un framebuffer de la PSP y lea los controles, sin el
+  juego.
+- **Requisitos**: ninguno.
+- **Tareas**:
+  - SDL3 (fijado, con FetchContent o vendorizado) y ventana con presentación por blit de CPU de un
+    framebuffer en memoria de la PSP: formatos 565, 5551, 4444 y 8888, con stride.
+  - Input con SDL3 (gamepad y teclado, stick analógico) traducido al formato de `SceCtrlData`, con
+    mapeo configurable.
+  - Probarlo con los framebuffers que deja F11a al reproducir los dumps.
+- **Criterios de hecho**: en WSLg o en Windows se ve un framebuffer de prueba en los cuatro formatos
+  y una traza muestra el input traducido.
+
+### F10b — Presentación e input en el juego
 
 - **Objetivo**: mostrar el framebuffer de la PSP en una ventana y recibir controles.
-- **Requisitos**: F09.
+- **Requisitos**: F09 y F10a.
 - **Tareas**:
-  - Ventana con SDL3 y presentación del framebuffer de `sceDisplay` desde la VRAM. Al principio basta
-    con un blit por CPU. Cubrir los formatos 565, 5551, 4444 y 8888.
-  - `sceCtrl` desde gamepad y teclado con SDL3 (incluido el stick analógico), con un mapeo
-    configurable.
+  - `sceDisplay` (`SetFrameBuf`) conectado a la presentación de F10a.
+  - `sceCtrl` (`ReadBuffer*`, `PeekBuffer*`, modo analógico) conectado al input de F10a.
 - **Criterios de hecho**: algo dibujado por el juego aparece en la ventana (aunque el GE esté
   incompleto) y el input llega a `sceCtrlReadBuffer*`.
 
-### F11 — GE: display lists y renderer por software (base)
+### F11a — GE por software: reproductor de `.ppdmp` y 2D (ola 1)
+
+- **Objetivo**: renderizar por software los dumps 2D de F05 (logo de KP y menú) igual que PPSSPP.
+- **Requisitos**: F05. Los 11 dumps en `/mnt/c/Users/eduar/Documents/PPSSPP/PSP/SYSTEM/DUMP/`.
+- **Tareas**:
+  - Librería `mpo_ge` en `profiles/mpo/host/ge/`: estado del GE (registros), intérprete de comandos
+    sobre una memoria de PSP (RAM y VRAM con sus espejos) y salida a un framebuffer en VRAM.
+  - Decodificador de vértices para todos los vtypes que salen en F05 (`ge_usage.vertex_size()` es la
+    referencia del tamaño).
+  - Rasterizador por software **portado de softgpu de PPSSPP** (`GPU/Software/`), con cabeceras de
+    origen: modo through, sprites y triángulos, texturas CLUT4/CLUT8 con paleta 8888, swizzle,
+    `MODULATE` y color doubling, alpha test, los modos de blending de F05, dither y salida 5551.
+  - Reproductor de `.ppdmp` en C++ (lector del contenedor v6 con zstd, como `ppdmp.py`) que carga la
+    memoria, ejecuta la lista y guarda el framebuffer como PNG en `analysis/f11a/` (fuera del repo).
+  - Tests con dumps sintéticos (el `DumpBuilder` de F05 sirve de guía), sin datos del juego.
+- **Criterios de hecho**: los dumps del logo y del menú se renderizan; la comparación contra
+  capturas del renderer por software de PPSSPP (cuando el usuario las aporte) queda descrita en la
+  nota, con la diferencia por píxel. Los dumps 3D se ejecutan sin crash aunque se vean incompletos.
+
+### F11b — `sceGe*` en el juego y stub de `sceMpeg`
 
 - **Objetivo**: ver el logo y el menú.
-- **Requisitos**: F10 y F05.
+- **Requisitos**: F10b y F11a.
 - **Tareas**:
-  - `sceGe*`: cola de listas, stall, signals, finish y callbacks, y `EdramSetAddrTranslation`.
-  - Intérprete de comandos del GE.
-  - Decodificador de vértices: todos los vtypes y el skinning.
-  - Transformación y clipping.
-  - Rasterizador por software portado de softgpu de PPSSPP, con cabeceras de origen.
+  - `sceGe*`: cola de listas, stall, signals, finish y callbacks, y `EdramSetAddrTranslation`,
+    conectados a `mpo_ge`.
+  - Estructura de listas que no guardan los dumps (`CALL`, `JUMP`, `SIGNAL`, `FINISH`, `BASE`,
+    `BOUNDINGBOX`…).
   - Stub mínimo de `sceMpeg`/`scePsmf` (decidido en F05):
     - no decodifica: entrega frames en negro en el buffer de display, o lo deja como está;
     - informa bien el estado y el fin del stream, para que el juego pase la intro y el "Press Start"
@@ -324,10 +442,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - `ge_usage.vertex_size()` coincide con los dumps reales y sirve de referencia para el
     decodificador.
 
-### F12 — GE por software: completo
+### F12 — GE por software: completo (ola 2)
 
 - **Objetivo**: que el renderer de referencia cubra todo lo que usa el juego, según F05.
-- **Requisitos**: F11.
+- **Requisitos**: F11a. Se trabaja sobre los dumps con el reproductor de F11a, sin el juego.
 - **Tareas**:
   - Texturas: CLUT 4 y 8 bits, swizzle, mipmaps y DXT si aparece en F05.
   - Blending con colores fijos, color doubling, alpha y color test, operaciones lógicas, stencil y
@@ -353,7 +471,7 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 ### F13 — Overlays de etapa en runtime
 
 - **Objetivo**: entrar a la primera etapa.
-- **Requisitos**: F12 y F04.
+- **Requisitos**: F11b, F12 y F04.
 - **Tareas**:
   - Implementar con HLE `sceKernelLoadModule` y `UnloadModule` para los `stage/*.prx`, con
     relocación (`.rlc`).
@@ -375,17 +493,27 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 
 ## M3 — Renderer Vulkan
 
-### F14 — Renderer Vulkan: base
+### F14a — Renderer Vulkan: base sobre los dumps (ola 3)
 
-- **Objetivo**: dibujar las mismas escenas que el renderer por software, pero en la GPU.
-- **Requisitos**: F13.
+- **Objetivo**: dibujar los dumps de F05 en la GPU igual que el renderer por software.
+- **Requisitos**: F10a y F12. Comprobar antes que hay un driver Vulkan usable (en WSL2 puede no
+  haberlo; si no, se hace en Windows).
 - **Tareas**:
   - Infraestructura: volk, VMA, instancia y dispositivo (Vulkan 1.2 como mínimo, aprovechando 1.3 si
     está), swapchain, frames en vuelo y capas de validación.
   - Shaders: generar vertex y fragment shaders a partir del estado del GE, compilar a SPIR-V y
     mantener una caché de pipelines.
   - Datos: subir vértices y texturas, y convertir CLUT en el shader.
-  - Elegir el renderer con una opción: `--renderer=soft|vulkan`.
+  - Modo del reproductor de dumps con `--renderer=soft|vulkan`.
+- **Criterios de hecho**: los dumps de F05 se ven en Vulkan sin errores de validación y la
+  diferencia contra el renderer por software queda medida.
+
+### F14b — Renderer Vulkan en el juego
+
+- **Objetivo**: dibujar las mismas escenas que el renderer por software, pero en la GPU.
+- **Requisitos**: F13 y F14a.
+- **Tareas**:
+  - Conectar el renderer Vulkan a `sceGe*` y a la presentación, con `--renderer=soft|vulkan`.
 - **Criterios de hecho**: el título y la primera etapa se ven en Vulkan sin errores de validación,
   en Windows y Linux.
 - **Notas (F05)**: el estado visto es pequeño: 11 vtypes, CLUT4/8 con paleta 8888, 3 modos de
@@ -395,7 +523,7 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 ### F15 — Renderer Vulkan: framebuffers y efectos
 
 - **Objetivo**: igualar al renderer por software en todos los casos.
-- **Requisitos**: F14.
+- **Requisitos**: F14b.
 - **Tareas**:
   - Seguimiento de framebuffers en VRAM, render-to-texture, texturizar desde el target actual y
     lecturas de la CPU.
@@ -416,23 +544,55 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 
 ## M4 — Audio, video y saves
 
-### F16 — Audio: sceAudio, SAS y ATRAC3
+### F16a — Audio autónomo: SAS, ATRAC3 y salida SDL3 (ola 1)
+
+- **Objetivo**: tener el mezclador SAS, el decodificador ATRAC3 y la salida de audio listos y
+  probados, sin el juego.
+- **Requisitos**: la decisión sobre `KCEJ_SOUND2` (F03: se recompila y su capa de Sony va por HLE).
+- **Tareas**:
+  - Librería `mpo_audio` en `profiles/mpo/host/audio/`:
+    - mezclador SAS **portado de PPSSPP** (`Core/HW/SasAudio.cpp` y `Core/HLE/sceSas.cpp`): voces
+      VAG/PCM/ATRAC, ADSR, pitch, envolventes y efectos de reverb, con cabeceras de origen;
+    - ATRAC3 y ATRAC3plus con `at3_standalone` de PPSSPP (LGPL-2.1+) en `third_party/`, más la lógica
+      de `sceAtrac` (bucles, buffers de streaming) separada de su HLE;
+    - canales de salida al estilo de `sceAudio` sobre SDL3 audio (SDL3 fijado), con resampling de
+      44.1 kHz a la frecuencia del dispositivo.
+  - Revisar qué funciones de `sceSasCore`, `sceAtrac3plus` y `sceAudio` importan `sound2.prx` y
+    `mgp_main` (inventario de F03) y priorizarlas.
+  - Tests sin datos del juego: VAG y ADSR sintéticos con salida esperada, y vectores calculados con
+    el código de PPSSPP. Con datos locales: decodificar los `.at3` del disco a WAV en
+    `analysis/f16a/` (fuera del repo).
+- **Criterios de hecho**: `ctest` pasa; un `.at3` del juego se decodifica y se describe en la nota
+  (duración, canales, comparación contra PPSSPP si el usuario aporta una grabación).
+
+### F16b — Audio en el juego: `sceAudio`, `sceSas` y `sceAtrac`
 
 - **Objetivo**: música, efectos y voces.
-- **Requisitos**: F13. La decisión sobre `KCEJ_SOUND2` (F03).
+- **Requisitos**: F13 y F16a.
 - **Tareas**:
-  - Canales de `sceAudio` a SDL3 audio, con resampling.
-  - `sceSas` portado de PPSSPP (voces, ADSR y efectos).
-  - `sceAtrac` con `at3_standalone`.
+  - Registrar los NIDs de `sceAudio`, `sceSasCore` y `sceAtrac3plus` sobre `mpo_audio`.
+  - Conectarlo con `KCEJ_SOUND2` recompilado y con el scheduler (hilos de audio).
 - **Criterios de hecho**: la música, los efectos y el codec suenan sin cortes. `audio_report` contra
   una grabación de referencia de PPSSPP queda dentro del umbral (las grabaciones quedan en local).
 
-### F17 — Video del título y fuentes
+### F17a — Decodificador de PMF y fuente PGF, autónomos (ola 2)
+
+- **Objetivo**: decodificar los PMF del disco y rasterizar `MGP.PGF`, sin el juego.
+- **Requisitos**: F16a (el audio de los PMF es ATRAC3plus).
+- **Tareas**:
+  - Demuxer de PMF/PSMF y un FFmpeg mínimo (LGPL, solo los decoders necesarios) que entregue frames
+    8888 y audio.
+  - Lector de PGF y rasterizador de glifos (PPSSPP `Core/Font/PGF.cpp` como referencia).
+  - Volcar frames y glifos a `analysis/f17a/` (fuera del repo).
+- **Criterios de hecho**: los 30 PMF se decodifican sin errores y los glifos de `MGP.PGF` se
+  renderizan; ambos quedan descritos en la nota.
+
+### F17b — Video del título y fuentes en el juego
 
 - **Objetivo**: que se reproduzca el video del título y que el texto use la fuente del juego.
-- **Requisitos**: F16.
+- **Requisitos**: F16b y F17a.
 - **Tareas**:
-  - `sceMpeg` y `scePsmf` con un FFmpeg mínimo (solo los decoders necesarios, LGPL).
+  - `sceMpeg` y `scePsmf` sobre el decodificador de F17a, en lugar del stub de F11b.
   - `sceFont` con `MGP.PGF` y las fuentes del sistema que pida el juego (si las pide, el usuario las
     aporta o se buscan alternativas libres).
 - **Criterios de hecho**: el video del título se reproduce con audio sincronizado y el texto del juego
@@ -447,7 +607,7 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 ### F18 — Savedata, OSK y diálogos
 
 - **Objetivo**: guardar y cargar partida, y poder escribir nombres y contraseñas.
-- **Requisitos**: F17.
+- **Requisitos**: F17b.
 - **Tareas**:
   - `sceUtilitySavedata` con todos los modos que use el juego (incluido **delete**, con cuidado del
     bug de PPSSPP #6600), cifrado de savedata si aplica y diálogos propios con ImGui.
@@ -472,14 +632,25 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Criterios de hecho**: la primera misión se completa en Windows y Linux, y una repetición grabada
   la reproduce de forma idéntica. **M5 cerrado.**
 
-### F20 — AP Scan virtual, red y GPS
+### F20a — Generador de APs virtuales, autónomo (ola 2)
+
+- **Objetivo**: tener el modelo de `sceNetApctl` para el AP Scan, sin el juego.
+- **Requisitos**: ninguno.
+- **Tareas**:
+  - Estudiar cómo implementa JPCSP `sceNetApctl` y qué evento espera MPO (PPSSPP #20703). Ubicar en
+    `mgp_main` (Ghidra, F03) el código del AP Scan y qué campos lee.
+  - Generador de APs virtuales con semilla configurable: BSSID y SSID estables, canal, señal y
+    seguridad, con respeto del cooldown.
+  - Máquina de estados del escaneo (eventos, `SCAN_COMPLETE`, lista de BSS) separada del HLE.
+- **Criterios de hecho**: tests deterministas del generador y de la máquina de estados, y la nota
+  documenta el contrato que espera MPO.
+
+### F20b — AP Scan, red y GPS en el juego
 
 - **Objetivo**: poder reclutar por AP Scan sin hardware de PSP.
-- **Requisitos**: F19.
+- **Requisitos**: F19 y F20a.
 - **Tareas**:
-  - Estudiar cómo implementa JPCSP `sceNetApctl` y qué evento espera MPO (PPSSPP #20703).
-  - HLE de `sceNetInit` y `sceNetApctl*`, con un generador de APs virtuales con semilla configurable
-    y respeto del cooldown.
+  - HLE de `sceNetInit` y `sceNetApctl*` sobre el modelo de F20a.
   - Opcional: escaneo real de Wi-Fi del sistema operativo.
   - Hacer que ad hoc e infraestructura respondan "sin red" de forma limpia.
   - Stub de `sceUsbGps` (no hay receptor).
@@ -488,7 +659,7 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 ### F21 — Partida completa y estabilidad
 
 - **Objetivo**: jugar de principio a fin.
-- **Requisitos**: F20.
+- **Requisitos**: F20b.
 - **Tareas**:
   - Recorrer el juego capítulo por capítulo, con una lista de bugs en `docs/sessions/`.
   - Atajos nativos (`register_native_fast_path`) para las funciones más usadas si hace falta.

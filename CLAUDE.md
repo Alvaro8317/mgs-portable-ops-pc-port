@@ -18,7 +18,9 @@ un **runtime HLE** que sustituye el sistema operativo y el hardware de la PSP.
   de cierre de la fase anterior en `docs/sessions/`. Después, comprobar los requisitos.
 - **Al terminar**: verificar los criterios de hecho con evidencia, escribir `docs/sessions/FXX.md`
   (a partir de `TEMPLATE.md`), actualizar el estado en `docs/PLAN.md` y hacer commit con `/commit`.
-- No se adelanta trabajo de fases futuras. Lo que se descubra se anota en la nota de sesión.
+- No se adelanta trabajo de fases futuras, salvo las fases autónomas (`FXXa`) de una **ola**, que se
+  hacen en paralelo, cada una en su worktree (ver "Trabajo en paralelo" en `docs/PLAN.md`). Lo que se
+  descubra se anota en la nota de sesión.
 
 ---
 
@@ -375,11 +377,18 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
    - se recompila como módulo residente, y su capa de Sony (`sceSasCore`, `sceAtrac3plus` y
      `sceAudio`) va por HLE;
    - la justificación está en `docs/analysis/mgp_main.md` §9.
+5. **Fibras: `minicoro`** (tomada el 2026-10-25):
+   - `edubart/minicoro`, un solo header y la misma API en Windows y Linux;
+   - deja reservar la pila de cada fibra de forma explícita, que es lo que pide la trampa de la pila
+     de §3;
+   - se descartó combinar la API Fibers de Win32 con `ucontext`, porque son dos implementaciones
+     distintas que mantener.
+6. **Trabajo en paralelo por olas** (tomada el 2026-10-25): las fases autónomas (`FXXa`) se hacen a
+   la vez, cada una en su worktree (ver `docs/PLAN.md`).
 
 ### Abiertas
 
-1. **Fibras**: con qué implementación se hacen los cambios de contexto en Windows y Linux (la API
-   Fibers de Win32 y `ucontext`, o una librería como `minicoro`). Se decide en M1.
+- Ninguna por ahora.
 
 ---
 
