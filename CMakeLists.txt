@@ -9,6 +9,9 @@ project(MpoPcPort VERSION 0.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# No C++20 modules here. Without this, try_compile checks (check_cxx_compiler_flag)
+# scan for modules under CMake >= 3.28 and fail when clang-scan-deps is missing.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # PSPRecomp only looks for profiles inside its own tree, so the root owns the
