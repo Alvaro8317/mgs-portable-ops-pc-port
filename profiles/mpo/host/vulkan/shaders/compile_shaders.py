@@ -35,8 +35,12 @@ WORDS_PER_LINE = 8
 
 
 def source_hash(path):
-  """Returns the SHA-256 (hex) of a shader source."""
-  return hashlib.sha256(path.read_bytes()).hexdigest()
+  """Returns the SHA-256 (hex) of a shader source, with LF line endings.
+
+  A Windows checkout (core.autocrlf) has CRLF sources; the hash recorded in the
+  .inc is of the LF text, so it must not depend on how git checked them out.
+  """
+  return hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest()
 
 
 def glslang_version(tool):
@@ -139,7 +143,7 @@ def main():
     return 2
   spirv = {name: compile_spirv(args.glslang, sources / name) for name, _ in SHADERS}
   text = render(sources, glslang_version(args.glslang), spirv)
-  (sources / OUTPUT).write_text(text)
+  (sources / OUTPUT).write_text(text, newline='\n')
   print(f'wrote {sources / OUTPUT}')
   return 0
 
