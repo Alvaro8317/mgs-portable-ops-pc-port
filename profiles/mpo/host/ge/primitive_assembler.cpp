@@ -139,21 +139,21 @@ void PrimitiveAssembler::AddTriangle(const VertexData &a, const VertexData &b,
     const BinCoords range = Range(a, b, c);
     if (range.Invalid()) return;
     ++stats_.triangles;
-    raster_.DrawTriangle(a, b, c, range, *state_);
+    backend_->DrawTriangle(a, b, c, range, *state_);
 }
 
 void PrimitiveAssembler::AddRect(const VertexData &v0, const VertexData &v1) {
     const BinCoords range = Range(v0, v1);
     if (range.Invalid()) return;
     ++stats_.rectangles;
-    raster_.DrawRectangle(v0, v1, range, *state_);
+    backend_->DrawRectangle(v0, v1, range, *state_);
 }
 
 void PrimitiveAssembler::AddLine(const VertexData &v0, const VertexData &v1) {
     const BinCoords range = Range(v0, v1);
     if (range.Invalid()) return;
     ++stats_.lines;
-    raster_.DrawLine(v0, v1, range, *state_);
+    backend_->DrawLine(v0, v1, range, *state_);
 }
 
 void PrimitiveAssembler::SendTriangle(int cull, const ClipVertexData *verts, int provoking) {
@@ -424,11 +424,11 @@ void PrimitiveAssembler::ProcessRect(const ClipVertexData &v0, const ClipVertexD
     if (RectangleCanUseSprite(v0.v, v1.v, *state_)) {
         if (range.Invalid()) return;
         ++stats_.sprites;
-        raster_.DrawSprite(v0.v, v1.v, range, *state_);
+        backend_->DrawSprite(v0.v, v1.v, range, *state_);
     } else if (gs_->IsModeClear() && !gs_->IsDitherEnabled()) {
         if (range.Invalid()) return;
         ++stats_.clear_rects;
-        raster_.ClearRectangle(v0.v, v1.v, range, *state_);
+        backend_->ClearRectangle(v0.v, v1.v, range, *state_);
     } else {
         AddRect(v0.v, v1.v);
     }
@@ -444,7 +444,7 @@ void PrimitiveAssembler::ProcessPoint(const ClipVertexData &v0) {
     range = Scissor(range);
     if (range.Invalid()) return;
     ++stats_.points;
-    raster_.DrawPoint(v0.v, range, *state_);
+    backend_->DrawPoint(v0.v, range, *state_);
 }
 
 void PrimitiveAssembler::ProcessLine(const ClipVertexData &v0, const ClipVertexData &v1) {
@@ -517,6 +517,7 @@ void PrimitiveAssembler::SubmitVertices(const GeState &gs, const RasterizerState
     scissor_.y1 = gs.ScissorY1() * kScreenScale;
     scissor_.x2 = std::min(gs.ScissorX2(), gs.RegionX2()) * kScreenScale + kScreenScale - 1;
     scissor_.y2 = std::min(gs.ScissorY2(), gs.RegionY2()) * kScreenScale + kScreenScale - 1;
+    backend_->BeginDraw(gs, state);
 
     if (prim_type != PrimType::kKeepPrevious) {
         data_index_ = 0;
