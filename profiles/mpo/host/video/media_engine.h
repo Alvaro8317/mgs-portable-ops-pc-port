@@ -66,8 +66,8 @@ struct MediaEngineStats {
     uint64_t videoDecodeErrors = 0;  // send/receive errors other than EAGAIN/EOF
     uint64_t audioFrames = 0;        // ATRAC3plus frames decoded
     uint64_t audioDecodeErrors = 0;
-    uint64_t audioInputDropped = 0;  // bytes the audio demuxer had no room for
-    uint64_t corruptFrames = 0;      // frames flagged AV_FRAME_FLAG_CORRUPT
+    uint64_t audioInputDropped = 0; // bytes the audio demuxer had no room for
+    uint64_t corruptFrames = 0;     // frames flagged AV_FRAME_FLAG_CORRUPT
 };
 
 class MediaEngine {
@@ -184,8 +184,8 @@ private:
     int m_lastAudioHeaderCode1 = -1;
     int m_audioChannels = 0;
 
-    uint64_t m_bytesReceived = 0;  // including the header
-    uint64_t m_expectedBytes = 0;  // streamOffset + streamSize, 0 if unknown
+    uint64_t m_bytesReceived = 0; // including the header
+    uint64_t m_expectedBytes = 0; // streamOffset + streamSize, 0 if unknown
     bool m_inputFinished = false;
     bool m_decoderDrained = false; // NULL packet sent
 

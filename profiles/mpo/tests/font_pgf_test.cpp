@@ -19,23 +19,23 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                                    \
-    do {                                                                               \
-        if (!(cond)) {                                                                 \
-            std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond); \
-            ++g_failures;                                                              \
-        }                                                                              \
+#define CHECK(cond)                                                                                \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond);          \
+            ++g_failures;                                                                          \
+        }                                                                                          \
     } while (0)
 
-#define CHECK_EQ(a, b)                                                                        \
-    do {                                                                                      \
-        const long long ca = static_cast<long long>(a);                                       \
-        const long long cb = static_cast<long long>(b);                                       \
-        if (ca != cb) {                                                                       \
-            std::fprintf(stderr, "%s:%d: CHECK_EQ failed: %s == %s (%lld vs %lld)\n", __FILE__, \
-                         __LINE__, #a, #b, ca, cb);                                           \
-            ++g_failures;                                                                     \
-        }                                                                                     \
+#define CHECK_EQ(a, b)                                                                             \
+    do {                                                                                           \
+        const long long ca = static_cast<long long>(a);                                            \
+        const long long cb = static_cast<long long>(b);                                            \
+        if (ca != cb) {                                                                            \
+            std::fprintf(stderr, "%s:%d: CHECK_EQ failed: %s == %s (%lld vs %lld)\n", __FILE__,    \
+                         __LINE__, #a, #b, ca, cb);                                                \
+            ++g_failures;                                                                          \
+        }                                                                                          \
     } while (0)
 
 // LSB-first bit writer: bit i is bit (i % 8) of byte i / 8, which is how
@@ -90,8 +90,8 @@ void putLiterals(Bits &b, const std::vector<int> &values) {
     }
 }
 
-void putGlyphHeader(Bits &b, int sizeField, int w, int h, int left, int top, int flags, int shadowFlags,
-                    int shadowId) {
+void putGlyphHeader(Bits &b, int sizeField, int w, int h, int left, int top, int flags,
+                    int shadowFlags, int shadowId) {
     b.put(static_cast<uint32_t>(sizeField), 14);
     b.put(static_cast<uint32_t>(w), 7);
     b.put(static_cast<uint32_t>(h), 7);
@@ -126,8 +126,8 @@ Font BuildFont(int revision) {
     h.vSize = 10 * 64;
     h.hResolution = 128 * 64;
     h.vResolution = 128 * 64;
-    std::strcpy(h.fontName, "Synthetic Sans");
-    std::strcpy(h.fontType, "Regular");
+    std::snprintf(h.fontName, sizeof(h.fontName), "%s", "Synthetic Sans");
+    std::snprintf(h.fontType, sizeof(h.fontType), "%s", "Regular");
     h.firstGlyph = 0x20;
     h.lastGlyph = 0x4F;
     h.maxAscender = 11 * 64;
@@ -227,14 +227,14 @@ Font BuildFont(int revision) {
     const size_t shadowOffset = (data.pos() - aStart) / 8;
     const size_t sStart = data.pos();
     data.put(0, 14);
-    data.put(2, 7); // w
-    data.put(2, 7); // h
+    data.put(2, 7);                                // w
+    data.put(2, 7);                                // h
     data.put(static_cast<uint32_t>(-1 & 0x7F), 7); // left
-    data.put(9, 7); // top
+    data.put(9, 7);                                // top
     data.seek(sStart + 40);
-    data.put(0, 2);         // (top bits 5..6, already zero)
-    data.put(0x4 >> 2, 2);  // nibble 4 (with the two bits above): repeat 5 times
-    data.put(0xC, 4);       // value 0xC
+    data.put(0, 2);        // (top bits 5..6, already zero)
+    data.put(0x4 >> 2, 2); // nibble 4 (with the two bits above): repeat 5 times
+    data.put(0xC, 4);      // value 0xC
     data.alignTo(4);
     {
         // Patch the size field of 'A' (14 bits at its start).
@@ -252,14 +252,14 @@ Font BuildFont(int revision) {
     // Glyph 'B': V rows, explicit metrics (flags 0x02), negative left/top.
     pointers.push_back(static_cast<uint32_t>(data.pos() / 32));
     putGlyphHeader(data, 0, 2, 3, -2, -3, 0x02, 0, 5);
-    data.put(2 * 64, 32);  // dimensionWidth
-    data.put(3 * 64, 32);  // dimensionHeight
+    data.put(2 * 64, 32);                      // dimensionWidth
+    data.put(3 * 64, 32);                      // dimensionHeight
     data.put(static_cast<uint32_t>(-128), 32); // xAdjustH
-    data.put(7, 32);       // xAdjustV
+    data.put(7, 32);                           // xAdjustV
     data.put(static_cast<uint32_t>(-192), 32); // yAdjustH
-    data.put(8, 32);       // yAdjustV
-    data.put(5 * 64, 32);  // advanceH
-    data.put(9 * 64, 32);  // advanceV
+    data.put(8, 32);                           // yAdjustV
+    data.put(5 * 64, 32);                      // advanceH
+    data.put(9 * 64, 32);                      // advanceV
     // Column-major: column 0 = 1 3 5, column 1 = 2 4 6.
     putLiterals(data, {1, 3, 5, 2, 4, 6});
     data.alignTo(4);
@@ -410,11 +410,11 @@ void TestDraw() {
             CHECK_EQ(buf[static_cast<size_t>((y + 1) * 8 + x + 2)], kGlyphA[y][x] * 0x11);
         }
     }
-    CHECK_EQ(buf[0], 0x11);         // untouched outside the glyph
+    CHECK_EQ(buf[0], 0x11); // untouched outside the glyph
     CHECK_EQ(buf[1 * 8 + 6], 0x11);
 
     // Clip to a 2x2 window.
-    std::fill(buf.begin(), buf.end(), 0x11);
+    std::fill(buf.begin(), buf.end(), uint8_t{0x11});
     pgf.DrawCharacter(img, buf, 3, 2, 2, 2, 'A', '?', FONT_PGF_CHARGLYPH);
     CHECK_EQ(buf[2 * 8 + 3], kGlyphA[1][1] * 0x11);
     CHECK_EQ(buf[3 * 8 + 4], kGlyphA[2][2] * 0x11);
@@ -424,7 +424,7 @@ void TestDraw() {
     // Subpixel position: blend of the four neighbours, as upstream.
     img.xPos64 = 2 * 64 + 16;
     img.yPos64 = 1 * 64 + 32;
-    std::fill(buf.begin(), buf.end(), 0);
+    std::fill(buf.begin(), buf.end(), uint8_t{0});
     pgf.DrawCharacter(img, buf, -1, -1, -1, -1, 'A', '?', FONT_PGF_CHARGLYPH);
     auto sample = [](int x, int y) -> uint32_t {
         if (x < 0 || y < 0 || x >= 4 || y >= 3) {
@@ -499,7 +499,7 @@ void TestDraw() {
     img.bufWidth = 8;
     img.bufHeight = 6;
     img.bytesPerLine = 8;
-    std::fill(buf.begin(), buf.end(), 0x11);
+    std::fill(buf.begin(), buf.end(), uint8_t{0x11});
     pgf.DrawCharacter(img, buf, -1, -1, -1, -1, 0x10, 'A', FONT_PGF_CHARGLYPH);
     CHECK_EQ(buf[1], 0x11);
     // Unmapped: the alternate is drawn.

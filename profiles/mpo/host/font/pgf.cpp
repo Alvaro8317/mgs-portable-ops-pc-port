@@ -16,9 +16,9 @@ namespace {
 // These fonts, created by ttf2pgf, don't have complete glyph info and need
 // to be identified.
 bool isJPCSPFont(const char *fontName) {
-    return !std::strcmp(fontName, "Liberation Sans") || !std::strcmp(fontName, "Liberation Serif") ||
-           !std::strcmp(fontName, "Sazanami") || !std::strcmp(fontName, "UnDotum") ||
-           !std::strcmp(fontName, "Microsoft YaHei");
+    return !std::strcmp(fontName, "Liberation Sans") ||
+           !std::strcmp(fontName, "Liberation Serif") || !std::strcmp(fontName, "Sazanami") ||
+           !std::strcmp(fontName, "UnDotum") || !std::strcmp(fontName, "Microsoft YaHei");
 }
 
 uint32_t readWord(const uint8_t *buf, size_t size, size_t wordpos) {
@@ -118,13 +118,14 @@ bool Pgf::ReadPtr(const uint8_t *ptr, size_t dataSize) {
     }
 
     // Four tables of (u32, u32) pairs.
-    const size_t pairTables = static_cast<size_t>(header_.dimTableLength) + header_.xAdjustTableLength +
-                              header_.yAdjustTableLength + header_.advanceTableLength;
+    const size_t pairTables = static_cast<size_t>(header_.dimTableLength) +
+                              header_.xAdjustTableLength + header_.yAdjustTableLength +
+                              header_.advanceTableLength;
     if (!fits(ptr, pairTables * 8)) {
         *this = Pgf{};
         return false;
     }
-    auto readPairs = [&ptr](std::vector<int> (&table)[2], int length) {
+    auto readPairs = [&ptr](std::vector<int>(&table)[2], int length) {
         table[0].resize(static_cast<size_t>(length));
         table[1].resize(static_cast<size_t>(length));
         for (int i = 0; i < length; i++) {
@@ -142,7 +143,8 @@ bool Pgf::ReadPtr(const uint8_t *ptr, size_t dataSize) {
     readPairs(yAdjustTable_, header_.yAdjustTableLength);
     readPairs(advanceTable_, header_.advanceTableLength);
 
-    const size_t shadowCharMapSize = packedTableBytes(header_.shadowMapLength, header_.shadowMapBpe);
+    const size_t shadowCharMapSize =
+        packedTableBytes(header_.shadowMapLength, header_.shadowMapBpe);
     if (!fits(ptr, shadowCharMapSize)) {
         *this = Pgf{};
         return false;
@@ -155,14 +157,14 @@ bool Pgf::ReadPtr(const uint8_t *ptr, size_t dataSize) {
     }
 
     if (header_.revision == 3) {
-        const size_t compBytes =
-            (static_cast<size_t>(rev3extra_.compCharMapLength1) +
-             static_cast<size_t>(rev3extra_.compCharMapLength2)) * 4;
+        const size_t compBytes = (static_cast<size_t>(rev3extra_.compCharMapLength1) +
+                                  static_cast<size_t>(rev3extra_.compCharMapLength2)) *
+                                 4;
         if (!fits(ptr, compBytes)) {
             *this = Pgf{};
             return false;
         }
-        auto readU16Pairs = [&ptr](std::vector<int> (&table)[2], int length) {
+        auto readU16Pairs = [&ptr](std::vector<int>(&table)[2], int length) {
             table[0].resize(static_cast<size_t>(length));
             table[1].resize(static_cast<size_t>(length));
             for (int i = 0; i < length; i++) {
@@ -187,7 +189,8 @@ bool Pgf::ReadPtr(const uint8_t *ptr, size_t dataSize) {
     const uint8_t *charMap = ptr;
     ptr += charMapSize;
 
-    const size_t charPointerSize = packedTableBytes(header_.charPointerLength, header_.charPointerBpe);
+    const size_t charPointerSize =
+        packedTableBytes(header_.charPointerLength, header_.charPointerBpe);
     if (!fits(ptr, charPointerSize)) {
         *this = Pgf{};
         return false;
@@ -211,8 +214,9 @@ bool Pgf::ReadPtr(const uint8_t *ptr, size_t dataSize) {
     // Parse out the char map (array where each entry is an irregular number
     // of bits). BPE = bits per entry, I think.
     for (int i = 0; i < header_.charMapLength; i++) {
-        int v = static_cast<int>(PgfGetBits(charMap, charMapSize, header_.charMapBpe,
-                                            static_cast<size_t>(i) * static_cast<size_t>(header_.charMapBpe)));
+        int v = static_cast<int>(
+            PgfGetBits(charMap, charMapSize, header_.charMapBpe,
+                       static_cast<size_t>(i) * static_cast<size_t>(header_.charMapBpe)));
         // This check seems a little odd.
         if (v < 0 || static_cast<size_t>(v) >= glyphs_.size()) {
             v = 65535;
@@ -239,7 +243,8 @@ bool Pgf::ReadPtr(const uint8_t *ptr, size_t dataSize) {
             const size_t charId = static_cast<size_t>(shadowMap[shadowId]);
             if (charId < shadowGlyphs_.size()) {
                 // TODO (upstream): check for pre existing shadow glyph
-                ReadShadowGlyph(static_cast<size_t>(static_cast<uint32_t>(charPointers[charId])) * 4 * 8,
+                ReadShadowGlyph(static_cast<size_t>(static_cast<uint32_t>(charPointers[charId])) *
+                                    4 * 8,
                                 shadowGlyphs_[charId]);
             }
         }
@@ -270,7 +275,8 @@ bool Pgf::GetCharInfo(int charCode, PgfCharInfo *charInfo, int altCharCode, int 
     charInfo->sfp26Ascender = glyph.yAdjustH;
     // Font y goes upwards.  If top is 10 and height is 11, the descender is
     // approx. -1 (below 0.)
-    charInfo->sfp26Descender = charInfo->sfp26Ascender - static_cast<int32_t>(charInfo->sfp26Height);
+    charInfo->sfp26Descender =
+        charInfo->sfp26Ascender - static_cast<int32_t>(charInfo->sfp26Height);
     charInfo->sfp26BearingHX = glyph.xAdjustH;
     charInfo->sfp26BearingHY = glyph.yAdjustH;
     charInfo->sfp26BearingVX = glyph.xAdjustV;
@@ -500,7 +506,8 @@ bool Pgf::DecodeGlyphPixels(const Glyph &glyph, std::vector<uint8_t> *decodedPix
             if (nibble >= 8) {
                 value = static_cast<int>(consumeBits(4, bitPtr));
             }
-            (*decodedPixels)[static_cast<size_t>(pixelIndex++)] = static_cast<uint8_t>(value | (value << 4));
+            (*decodedPixels)[static_cast<size_t>(pixelIndex++)] =
+                static_cast<uint8_t>(value | (value << 4));
         }
     }
     return true;
@@ -606,8 +613,10 @@ void Pgf::DrawCharacter(const GlyphImage &image, std::span<uint8_t> buffer, int 
         for (int yy = renderY1; yy < renderY2; ++yy) {
             for (int xx = renderX1; xx < renderX2; ++xx) {
                 // First, blend horizontally.  Tests show we blend swizzled to 8 bit.
-                const uint32_t horiz1 = samplePixel(xx - 1, yy - 1) * xf + samplePixel(xx, yy - 1) * (64 - xf);
-                const uint32_t horiz2 = samplePixel(xx - 1, yy + 0) * xf + samplePixel(xx, yy + 0) * (64 - xf);
+                const uint32_t horiz1 =
+                    samplePixel(xx - 1, yy - 1) * xf + samplePixel(xx, yy - 1) * (64 - xf);
+                const uint32_t horiz2 =
+                    samplePixel(xx - 1, yy + 0) * xf + samplePixel(xx, yy + 0) * (64 - xf);
                 // Now blend those together vertically.
                 const uint32_t blended = horiz1 * yf + horiz2 * (64 - yf);
 
@@ -620,8 +629,8 @@ void Pgf::DrawCharacter(const GlyphImage &image, std::span<uint8_t> buffer, int 
     }
 }
 
-void Pgf::SetFontPixel(std::span<uint8_t> buffer, int bpl, int bufWidth, int bufHeight, int x, int y,
-                       uint8_t pixelColor, uint32_t pixelformat) const {
+void Pgf::SetFontPixel(std::span<uint8_t> buffer, int bpl, int bufWidth, int bufHeight, int x,
+                       int y, uint8_t pixelColor, uint32_t pixelformat) const {
     if (x < 0 || x >= bufWidth || y < 0 || y >= bufHeight) {
         return;
     }

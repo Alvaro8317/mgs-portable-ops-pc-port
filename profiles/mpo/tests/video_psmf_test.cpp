@@ -58,8 +58,9 @@ SyntheticFile MakeFile(uint8_t audioCode1 = 0x28) {
     const std::vector<uint8_t> ps = BuildProgramStream(payloads);
     const std::vector<EpEntry> ep = {{0, 1, static_cast<uint32_t>(kFirstTs), 0},
                                      {0, 2, static_cast<uint32_t>(kFirstTs + 6006), 4096}};
-    f.bytes = BuildPsmfHeader(static_cast<uint32_t>(ps.size()), kFirstTs, kFirstTs + 3 * 3003,
-                              {{0xE0, 0, 480, 272, 2}, {0xBD, 0, 0, 0, 2}, {0xE1, 0, 480, 272, 2}}, ep);
+    f.bytes =
+        BuildPsmfHeader(static_cast<uint32_t>(ps.size()), kFirstTs, kFirstTs + 3 * 3003,
+                        {{0xE0, 0, 480, 272, 2}, {0xBD, 0, 0, 0, 2}, {0xE1, 0, 480, 272, 2}}, ep);
     f.bytes.insert(f.bytes.end(), ps.begin(), ps.end());
     return f;
 }
@@ -103,13 +104,15 @@ void TestHeader() {
     VT_CHECK_EQ(h.streams[0].channel, 2);
 
     // Errors.
-    VT_CHECK(ParsePsmfHeader(std::span<const uint8_t>(f.bytes.data(), 0x81), &h) == PsmfError::TooSmall);
+    VT_CHECK(ParsePsmfHeader(std::span<const uint8_t>(f.bytes.data(), 0x81), &h) ==
+             PsmfError::TooSmall);
     std::vector<uint8_t> bad = f.bytes;
     bad[0] = 'X';
     VT_CHECK(ParsePsmfHeader(bad, &h) == PsmfError::BadMagic);
     std::vector<uint8_t> many = f.bytes;
     many[0x80] = 0xFF; // 65280+ streams cannot fit
-    VT_CHECK(ParsePsmfHeader(std::span<const uint8_t>(many.data(), 0x800), &h) == PsmfError::BadStreamCount);
+    VT_CHECK(ParsePsmfHeader(std::span<const uint8_t>(many.data(), 0x800), &h) ==
+             PsmfError::BadStreamCount);
     // An EP map that runs past the buffer is cut to the entries that fit.
     // (The map comes from the last video stream entry, here 0xE1.)
     std::vector<uint8_t> ep = f.bytes;
@@ -176,7 +179,7 @@ void TestDemux() {
     const SyntheticFile f = MakeFile();
     CheckDemux(f, f.bytes.size(), "whole");
     CheckDemux(f, 2048, "packets");
-    CheckDemux(f, 7, "7-byte chunks");     // start codes split across chunks
+    CheckDemux(f, 7, "7-byte chunks"); // start codes split across chunks
     CheckDemux(f, 333, "333-byte chunks");
 
     // Header offset larger than the first chunk: the skip carries over.
@@ -331,7 +334,8 @@ void TestMediaEngineAudio(uint8_t code1, int expectChannels) {
     VT_CHECK_EQ(createdCodec, 0x1000u);
     VT_CHECK_EQ(decoded.size(), f.audioFrames.size());
     for (size_t i = 0; i < decoded.size() && i < f.audioFrames.size(); ++i) {
-        VT_CHECK(decoded[i] == std::vector<uint8_t>(f.audioFrames[i].begin() + 8, f.audioFrames[i].end()));
+        VT_CHECK(decoded[i] ==
+                 std::vector<uint8_t>(f.audioFrames[i].begin() + 8, f.audioFrames[i].end()));
     }
     // A too-small output buffer still consumes the frame (upstream logs it).
     VT_CHECK(engine.loadStream(f.bytes.data(), 2048, 64 * 2048));

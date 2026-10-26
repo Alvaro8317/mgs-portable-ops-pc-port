@@ -114,8 +114,10 @@ PsmfError ParsePsmfHeader(std::span<const uint8_t> data, PsmfHeader *out) {
     h.streamOffset = ReadU32BE(&ptr[PSMF_STREAM_OFFSET_OFFSET]);
     h.streamSize = ReadU32BE(&ptr[PSMF_STREAM_SIZE_OFFSET]);
     h.streamDataTotalSize = ReadU32BE(&ptr[0x50]);
-    h.presentationStartTime = static_cast<uint32_t>(GetMpegTimeStamp(ptr + PSMF_FIRST_TIMESTAMP_OFFSET));
-    h.presentationEndTime = static_cast<uint32_t>(GetMpegTimeStamp(ptr + PSMF_LAST_TIMESTAMP_OFFSET));
+    h.presentationStartTime =
+        static_cast<uint32_t>(GetMpegTimeStamp(ptr + PSMF_FIRST_TIMESTAMP_OFFSET));
+    h.presentationEndTime =
+        static_cast<uint32_t>(GetMpegTimeStamp(ptr + PSMF_LAST_TIMESTAMP_OFFSET));
     h.streamDataNextBlockSize = ReadU32BE(&ptr[0x6A]);
     h.streamDataNextInnerBlockSize = ReadU32BE(&ptr[0x7C]);
     h.numStreams = ReadU16BE(&ptr[PSMF_STREAM_TABLE_OFFSET]);

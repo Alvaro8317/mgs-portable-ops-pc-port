@@ -18,24 +18,24 @@ namespace mpo::video::test {
 
 inline int g_failures = 0;
 
-#define VT_CHECK(cond)                                                                  \
-    do {                                                                                \
-        if (!(cond)) {                                                                  \
-            std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond); \
-            ++mpo::video::test::g_failures;                                             \
-        }                                                                               \
+#define VT_CHECK(cond)                                                                             \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond);          \
+            ++mpo::video::test::g_failures;                                                        \
+        }                                                                                          \
     } while (0)
 
-#define VT_CHECK_EQ(a, b)                                                                     \
-    do {                                                                                      \
-        const auto vt_a = (a);                                                                \
-        const auto vt_b = (b);                                                                \
-        if (!(vt_a == vt_b)) {                                                                \
-            std::fprintf(stderr, "%s:%d: CHECK_EQ failed: %s == %s (%lld vs %lld)\n", __FILE__, \
-                         __LINE__, #a, #b, static_cast<long long>(vt_a),                      \
-                         static_cast<long long>(vt_b));                                       \
-            ++mpo::video::test::g_failures;                                                   \
-        }                                                                                     \
+#define VT_CHECK_EQ(a, b)                                                                          \
+    do {                                                                                           \
+        const auto vt_a = (a);                                                                     \
+        const auto vt_b = (b);                                                                     \
+        if (!(vt_a == vt_b)) {                                                                     \
+            std::fprintf(stderr, "%s:%d: CHECK_EQ failed: %s == %s (%lld vs %lld)\n", __FILE__,    \
+                         __LINE__, #a, #b, static_cast<long long>(vt_a),                           \
+                         static_cast<long long>(vt_b));                                            \
+            ++mpo::video::test::g_failures;                                                        \
+        }                                                                                          \
     } while (0)
 
 inline void PutU32BE(std::vector<uint8_t> &v, size_t off, uint32_t x) {
@@ -54,11 +54,11 @@ inline void PutTs(std::vector<uint8_t> &v, size_t off, int64_t ts) {
 }
 
 struct PsmfStreamSpec {
-    int streamId = 0xE0;  // 0xE0..0xEF video, 0xBD audio
-    int privateId = 0;    // audio: channel (low nibble), 0x00 = ATRAC3plus
-    int width = 480;      // video
+    int streamId = 0xE0; // 0xE0..0xEF video, 0xBD audio
+    int privateId = 0;   // audio: channel (low nibble), 0x00 = ATRAC3plus
+    int width = 480;     // video
     int height = 272;
-    int channels = 2;     // audio
+    int channels = 2; // audio
     uint32_t epMapOffset = 0;
     uint32_t epMapEntries = 0;
 };
@@ -119,9 +119,9 @@ inline std::vector<uint8_t> BuildPsmfHeader(uint32_t streamSize, int64_t firstTs
 
 // One elementary-stream payload to put in PES packets.
 struct EsPayload {
-    int streamId = 0xE0;       // 0xE0.. or 0xBD
-    int audioChannel = 0;      // private stream 1 channel byte
-    int64_t pts = -1;          // -1: no PTS
+    int streamId = 0xE0;  // 0xE0.. or 0xBD
+    int audioChannel = 0; // private stream 1 channel byte
+    int64_t pts = -1;     // -1: no PTS
     std::vector<uint8_t> data;
 };
 
@@ -239,7 +239,9 @@ public:
         bits(0, len);
         bits(x, len + 1);
     }
-    void se(int32_t v) { ue(v <= 0 ? static_cast<uint32_t>(-2 * v) : static_cast<uint32_t>(2 * v - 1)); }
+    void se(int32_t v) {
+        ue(v <= 0 ? static_cast<uint32_t>(-2 * v) : static_cast<uint32_t>(2 * v - 1));
+    }
     bool aligned() const { return n_ == 0; }
     void alignZero() {
         while (n_ != 0) {
@@ -259,7 +261,8 @@ private:
 };
 
 // Start code + NAL header + RBSP with emulation prevention.
-inline void AppendNal(std::vector<uint8_t> &out, int refIdc, int type, const std::vector<uint8_t> &rbsp) {
+inline void AppendNal(std::vector<uint8_t> &out, int refIdc, int type,
+                      const std::vector<uint8_t> &rbsp) {
     out.insert(out.end(), {0x00, 0x00, 0x00, 0x01});
     out.push_back(static_cast<uint8_t>((refIdc << 5) | type));
     int zeros = 0;
@@ -302,28 +305,28 @@ inline std::vector<uint8_t> MakePcmAccessUnit(int mbW, int mbH, const std::vecto
         AppendNal(au, 3, 7, sps.bytes());
 
         BitWriter pps;
-        pps.ue(0);   // pic_parameter_set_id
-        pps.ue(0);   // seq_parameter_set_id
-        pps.bit(0);  // entropy_coding_mode_flag (CAVLC)
-        pps.bit(0);  // bottom_field_pic_order_in_frame_present_flag
-        pps.ue(0);   // num_slice_groups_minus1
-        pps.ue(0);   // num_ref_idx_l0_default_active_minus1
-        pps.ue(0);   // num_ref_idx_l1_default_active_minus1
-        pps.bit(0);  // weighted_pred_flag
+        pps.ue(0);      // pic_parameter_set_id
+        pps.ue(0);      // seq_parameter_set_id
+        pps.bit(0);     // entropy_coding_mode_flag (CAVLC)
+        pps.bit(0);     // bottom_field_pic_order_in_frame_present_flag
+        pps.ue(0);      // num_slice_groups_minus1
+        pps.ue(0);      // num_ref_idx_l0_default_active_minus1
+        pps.ue(0);      // num_ref_idx_l1_default_active_minus1
+        pps.bit(0);     // weighted_pred_flag
         pps.bits(0, 2); // weighted_bipred_idc
-        pps.se(0);   // pic_init_qp_minus26
-        pps.se(0);   // pic_init_qs_minus26
-        pps.se(0);   // chroma_qp_index_offset
-        pps.bit(1);  // deblocking_filter_control_present_flag
-        pps.bit(0);  // constrained_intra_pred_flag
-        pps.bit(0);  // redundant_pic_cnt_present_flag
+        pps.se(0);      // pic_init_qp_minus26
+        pps.se(0);      // pic_init_qs_minus26
+        pps.se(0);      // chroma_qp_index_offset
+        pps.bit(1);     // deblocking_filter_control_present_flag
+        pps.bit(0);     // constrained_intra_pred_flag
+        pps.bit(0);     // redundant_pic_cnt_present_flag
         pps.trailing();
         AppendNal(au, 3, 8, pps.bytes());
     }
     BitWriter s;
-    s.ue(0);  // first_mb_in_slice
-    s.ue(7);  // slice_type: I (all slices)
-    s.ue(0);  // pic_parameter_set_id
+    s.ue(0);      // first_mb_in_slice
+    s.ue(7);      // slice_type: I (all slices)
+    s.ue(0);      // pic_parameter_set_id
     s.bits(0, 4); // frame_num (log2_max_frame_num = 4)
     s.ue(static_cast<uint32_t>(idrPicId));
     s.bit(0); // no_output_of_prior_pics_flag

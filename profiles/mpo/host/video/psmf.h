@@ -103,7 +103,7 @@ struct PsmfHeader {
 
 enum class PsmfError {
     None,
-    TooSmall,      // buffer shorter than the fixed header
+    TooSmall, // buffer shorter than the fixed header
     BadMagic,
     BadStreamCount // the stream table does not fit in the buffer
 };

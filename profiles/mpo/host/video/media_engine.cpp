@@ -128,8 +128,8 @@ struct MediaEngine::Codec {
     int swsSrcH = 0;
     int swsSrcFmt = -1;
     bool frameValid = false; // `frame` holds the last decoded picture
-    VideoChunk chunk; // data padded with AV_INPUT_BUFFER_PADDING_SIZE zeros
-    size_t chunkLen = 0; // payload bytes in `chunk`
+    VideoChunk chunk;        // data padded with AV_INPUT_BUFFER_PADDING_SIZE zeros
+    size_t chunkLen = 0;     // payload bytes in `chunk`
     size_t chunkPos = 0;
     bool chunkPtsUsed = false;
     bool parserFlushed = false;
@@ -227,7 +227,8 @@ bool MediaEngine::loadStream(const uint8_t *buffer, int readSize, int ringbuffer
     const int mpegoffset = static_cast<int>(ReadU32BE(buffer + PSMF_STREAM_OFFSET_OFFSET));
     m_demux = std::make_unique<MpegDemux>(ringbufferSize + 2048, mpegoffset);
     m_videoDemux = std::make_unique<MpegDemux>(ringbufferSize + 2048, mpegoffset);
-    if (!m_demux->addStreamData(buffer, readSize) || !m_videoDemux->addStreamData(buffer, readSize)) {
+    if (!m_demux->addStreamData(buffer, readSize) ||
+        !m_videoDemux->addStreamData(buffer, readSize)) {
         m_demux.reset();
         m_videoDemux.reset();
         return false;
@@ -393,11 +394,10 @@ void MediaEngine::updateSwsFormat(int videoPixelMode) {
         m_codec->swsSrcW = f->width;
         m_codec->swsSrcH = f->height;
         m_codec->swsSrcFmt = f->format;
-        m_codec->sws = sws_getCachedContext(m_codec->sws, f->width, f->height,
-                                            static_cast<AVPixelFormat>(f->format), m_desWidth,
-                                            m_desHeight, swsDesired,
-                                            SWS_BILINEAR | SWS_ACCURATE_RND | SWS_BITEXACT,
-                                            nullptr, nullptr, nullptr);
+        m_codec->sws = sws_getCachedContext(
+            m_codec->sws, f->width, f->height, static_cast<AVPixelFormat>(f->format), m_desWidth,
+            m_desHeight, swsDesired, SWS_BILINEAR | SWS_ACCURATE_RND | SWS_BITEXACT, nullptr,
+            nullptr, nullptr);
         if (!m_codec->sws) {
             return;
         }
@@ -479,9 +479,9 @@ bool MediaEngine::nextVideoPacket() {
                 c.chunkPtsUsed = true;
             }
             const int remaining = static_cast<int>(c.chunkLen - c.chunkPos);
-            const int len = av_parser_parse2(c.parser, c.ctx, &out, &outSize,
-                                             c.chunk.data.data() + c.chunkPos, remaining, pts,
-                                             dts, 0);
+            const int len =
+                av_parser_parse2(c.parser, c.ctx, &out, &outSize, c.chunk.data.data() + c.chunkPos,
+                                 remaining, pts, dts, 0);
             if (len <= 0 && outSize <= 0) {
                 c.chunkPos = c.chunkLen;
             } else if (len > 0) {
@@ -572,9 +572,10 @@ bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
                 updateSwsFormat(videoPixelMode);
                 if (m_codec->sws) {
                     uint8_t *dstData[4] = {m_buffer.data(), nullptr, nullptr, nullptr};
-                    int dstLinesize[4] = {VideoPixelModeBytes(videoPixelMode) * m_desWidth, 0, 0, 0};
-                    sws_scale(c.sws, c.lastFrame->data, c.lastFrame->linesize, 0, c.lastFrame->height, dstData,
-                              dstLinesize);
+                    int dstLinesize[4] = {VideoPixelModeBytes(videoPixelMode) * m_desWidth, 0, 0,
+                                          0};
+                    sws_scale(c.sws, c.lastFrame->data, c.lastFrame->linesize, 0,
+                              c.lastFrame->height, dstData, dstLinesize);
                     m_lastPixelMode = videoPixelMode;
                     m_haveFrame = true;
                 }
@@ -691,9 +692,10 @@ int MediaEngine::writeVideoImageWithRange(std::span<uint8_t> dest, bool swizzle,
         imgbuf = swizzleTemp.data();
     }
     const int bpp = VideoPixelModeBytes(videoPixelMode);
-    const uint8_t *data = m_buffer.data() +
-                          (static_cast<size_t>(ypos) * static_cast<size_t>(m_desWidth) +
-                           static_cast<size_t>(xpos)) * static_cast<size_t>(bpp);
+    const uint8_t *data =
+        m_buffer.data() +
+        (static_cast<size_t>(ypos) * static_cast<size_t>(m_desWidth) + static_cast<size_t>(xpos)) *
+            static_cast<size_t>(bpp);
     for (int y = 0; y < height; y++) {
         writeVideoLine(imgbuf + static_cast<size_t>(videoLineSize) * static_cast<size_t>(y), data,
                        width, videoPixelMode);
@@ -769,7 +771,8 @@ int MediaEngine::getAudioSamples(std::span<int16_t> out) {
     if (m_audioContext) {
         int outSamples = 0;
         int inbytesConsumed = 0;
-        if (!m_audioContext->Decode(audioFrame, frameSize, &inbytesConsumed, 2, buffer, &outSamples)) {
+        if (!m_audioContext->Decode(audioFrame, frameSize, &inbytesConsumed, 2, buffer,
+                                    &outSamples)) {
             m_stats.audioDecodeErrors++;
         } else {
             m_stats.audioFrames++;

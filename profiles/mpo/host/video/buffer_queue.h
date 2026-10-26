@@ -52,7 +52,8 @@ public:
         } else {
             const int firstSize = bufQueueSize_ - end_;
             std::memcpy(bufQueue_.data() + end_, buf, static_cast<size_t>(firstSize));
-            std::memcpy(bufQueue_.data(), buf + firstSize, static_cast<size_t>(addsize - firstSize));
+            std::memcpy(bufQueue_.data(), buf + firstSize,
+                        static_cast<size_t>(addsize - firstSize));
             end_ = addsize - firstSize;
         }
         filled_ += addsize;
@@ -77,7 +78,8 @@ public:
                 std::memcpy(buf, bufQueue_.data() + start_, static_cast<size_t>(bytesgot));
             } else {
                 std::memcpy(buf, bufQueue_.data() + start_, static_cast<size_t>(firstSize));
-                std::memcpy(buf + firstSize, bufQueue_.data(), static_cast<size_t>(bytesgot - firstSize));
+                std::memcpy(buf + firstSize, bufQueue_.data(),
+                            static_cast<size_t>(bytesgot - firstSize));
             }
         }
         if (bytesgot <= firstSize) {
@@ -106,7 +108,8 @@ public:
             std::memcpy(buf, bufQueue_.data() + start_, static_cast<size_t>(bytesgot));
         } else {
             std::memcpy(buf, bufQueue_.data() + start_, static_cast<size_t>(firstSize));
-            std::memcpy(buf + firstSize, bufQueue_.data(), static_cast<size_t>(bytesgot - firstSize));
+            std::memcpy(buf + firstSize, bufQueue_.data(),
+                        static_cast<size_t>(bytesgot - firstSize));
         }
         return bytesgot;
     }
@@ -136,7 +139,8 @@ private:
         // If it wraps around, we have to look at the other half too.
         if (start_ + packetSize > bufQueueSize_) {
             earliest = ptsMarks_.begin();
-            latest = ptsMarks_.lower_bound(static_cast<uint32_t>(start_ + packetSize - bufQueueSize_));
+            latest =
+                ptsMarks_.lower_bound(static_cast<uint32_t>(start_ + packetSize - bufQueueSize_));
             // This also clears the range, so we always call on wrap.
             const int64_t latePts = findPts(earliest, latest);
             if (pts == 0) {

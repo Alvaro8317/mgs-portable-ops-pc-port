@@ -117,7 +117,8 @@ int main(int argc, char **argv) {
     int maxH = 1;
     int maxTop = 0;
     int maxBelow = 0;
-    for (int c = h.firstGlyph; c <= h.lastGlyph && static_cast<int>(chars.size()) < maxGlyphs; ++c) {
+    for (int c = h.firstGlyph; c <= h.lastGlyph && static_cast<int>(chars.size()) < maxGlyphs;
+         ++c) {
         if (!pgf.HasGlyph(c)) {
             continue;
         }
@@ -178,7 +179,8 @@ int main(int argc, char **argv) {
         }
         image.xPos64 = pen64 + static_cast<int32_t>(ci.bitmapLeft) * 64;
         image.yPos64 = (pad + maxTop - static_cast<int32_t>(ci.bitmapTop)) * 64;
-        pgf.DrawCharacter(image, canvas, 0, 0, width, sampleH, c, '?', mpo::font::FONT_PGF_CHARGLYPH);
+        pgf.DrawCharacter(image, canvas, 0, 0, width, sampleH, c, '?',
+                          mpo::font::FONT_PGF_CHARGLYPH);
         pen64 += ci.sfp26AdvanceH;
     }
 
@@ -193,7 +195,8 @@ int main(int argc, char **argv) {
         image.xPos64 = (cellX + pad + std::max(static_cast<int32_t>(ci.bitmapLeft), 0)) * 64;
         image.yPos64 = (cellY + pad + maxTop - static_cast<int32_t>(ci.bitmapTop)) * 64;
         // Clip to the cell.
-        pgf.DrawCharacter(image, canvas, cellX, cellY, cellW, cellH, c, 0, mpo::font::FONT_PGF_CHARGLYPH);
+        pgf.DrawCharacter(image, canvas, cellX, cellY, cellW, cellH, c, 0,
+                          mpo::font::FONT_PGF_CHARGLYPH);
     }
 
     int inked = 0;
@@ -208,7 +211,8 @@ int main(int argc, char **argv) {
         png.rgba.resize(canvas.size() * 4);
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
-                const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
+                const size_t idx =
+                    static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
                 uint8_t bg = 255;
                 if (y >= sampleH && ((x % cellW) == 0 || ((y - sampleH) % cellH) == 0)) {
                     bg = 220;
@@ -235,7 +239,7 @@ int main(int argc, char **argv) {
                 h.fontName, h.fontType, h.revision, h.version, h.bpp, h.hSize / 64, h.vSize / 64,
                 h.hResolution / 64, h.vResolution / 64, pgf.glyphCount(), h.firstGlyph, h.lastGlyph,
                 h.charMapLength, chars.size(), undecodable, info.maxGlyphWidth, info.maxGlyphHeight,
-                static_cast<double>(info.maxGlyphAscenderF), static_cast<double>(info.maxGlyphDescenderF),
-                width, height, inked);
+                static_cast<double>(info.maxGlyphAscenderF),
+                static_cast<double>(info.maxGlyphDescenderF), width, height, inked);
     return ok ? 0 : 1;
 }

@@ -258,21 +258,35 @@ bool MpegDemux::demux(int audioChannel, int videoStreamId, bool stopAfterVideo) 
             }
             stats_.audioPackets++;
             if (wantAudio) {
-                m_audioChannel = demuxStream(true, static_cast<int>(startCode), length, m_audioChannel);
+                m_audioChannel =
+                    demuxStream(true, static_cast<int>(startCode), length, m_audioChannel);
             } else {
                 skip(length);
             }
             looksValid = true;
             break;
         }
-        case 0x1E0: case 0x1E1: case 0x1E2: case 0x1E3:
-        case 0x1E4: case 0x1E5: case 0x1E6: case 0x1E7:
-        case 0x1E8: case 0x1E9: case 0x1EA: case 0x1EB:
-        case 0x1EC: case 0x1ED: case 0x1EE: case 0x1EF: {
+        case 0x1E0:
+        case 0x1E1:
+        case 0x1E2:
+        case 0x1E3:
+        case 0x1E4:
+        case 0x1E5:
+        case 0x1E6:
+        case 0x1E7:
+        case 0x1E8:
+        case 0x1E9:
+        case 0x1EA:
+        case 0x1EB:
+        case 0x1EC:
+        case 0x1ED:
+        case 0x1EE:
+        case 0x1EF: {
             // Video Stream
             const int length = read16();
             // Check for PES header marker.
-            looksValid = m_index < m_readSize && (m_buf[static_cast<size_t>(m_index)] & 0xC0) == 0x80;
+            looksValid =
+                m_index < m_readSize && (m_buf[static_cast<size_t>(m_index)] & 0xC0) == 0x80;
             if (m_readSize - m_index < length) {
                 m_index -= 4 + 2;
                 needMore = true;

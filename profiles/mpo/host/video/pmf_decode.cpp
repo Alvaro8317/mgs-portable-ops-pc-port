@@ -123,7 +123,8 @@ bool decodeFile(const std::string &path, const Options &opt) {
         }
     };
     auto pullAudio = [&](int64_t untilPts, bool all) {
-        while (all || engine.getAudioTimeStamp() + mpo::video::AUDIO_FRAME_DURATION_TS <= untilPts) {
+        while (all ||
+               engine.getAudioTimeStamp() + mpo::video::AUDIO_FRAME_DURATION_TS <= untilPts) {
             if (engine.IsNoAudioData()) {
                 break;
             }
@@ -170,8 +171,8 @@ bool decodeFile(const std::string &path, const Options &opt) {
         if (lastFramePts >= 0 && vpts <= lastFramePts) {
             ++nonMonotonic;
             if (opt.trace > 0) {
-                std::printf("  frame %d: pts %lld after %lld\n", frames, static_cast<long long>(vpts),
-                            static_cast<long long>(lastFramePts));
+                std::printf("  frame %d: pts %lld after %lld\n", frames,
+                            static_cast<long long>(vpts), static_cast<long long>(lastFramePts));
             }
         }
         lastFramePts = vpts;
@@ -179,12 +180,13 @@ bool decodeFile(const std::string &path, const Options &opt) {
         const int w = engine.VideoWidth();
         const int hgt = engine.VideoHeight();
         image.assign(static_cast<size_t>(w) * static_cast<size_t>(hgt) * 4, 0);
-        const int written = engine.writeVideoImage(image, false, w, mpo::video::GE_CMODE_32BIT_ABGR8888);
+        const int written =
+            engine.writeVideoImage(image, false, w, mpo::video::GE_CMODE_32BIT_ABGR8888);
         if (written > 0) {
             videoHash = fnv1a(videoHash, image.data(), image.size());
         }
-        const bool dump = !opt.outDir.empty() &&
-                          (opt.frames.count(frames) != 0 || (opt.every > 0 && frames % opt.every == 0));
+        const bool dump = !opt.outDir.empty() && (opt.frames.count(frames) != 0 ||
+                                                  (opt.every > 0 && frames % opt.every == 0));
         if (dump && written > 0) {
             mpo::ge::replay::Image png;
             png.width = w;
@@ -247,9 +249,8 @@ bool decodeFile(const std::string &path, const Options &opt) {
     const uint64_t droppedAudio = as.droppedAudioBytes + st.audioInputDropped;
     const uint64_t badPacks = as.badPackHeaders + vs.badPackHeaders;
     const bool ok = mpo::video::HaveVideoDecoder() && frames > 0 && st.videoDecodeErrors == 0 &&
-                    st.corruptFrames == 0 &&
-                    st.audioDecodeErrors == 0 && droppedAudio == 0 && vs.droppedVideoBytes == 0 &&
-                    badPacks == 0 && pos == end && dumpError.empty();
+                    st.corruptFrames == 0 && st.audioDecodeErrors == 0 && droppedAudio == 0 &&
+                    vs.droppedVideoBytes == 0 && badPacks == 0 && pos == end && dumpError.empty();
     std::printf("%s: %s ver=%s off=0x%x streams=%s header=%.3fs frames=%d (%.3fs) "
                 "au=%llu pts=[%lld..%lld] nonmono=%d audio=%d blocks (%.3fs, ch=%d, code1=0x%02x) "
                 "errors v=%llu corrupt=%llu a=%llu dropped a=%llu v=%llu badpack=%llu "
@@ -259,7 +260,8 @@ bool decodeFile(const std::string &path, const Options &opt) {
                 static_cast<unsigned long long>(st.videoPacketsSent),
                 static_cast<long long>(firstFramePts), static_cast<long long>(lastFramePts),
                 nonMonotonic, audioBlocks, audioSeconds, engine.audioChannels(),
-                engine.audioHeaderCode1() & 0xFF, static_cast<unsigned long long>(st.videoDecodeErrors),
+                engine.audioHeaderCode1() & 0xFF,
+                static_cast<unsigned long long>(st.videoDecodeErrors),
                 static_cast<unsigned long long>(st.corruptFrames),
                 static_cast<unsigned long long>(st.audioDecodeErrors),
                 static_cast<unsigned long long>(droppedAudio),
@@ -292,7 +294,8 @@ int main(int argc, char **argv) {
             size_t start = 0;
             while (start <= list.size()) {
                 const size_t comma = list.find(',', start);
-                const std::string item = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+                const std::string item = list.substr(
+                    start, comma == std::string::npos ? std::string::npos : comma - start);
                 if (!item.empty()) {
                     opt.frames.insert(std::atoi(item.c_str()));
                 }

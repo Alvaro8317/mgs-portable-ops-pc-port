@@ -49,8 +49,8 @@ struct MpegDemuxStats {
     uint64_t packs = 0;
     uint64_t audioPackets = 0;
     uint64_t videoPackets = 0;
-    uint64_t otherPackets = 0;   // padding, private stream 2, system headers, other video ids
-    uint64_t badPackHeaders = 0; // pack headers that skipPackHeader() rejected
+    uint64_t otherPackets = 0;      // padding, private stream 2, system headers, other video ids
+    uint64_t badPackHeaders = 0;    // pack headers that skipPackHeader() rejected
     uint64_t droppedAudioBytes = 0; // audio queue full
     uint64_t droppedVideoBytes = 0; // video queue over its limit
 };
@@ -81,7 +81,8 @@ public:
     // Pops the next ATRAC3plus frame. Returns the payload size (frame size
     // minus the 8-byte frame header) or 0; *buf points into an internal
     // buffer that stays valid until the next call.
-    int getNextAudioFrame(uint8_t **buf, int *headerCode1, int *headerCode2, int64_t *pts = nullptr);
+    int getNextAudioFrame(uint8_t **buf, int *headerCode1, int *headerCode2,
+                          int64_t *pts = nullptr);
     bool hasNextAudioFrame(int *gotsizeOut, int *frameSizeOut, int *headerCode1, int *headerCode2);
 
     bool popVideoChunk(VideoChunk *out);

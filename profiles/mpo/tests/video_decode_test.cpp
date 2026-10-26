@@ -6,8 +6,8 @@
 // conversion of the samples that were written. Exits 77 (skipped) when the
 // build has no H.264 decoder.
 
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 
 #include "media_engine.h"
 #include "video_test_util.h"
@@ -30,9 +30,10 @@ const PcmColor kB = {180, 100, 160};
 std::vector<uint8_t> MakeVideoFile(int frames, bool withAudioStream) {
     std::vector<EsPayload> payloads;
     for (int i = 0; i < frames; ++i) {
-        const std::vector<PcmColor> mbs = (i % 2 == 0) ? std::vector<PcmColor>{kA, kB}
-                                                        : std::vector<PcmColor>{kB, kA};
-        payloads.push_back({0xE0, 0, kFirstTs + i * 3003, MakePcmAccessUnit(kMbW, kMbH, mbs, i % 2, i == 0)});
+        const std::vector<PcmColor> mbs =
+            (i % 2 == 0) ? std::vector<PcmColor>{kA, kB} : std::vector<PcmColor>{kB, kA};
+        payloads.push_back(
+            {0xE0, 0, kFirstTs + i * 3003, MakePcmAccessUnit(kMbW, kMbH, mbs, i % 2, i == 0)});
     }
     const std::vector<uint8_t> ps = BuildProgramStream(payloads);
     std::vector<PsmfStreamSpec> streams = {{0xE0, 0, kW, kH, 2}};
@@ -64,8 +65,10 @@ void CheckFrame8888(const std::vector<uint8_t> &img, int stride, const PcmColor 
         Bt601ToRgb(colors[mb], &r, &g, &b);
         for (int y = 2; y < kH - 2; y += 5) {
             for (int x = mb * 16 + 4; x < mb * 16 + 12; x += 3) {
-                const uint8_t *p = img.data() + (static_cast<size_t>(y) * static_cast<size_t>(stride) +
-                                                 static_cast<size_t>(x)) * 4;
+                const uint8_t *p =
+                    img.data() + (static_cast<size_t>(y) * static_cast<size_t>(stride) +
+                                  static_cast<size_t>(x)) *
+                                     4;
                 if (!Near(p[0], r, 2) || !Near(p[1], g, 2) || !Near(p[2], b, 2) || p[3] != 0) {
                     std::fprintf(stderr, "pixel (%d,%d) = %d,%d,%d,%d, want ~%d,%d,%d,0\n", x, y,
                                  p[0], p[1], p[2], p[3], r, g, b);
@@ -147,8 +150,9 @@ void TestDecode() {
 
     // Range write: the right macroblock only, into an 8-pixel-wide target.
     std::vector<uint8_t> range(8 * 4 * 4, 0xEE);
-    VT_CHECK_EQ(engine.writeVideoImageWithRange(range, false, 8, GE_CMODE_32BIT_ABGR8888, 20, 4, 8, 4),
-                8 * 4 * 4);
+    VT_CHECK_EQ(
+        engine.writeVideoImageWithRange(range, false, 8, GE_CMODE_32BIT_ABGR8888, 20, 4, 8, 4),
+        8 * 4 * 4);
     int r, g, b;
     Bt601ToRgb(kA, &r, &g, &b);
     VT_CHECK(Near(range[0], r, 2) && Near(range[1], g, 2) && Near(range[2], b, 2) && range[3] == 0);
@@ -158,7 +162,8 @@ void TestDecode() {
     VT_CHECK_EQ(engine.writeVideoImage(small, false, 512, GE_CMODE_32BIT_ABGR8888), 0);
     VT_CHECK_EQ(engine.writeVideoImage(img, false, 2049, GE_CMODE_32BIT_ABGR8888), 0);
     VT_CHECK_EQ(engine.writeVideoImage(img, false, 512, 7), 0);
-    VT_CHECK_EQ(engine.writeVideoImageWithRange(range, false, 8, GE_CMODE_32BIT_ABGR8888, kW, 0, 8, 4), 0);
+    VT_CHECK_EQ(
+        engine.writeVideoImageWithRange(range, false, 8, GE_CMODE_32BIT_ABGR8888, kW, 0, 8, 4), 0);
 }
 
 // Data arrives in small pieces and the decoder must wait for it; frames
