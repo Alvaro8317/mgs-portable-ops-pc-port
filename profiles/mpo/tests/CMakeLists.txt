@@ -78,7 +78,11 @@ add_library(mpo_difftest_lib STATIC
 )
 target_include_directories(mpo_difftest_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(mpo_difftest_lib PUBLIC mpo_vfpu)
-if(NOT MSVC)
+if(MSVC)
+    # C4324: CpuState pads after the alignas(16) VFPU block on purpose. PUBLIC
+    # because every target that includes difftest.hpp sees the same struct.
+    target_compile_options(mpo_difftest_lib PUBLIC /wd4324)
+else()
     target_compile_options(mpo_difftest_lib PRIVATE -ffp-contract=off)
 endif()
 mpo_target_warnings(mpo_difftest_lib)
