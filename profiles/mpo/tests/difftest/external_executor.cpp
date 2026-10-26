@@ -19,11 +19,13 @@
 //
 // An "unsupported" result carries no state blocks.
 
+#include <atomic>
 #include <bit>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <sstream>
 
 #ifndef _WIN32
@@ -114,7 +116,12 @@ public:
             *error = "no temporary directory: " + ec.message();
             return false;
         }
-        const std::string stem = "mpo_difftest_" + name_ + "_" + std::to_string(std::rand());
+        // Unique across processes: ctest -j runs several difftests against the same
+        // executor at once, and an unseeded std::rand() gives them all one name.
+        static std::atomic<unsigned> calls{0};
+        const std::string stem = "mpo_difftest_" + name_ + "_" +
+                                 std::to_string(std::random_device{}()) + "_" +
+                                 std::to_string(calls.fetch_add(1));
         const std::filesystem::path cases_path = dir / (stem + ".cases");
         const std::filesystem::path results_path = dir / (stem + ".results");
         {
