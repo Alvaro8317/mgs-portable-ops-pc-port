@@ -101,7 +101,8 @@ híbrido hacia una decompilación parcial).
     `unregister_functions` y una librería compartida por overlay). Los ganchos son
     **imprescindibles** aquí, porque MPO carga PRX por etapa (ver §4).
   - **Ojo** (F06 [V]): el PSPRecomp de upstream fijado (`f6e7d41`) **no** trae ni el intérprete ni
-    esos ganchos. Por eso la base es un fork con la capa de Yakumo (ver §9, decisión 7).
+    esos ganchos. Por eso la base es un fork con la capa de Yakumo (ver §9, decisión 7), que desde
+    F07b ya trae el intérprete y los ganchos.
 - El juego vive en `profiles/mpo/`. Los cambios al framework mismo se mantienen genéricos y bajo MIT,
   para poder proponerlos upstream.
 - Si en M0 aparece una limitación seria (por ejemplo, con los PRX de etapa y sus `.rlc`), primero se
@@ -258,9 +259,9 @@ Son de gow-psp-recomp y valen aunque usemos PSPRecomp.
 
 - **Una función de C++ por cada función del juego.** La firma es `void f_XXXXXXXX(Ctx*)`.
   - **Ojo** (F06 [V]): el emisor del PSPRecomp fijado no hace esto, sino que genera un grafo de
-    control global repartido en unidades de tamaño fijo. Las reglas de abajo siguen valiendo como
-    semántica. Si se cambia la forma del código generado, se decide en F07b (ver
-    `docs/analysis/psp_analyze.md`).
+    control global repartido en unidades de `0x4000` bytes, en el que cada palabra de código es una
+    entrada del dispatch. **Decidido en F07b: esa forma se queda.** Las reglas de abajo siguen
+    valiendo como semántica (ver `docs/analysis/psp_analyze.md` §11).
 - **Delay slots**: la condición y el destino de `jr` se capturan **antes** del delay slot. En un
   branch-likely, el delay slot se ejecuta solo si el salto se toma.
 - **Llamadas directas**:
@@ -285,13 +286,15 @@ Son de gow-psp-recomp y valen aunque usemos PSPRecomp.
   - Los NaN de una suma o un producto dependen del compilador. `mpo_vfpu` los fija con
     `vfpu::fadd`/`fmul`; el código generado los usa o se compara tratando dos NaN como iguales.
   - Antes de diseñar, se mide cuánto usa VFPU `mgp_main`.
+  - **Toda la VFPU va a `mpo_vfpu`** a través del ejecutor del perfil (`psp_recomp --vfpu-executor`,
+    F07b). La traducción propia del framework falla en ~45 % de los casos de VFPU.
 - **Sin código automodificable** en sentido estricto (F03 y F04), pero hay dos parches de código:
   - al arrancar, `mgp_main` convierte tres funciones de depuración en `jr ra`;
   - al cargar una etapa, `mgp_main` le aplica el `.rlc` y después invalida la icache con
     `cache 0x04` (no importa `sceKernelIcacheInvalidate*`).
 
-  Los dos se resuelven antes de recompilar: el primero con overrides del perfil y el segundo
-  recompilando la etapa ya enlazada. Los overlays se tratan con el mecanismo de overlays.
+  Los dos se resuelven antes de recompilar: el primero con pistas `patch` del perfil
+  (`config/hints/mgp_main.txt`, F07b) y el segundo recompilando la etapa ya enlazada. Los overlays se tratan con el mecanismo de overlays.
 
 ### Hilos
 
@@ -406,6 +409,9 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
      `--prefix`, filtro `SHF_EXECINSTR`, `vsgn`) y nuestros parches (`framework/patches/`: pistas de
      análisis y stubs de imports);
    - el submódulo apunta a esa rama, y cada parche genérico se puede enviar upstream como PR;
+   - **hecho en F07b**: `mpo` está en `Alvaro8317/PSPRecomp` (punta `1014ddf`, 12 commits sobre
+     `f6e7d41`). Los parches 0001 y 0002 ya están dentro como commits, así que
+     `framework/patches/` queda solo como registro;
    - se descartaron dos alternativas:
      - una serie de parches sobre upstream, porque sería frágil con todo lo que hay que traer de
        Yakumo;

@@ -64,7 +64,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | Ola | Fases | Requisitos |
 |---|---|---|
 | 1 ✅ | F06, F07a, F08a, F11a, F16a | F03, F04 y F05 (cumplidos). Integrada el 2026-10-25. |
-| 2 | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno |
+| 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12 |
 | — | F09 → F10b → F11b → F13 → F14b → F15 → F16b → F17b → F18 → F19 → F20b → F21 → F22 | en serie |
 
@@ -90,7 +90,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F05 | Inventario del GE con dumps de PPSSPP | M0 | ✅ hecha |
 | F06 | `psp_analyze` sobre MPO y brechas del framework | M0 | ✅ hecha (ola 1) |
 | F07a | Semántica de la VFPU y arnés de difftest | M1 | ✅ hecha (ola 1) |
-| F07b | Generación AOT, intérprete y difftest del emisor | M1 | ⬜ pendiente (ola 2) |
+| F07b | Generación AOT, intérprete y difftest del emisor | M1 | ✅ hecha (ola 2) |
 | F08a | Primitivas del kernel sobre minicoro | M1 | ✅ hecha (ola 1) |
 | F08b | Kernel HLE: integración, módulos y arranque | M1 | ⬜ pendiente (ola 3) |
 | F09 | IO, tiempo y vblank | M2 | ⬜ pendiente |
@@ -359,6 +359,14 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
       casos con el emisor;
     - los NaN se fijan con `vfpu::fadd`/`fmul` o se comparan con `Policy::kNanEquivalent`.
   - Las tablas de la VFPU tienen que llegar al runtime, ya sea junto al binario o embebidas.
+- **Notas (ola 2)**: hecha, ver `docs/sessions/F07b.md` y `docs/analysis/psp_analyze.md` §11.
+  - El submódulo apunta a `mpo` del fork, con la punta en `1014ddf`.
+  - `profiles/mpo/scripts/generate.py` genera `mgp_main` de forma reproducible: 118 unidades y el
+    100 % de las palabras de código de Ghidra. Compila con Clang y GCC en unos 17 minutos a `-j4`.
+  - El difftest del emisor y del intérprete no da diferencias en 8 clases, con 1 000 y 5 000 casos
+    por clase, contra `mpo_vfpu`, PPSSPP y Unicorn.
+  - El criterio "compila en Windows" lo cubren `mpo_difftest_emitter` e `mpo_difftest_interpreter`
+    en la CI de MSVC. El corpus de `mgp_main` nunca se compila en la CI, porque necesita el juego.
 
 ### F08a — Primitivas del kernel sobre minicoro (ola 1)
 
@@ -406,6 +414,17 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - El `$gp` de `mgp_main` es `0x08A07E90`.
   - Quedan para esta fase o para F09: ModuleMgr, InterruptManager, UtilsForUser, sceSuspendForUser
     y `ExitGame`.
+- **Notas (ola 2)**: ver `docs/sessions/F07b.md`.
+  - Se genera con `profiles/mpo/scripts/generate.py` y se compila con `-DMPO_GENERATED_DIR`.
+  - El punto de partida es `mpo_aot_probe --stub-imports 1`. Con eso `module_start` ya vuelve, y el
+    siguiente paso es el hilo `0x088041FC`.
+  - Antes de ejecutar nada:
+    - se cargan las tablas (`mpo::vfpu::load_tables`); sin ellas, `vsin` y compañía abortan;
+    - se instala el ejecutor de la VFPU (`mpo::recomp::install_vfpu_executor()`).
+  - **Falta generar `sound2`, `kjfs` y `zlibdec`** con `--prefix <módulo>` (para no romper la tabla
+    densa de `mgp_main`) y con `--vfpu-executor`. Hoy `generate.py` solo genera `mgp_main`.
+  - Hay que medir el arranque y la memoria al registrar las ~482 000 entradas.
+  - Para generar, usar un `psp_recomp` de Release: con Debug y ASan tarda más de 10 minutos.
 
 ---
 
@@ -590,7 +609,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Para elegir la librería del overlay, se identifica por el SHA-256 de `<s>.prx` y de `<s>.rlc`
     (91 distintas).
 - **Notas (ola 1)**:
-  - Los ganchos de overlays y `--prefix` vienen de la capa de Yakumo (brechas 6 y 7 de F06).
+  - Los ganchos de overlays y `--prefix` vienen de la capa de Yakumo (brechas 6 y 7 de F06). Ya
+    están en `mpo` (F07b). Un salto a una dirección de una unidad que no es entrada ahora para con el
+    PC correcto.
   - Con un solo `Runtime`, cargar una etapa apaga la vía rápida para todo (brecha 8). Solo afecta
     al rendimiento.
   - Las 464 entradas de `mgp_main` que solo usan las etapas ya están sembradas por Ghidra.
