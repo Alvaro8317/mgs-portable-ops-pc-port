@@ -65,7 +65,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 |---|---|---|
 | 1 ✅ | F06, F07a, F08a, F11a, F16a | F03, F04 y F05 (cumplidos). Integrada el 2026-10-25. |
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
-| 3 | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12 |
+| 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | — | F09 → F10b → F11b → F13 → F14b → F15 → F16b → F17b → F18 → F19 → F20b → F21 → F22 | en serie |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
@@ -92,7 +92,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F07a | Semántica de la VFPU y arnés de difftest | M1 | ✅ hecha (ola 1) |
 | F07b | Generación AOT, intérprete y difftest del emisor | M1 | ✅ hecha (ola 2) |
 | F08a | Primitivas del kernel sobre minicoro | M1 | ✅ hecha (ola 1) |
-| F08b | Kernel HLE: integración, módulos y arranque | M1 | ⬜ pendiente (ola 3) |
+| F08b | Kernel HLE: integración, módulos y arranque | M1 | ✅ hecha (ola 3) |
 | F09 | IO, tiempo y vblank | M2 | ⬜ pendiente |
 | F10a | Ventana, presentación e input (autónomo) | M2 | ✅ hecha (ola 2) |
 | F10b | Presentación e input en el juego | M2 | ⬜ pendiente |
@@ -100,7 +100,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F11b | `sceGe*` en el juego y stub de `sceMpeg` | M2 | ⬜ pendiente |
 | F12 | GE por software: completo | M2 | ✅ hecha (ola 2) |
 | F13 | Overlays de etapa en runtime | M2 | ⬜ pendiente |
-| F14a | Renderer Vulkan: base sobre los dumps | M3 | ⬜ pendiente (ola 3) |
+| F14a | Renderer Vulkan: base sobre los dumps | M3 | ✅ hecha (ola 3) |
 | F14b | Renderer Vulkan en el juego | M3 | ⬜ pendiente |
 | F15 | Renderer Vulkan: framebuffers y efectos | M3 | ⬜ pendiente |
 | F16a | Audio autónomo: SAS, ATRAC3 y salida SDL3 | M4 | ✅ hecha (ola 1) |
@@ -426,6 +426,25 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     densa de `mgp_main`) y con `--vfpu-executor`. Hoy `generate.py` solo genera `mgp_main`.
   - Hay que medir el arranque y la memoria al registrar las ~482 000 entradas.
   - Para generar, usar un `psp_recomp` de Release: con Debug y ASan tarda más de 10 minutos.
+- **Notas (ola 3)**: hecha, **M1 cerrado**. Ver `docs/sessions/F08b.md`.
+  - `mgp_main` arranca sobre `mpo_hle` (`profiles/mpo/host/hle/`, arnés `mpo_boot`):
+    - `module_start` crea `user_main`, y este crea `Main`; los tres corren recompilados, con 0
+      instrucciones interpretadas;
+    - para de forma visible en el primer import sin HLE, `sceRtcGetCurrentClockLocalTime` (F09);
+    - con `--unimplemented continue` carga `zlibdec`, `sound2`, `kjfs` y un `libfont` falso en las
+      mismas bases que PPSSPP, y crea y corre los hilos `preseek`, `dbr`, `arc`,
+      `snd_thread_seq` y `snd_thread_main`.
+  - Cada hilo es una fibra con su propio bucle de dispatch (`Runtime::run_until`, parche genérico en
+    `mpo`).
+  - El arreglo de los slots de import (`962e407`) evita que el slot N de un corpus con `--prefix`
+    ejecute el HLE del slot N de `mgp_main`.
+  - `generate.py --module` genera `zlibdec`, `sound2` y `kjfs` (`profiles/mpo/config/modules.toml`).
+  - Registrar las 521 972 entradas (481 916 de `mgp_main`) tarda 60–66 ms y sube el RSS en 178 MiB
+    (pico de 199 MiB).
+  - Quedan 164 imports pendientes, con la tabla por frecuencia en la nota. Los más llamados son
+    `sceAudioOutputPannedBlocking` y `__sceSasCoreWithMix`; el de más sitios es
+    `sceRtcGetCurrentTick` (39).
+  - `mpo_hle_test` corre en la CI sin datos del juego. `mpo_boot` solo se compila con el corpus.
 
 ---
 
@@ -446,6 +465,22 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   errores, con el vblank estable.
 - **Notas (ola 1)**: el tiempo del kernel sale del `Clock` inyectado de `mpo_kernel`. El
   vblank se programa con `schedule_event` y se marca con `set_in_interrupt` (`docs/sessions/F08a.md`).
+- **Notas (ola 3)**: ver `docs/sessions/F08b.md`. El arnés es `mpo_boot`.
+  - Hay que reemplazar:
+    - los stubs de `profiles/mpo/host/hle/hle_stubs.cpp`: `BootIo`, síncrona y de solo lectura desde
+      `game/disc/`, y la UMD siempre lista. `sceKernelLoadModuleByID` lee con `BootIo::file()`, así
+      que la IO nueva le tiene que dar un acceso equivalente;
+    - el tiempo stub de `System`: un `VirtualClock` que salta al siguiente evento y avanza 100 µs
+      cada 4096 dispatches.
+  - Hay que implementar:
+    - `InterruptManager`, con el vblank y los handlers de `sceKernelRegisterSubIntrHandler`;
+    - `sceRtc*`, `sceDisplay*` y los `Libc*` de `UtilsForUser`;
+    - la IO asíncrona y de directorios de `kjfs` (`sceIoOpenAsync`, `ReadAsync`, `WaitAsyncCB`,
+      `sceIoDopen` y `Dread`).
+  - El primer import sin HLE es `sceRtcGetCurrentClockLocalTime` (en `Main`). Después vienen
+    `sceOpenPSIDGetOpenPSID`, `sceCtrlSetSamplingMode`, `sceUtilityGetSystemParamInt`,
+    `sceImposeSetLanguageMode` y `sceDisplayGetAccumulatedHcount`, antes de cargar los módulos.
+  - Un NID nuevo es una línea: `HleTable::add(lib, nid, nombre, HleKind::kImplemented, handler)`.
 
 ### F10a — Ventana, presentación e input, autónomo (ola 2)
 
@@ -601,6 +636,12 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   final no queda código interpretado en esa etapa. **M2 cerrado.**
 - **Notas (ola 2)**: `mpo_ge` ya evalúa `BOUNDINGBOX`/`BJUMP` (F12), pero solo con datos sintéticos,
   porque los dumps no los guardan. Hay que verificarlo con el runtime.
+- **Notas (ola 3)**: ver `docs/sessions/F08b.md`.
+  - Los corpus de etapa con `--prefix` dependen del arreglo de los slots de import (`962e407` en
+    `mpo`).
+  - El cargador (`ModuleManager::load` y `unload_module` en `profiles/mpo/host/hle/modules.cpp`) ya
+    enlaza los exports y libera la memoria. Falta registrar y desregistrar la librería del overlay y
+    la tabla por hash.
 - **Notas (F04)**: el diseño de los overlays está en `docs/sessions/F04.md`.
   - `mgp_main` usa `sceKernelLoadModuleByID(fd, 0, NULL)` (no `sceKernelLoadModule`) sobre un
     descriptor de `kjfs`. Después llama a `sceKernelStartModule(id, 4, &p)` y aplica el `.rlc` él
@@ -645,6 +686,27 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - La ventana es de `SdlPresenter` (F10a), con `SDL_VULKAN` encendido. Para
   Vulkan, la ventana se crea con `SDL_WINDOW_VULKAN`, o se separa la creación de la ventana del
   renderer de SDL.
+- **Notas (ola 3)**: hecha, ver `docs/sessions/F14a.md`.
+  - `mpo_vulkan` (`profiles/mpo/host/vulkan/`) es un `DrawBackend` de `mpo_ge`
+    (`Ge::SetDrawBackend`). `mpo_ge` hace la transformación hasta coordenadas de pantalla y la GPU
+    solo rasteriza y sombrea. Por eso el depth clamp y la asimetría de los splines se heredan tal
+    cual.
+  - Los shaders son un ubershader GLSL precompilado a SPIR-V con 20 specialization constants. El
+    SPIR-V se versiona (`ge_shaders_spv.inc`) y `mpo_vulkan_shaders_fresh` comprueba que esté al
+    día; ni el build ni la CI necesitan glslang.
+  - Los 11 dumps se ven con `--renderer=vulkan` sobre lavapipe con 0 errores de validación, también
+    con la de sincronización y en el camino de 1.2 (`MPO_VK_NO_13=1`). La swapchain funciona en
+    WSLg.
+  - Diferencia contra `soft` (`ge_frame_diff.py`):
+    - 0 % en el logo y los dumps de video;
+    - 0.5 % en las misiones y 0.9 % en el menú;
+    - ~21 % en los codecs y 20–35 % en las cinemáticas.
+
+    Casi siempre es un escalón de 5 bits, y solo en dibujos con blending: el blending fijo redondea
+    distinto que softgpu y falta el dither posterior.
+  - Desde la integración de la ola 3, la CI de Linux instala lavapipe (`mesa-vulkan-drivers`) y
+    las capas de validación, y corre `mpo_vulkan_renderer_test` con `MPO_VK_REQUIRE_VALIDATION=1`.
+  - **Pendiente del usuario**: la prueba en una GPU real en Windows (procedimiento en la nota).
 
 ### F14b — Renderer Vulkan en el juego
 
@@ -657,6 +719,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Notas (F05)**: el estado visto es pequeño: 11 vtypes, CLUT4/8 con paleta 8888, 3 modos de
   blending y 3 de profundidad. Todo el blending cabe en el blending fijo de Vulkan. Falta decidir el
   destino 5551 con dither (ver `docs/analysis/ge-usage.md` §5, F14).
+- **Notas (ola 3)**: el renderer es `mpo::vk::GeRenderer` (`profiles/mpo/host/vulkan/`), conectado
+  con `Ge::SetDrawBackend`. La ventana y la swapchain están en `mpo_vulkan_sdl`
+  (`SwapchainPresenter`). Ver "Para F14b" en `docs/sessions/F14a.md`.
 
 ### F15 — Renderer Vulkan: framebuffers y efectos
 
@@ -665,8 +730,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Tareas**:
   - Seguimiento de framebuffers en VRAM, render-to-texture, texturizar desde el target actual y
     lecturas de la CPU.
-  - Blending por shader cuando el hardware no alcance, operaciones lógicas, clamp de profundidad,
-    líneas, y splines y beziers en GPU o pre-teselados.
+  - Blending por shader (con el dither después) cuando el hardware no alcance, operaciones lógicas
+    y clamp de profundidad. Splines y beziers en GPU, si la teselación en la CPU de F14a no alcanza.
   - Herramienta para comparar frames entre `soft` y `vulkan` con un umbral.
   - Toggles A/B por variable de entorno para cada optimización.
 - **Criterios de hecho**: en las escenas de F05, la diferencia entre los dos renderers está por debajo
@@ -677,6 +742,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Hay que presentar los framebuffers 8888 de video, que no dibuja el GE.
   - Las transferencias del GE hacia RAM y las lecturas de VRAM de la CPU no quedan en un dump: hacen
     falta trazas.
+- **Notas (ola 3)**: todas las diferencias que midió F14a son de blending, con un escalón de 5 bits
+  en hasta el 35 % de los píxeles de las cinemáticas. La prioridad es el blending por shader con el
+  dither después. Las líneas ya salen idénticas (DDA en la CPU), así que se quitan de esta fase.
 
 ---
 
@@ -728,6 +796,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     `libasound2-dev` antes de configurar.
   - **El usuario aporta** una grabación de PPSSPP del menú y de un tramo de misión con radio, en
     `analysis/`.
+- **Notas (ola 3)**: `sound2` no tiene `module_start` [V]: sus hilos los arranca `mgp_main`. Lo
+  primero que piden es `__sceSasInit`, `sceAudioChReserve` y el bucle `__sceSasCoreWithMix` +
+  `sceAudioOutputPannedBlocking`, que son los imports pendientes más llamados (`docs/sessions/F08b.md`).
 
 ### F17a — Decodificador de PMF y fuente PGF, autónomos (ola 2)
 

@@ -118,7 +118,7 @@ híbrido hacia una decompilación parcial).
 | Build | CMake ≥ 3.22 + Ninja + ccache | Es el estándar de la escena. Los builds generados son pesados. |
 | Compiladores | Clang en Linux; MSVC 2022 o clang-cl en Windows | Hay que probar los dos, porque el código generado choca con los límites de cada compilador. |
 | Ventana, input y audio | SDL3 | Es multiplataforma y funciona con gamepads de Xbox y PlayStation. |
-| GPU | **Vulkan directo** (1.2 como mínimo, aprovechando 1.3 si está), con `volk` (loader) y VMA (memoria) | Decidido el 2026-10-24. Es un solo backend para Windows y Linux, con control total del estado que exige el GE (operaciones lógicas, clamp de profundidad, blending). Las referencias son PPSSPP (Vulkan) y Yakumo. |
+| GPU | **Vulkan directo** (1.2 como mínimo, aprovechando 1.3 si está), con `volk` (loader) y VMA (memoria) | Decidido el 2026-10-24. Es un solo backend para Windows y Linux, con control total del estado que exige el GE (operaciones lógicas, clamp de profundidad, blending). Las referencias son PPSSPP (Vulkan) y Yakumo. Los shaders son un ubershader GLSL precompilado a SPIR-V (versionado) con specialization constants, sin glslang en el build (F14a). |
 | Renderer de referencia | GE por software (portado del softgpu de PPSSPP) | Sirve para llegar a la pantalla de título (M2) y como "verdad" para comparar frames contra el renderer Vulkan. |
 | Video | FFmpeg mínimo (LGPL), solo con los decoders que haga falta | Para el video del título (`sceMpeg`). |
 | ATRAC3 | `at3_standalone` de PPSSPP (LGPL-2.1+) | Lo usan gow y tkdr. |
@@ -148,6 +148,9 @@ los hilos y fibras, en vez de depender de `ulimit`.
 - Hay otros módulos de Konami, que son PRX aparte en `USRDIR/modules/` y no van cifrados (verificado
   en F02): `KCEJ_FS` (`kjfs.prx`, el sistema de archivos), `KCEJ_SOUND2` (`sound2.prx`, el driver de
   sonido) y `ZLIB` (`zlibdec.prx`).
+  - Se cargan en las mismas bases que en PPSSPP: `0x08B20000`, `0x08B24100` y `0x08B75500`, y un
+    `libfont` falso en `0x08B86F00` (F08b [V]).
+  - `sound2` no tiene `module_start`: sus hilos los arranca `mgp_main` (F08b [V]).
 - El juego trae su propia zlib (`inflate*`) y la carga de datos pasa por el manifiesto `data.cnf`.
 - Los scripts son **GCL/GCX de la variante MGS3**, basada en Tcl. La herramienta `Jayveer/Gcx` los
   decompila. Es probable que haya un intérprete GCL dentro de `mgp_main`, que es un buen punto de
@@ -298,9 +301,11 @@ Son de gow-psp-recomp y valen aunque usemos PSPRecomp.
 
 ### Hilos
 
-- La PSP tiene **un solo núcleo con scheduler de prioridad expropiativa**. Cada hilo de la PSP será
+- La PSP tiene **un solo núcleo con scheduler de prioridad expropiativa**. Cada hilo de la PSP es
   una **fibra**, y se conmuta en las llamadas HLE bloqueantes y en los puntos de visibilidad
   (como hacen PPSSPP y Yakumo).
+- Cada fibra tiene su propio bucle de dispatch (`Runtime::run_until`) sobre el `cpu()` del runtime,
+  que se intercambia al cambiar de hilo (`profiles/mpo/host/hle/cpu_bridge`, F08b).
 - Riesgo: condiciones de carrera que dependan del orden exacto del scheduler. Ante un bug raro,
   primero se compara con el orden de PPSSPP.
 
@@ -309,8 +314,12 @@ Son de gow-psp-recomp y valen aunque usemos PSPRecomp.
 - La tabla de NIDs se genera a partir de `Core/HLE/*.cpp` de PPSSPP, con el tag fijado.
 - Cada import se registra con `register_hle`.
 - Un NID que no esté implementado **registra el nombre y la dirección y falla de forma visible**,
-  nunca en silencio.
-- Hay que mantener un histograma de las llamadas HLE (como `PSPRECOMP_HLE_HISTOGRAM` en Yakumo).
+  nunca en silencio:
+  - el runtime para con el nombre, el stub y el llamador;
+  - `mpo_boot --unimplemented continue` lo deja pasar devolviendo 0, solo para listar lo que falta
+    (F08b).
+- Hay que mantener un histograma de las llamadas HLE (como `PSPRECOMP_HLE_HISTOGRAM` en Yakumo). Es
+  el de `HleTable`, que muestra `mpo_boot` (F08b).
 
 ---
 
@@ -409,8 +418,9 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
      `--prefix`, filtro `SHF_EXECINSTR`, `vsgn`) y nuestros parches (`framework/patches/`: pistas de
      análisis y stubs de imports);
    - el submódulo apunta a esa rama, y cada parche genérico se puede enviar upstream como PR;
-   - **hecho en F07b**: `mpo` está en `Alvaro8317/PSPRecomp` (punta `1014ddf`, 12 commits sobre
-     `f6e7d41`). Los parches 0001 y 0002 ya están dentro como commits, así que
+   - **hecho en F07b**: `mpo` está en `Alvaro8317/PSPRecomp`. Desde F08b, la punta es `962e407`
+     (14 commits sobre `f6e7d41`), con el bucle de dispatch por hilo y el arreglo de los slots de
+     import. Los parches 0001 y 0002 ya están dentro como commits, así que
      `framework/patches/` queda solo como registro;
    - se descartaron dos alternativas:
      - una serie de parches sobre upstream, porque sería frágil con todo lo que hay que traer de
