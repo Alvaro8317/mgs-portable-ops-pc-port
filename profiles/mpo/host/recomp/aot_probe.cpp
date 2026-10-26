@@ -10,15 +10,21 @@
 //      once (config/hints/mgp_main.txt, `patch`);
 //   3. module_start runs as recompiled code until it reaches its first import,
 //      which has no HLE yet (that is F08b): the stop reason names it.
+//      With --stub-imports 1, every import instead returns 0 at once (not a
+//      kernel: only to see how far module_start runs) and the probe lists
+//      the imports it called, in order.
 //
 //   mpo_aot_probe --elf game/elf/mgp_main.elf --hints <out>/mgp_main.hints.txt
 //                 --tables <dir with PPSSPP's vfpu/*.dat> [--max-dispatches N]
+//                 [--stub-imports 1]
 //
-// Exit code 0 when 1 and 2 hold and step 3 stops on a missing import.
+// Exit code 0 when 1 and 2 hold and step 3 stops on a missing import (or,
+// with --stub-imports, when module_start returns).
 
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <string>
@@ -79,6 +85,7 @@ int main(int argc, char **argv) {
     std::string hints_path;
     std::string tables;
     std::uint64_t max_dispatches = 1000000u;
+    bool stub_imports = false;
     for (int i = 1; i + 1 < argc; i += 2) {
         const std::string arg = argv[i];
         if (arg == "--elf") {
@@ -87,6 +94,8 @@ int main(int argc, char **argv) {
             hints_path = argv[i + 1];
         } else if (arg == "--tables") {
             tables = argv[i + 1];
+        } else if (arg == "--stub-imports") {
+            stub_imports = std::string(argv[i + 1]) == "1";
         } else if (arg == "--max-dispatches") {
             max_dispatches = std::strtoull(argv[i + 1], nullptr, 0);
         } else {
@@ -167,6 +176,29 @@ int main(int argc, char **argv) {
         cpu.gpr[28] = module->gp;
         cpu.gpr[29] = kStackTop;
         cpu.gpr[31] = kReturnSentinel;
+        std::vector<std::string> import_calls;
+        std::vector<std::uint32_t> thread_entries;
+        std::uint32_t thread_args[2] = {0u, 0u}; // sceKernelStartThread's arglen, argp
+        if (stub_imports) {
+            for (const auto &import : imports) {
+                const std::string name = import.library + "::" +
+                                         runtime.nids()
+                                             .resolve(import.library, import.nid)
+                                             .value_or(psprecomp::hex32(import.nid));
+                runtime.register_hle(import.library, import.nid,
+                                     [&import_calls, &thread_entries, &thread_args,
+                                      name](psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) {
+                                         import_calls.push_back(name);
+                                         if (name == "ThreadManForUser::sceKernelCreateThread")
+                                             thread_entries.push_back(ctx.gpr[5]);
+                                         if (name == "ThreadManForUser::sceKernelStartThread") {
+                                             thread_args[0] = ctx.gpr[5];
+                                             thread_args[1] = ctx.gpr[6];
+                                         }
+                                         ctx.gpr[2] = 0u;
+                                     });
+            }
+        }
         const std::uint32_t entry = elf.runtime_entry(kLoadBase);
         runtime.run(entry, max_dispatches);
         std::printf("module_start %s: %s (pc %s, %llu dispatches)\n",
@@ -176,7 +208,43 @@ int main(int argc, char **argv) {
         const auto stats = psprecomp::interpreter_stats();
         std::printf("interpreter: %llu instructions\n",
                     static_cast<unsigned long long>(stats.instructions));
-        if (runtime.stop_reason().rfind("Missing HLE import ", 0) != 0) ++failures;
+        if (stub_imports) {
+            std::printf("imports called: %zu\n", import_calls.size());
+            for (std::size_t k = 0; k < import_calls.size() && k < 40u; ++k)
+                std::printf("  %s\n", import_calls[k].c_str());
+            if (runtime.stop_reason() != "module_start returned") ++failures;
+            // The threads module_start created, one after another, on their
+            // own stack, still with every import answering 0: how far does
+            // the recompiled code get before it needs a real kernel?
+            for (const std::uint32_t thread : thread_entries) {
+                const std::size_t before = import_calls.size();
+                cpu = psprecomp::AllegrexContext{};
+                cpu.gpr[28] = module->gp;
+                cpu.gpr[29] = kStackTop - 0x10000u;
+                cpu.gpr[4] = thread_args[0];
+                cpu.gpr[5] = thread_args[1];
+                cpu.gpr[31] = kReturnSentinel;
+                std::string outcome;
+                try {
+                    runtime.run(thread, max_dispatches);
+                    outcome = runtime.stop_reason();
+                } catch (const std::exception &e) {
+                    // Stubbed imports return 0, so a "created" object is a
+                    // null pointer sooner or later: report where.
+                    outcome = std::string("exception: ") + e.what();
+                    outcome = outcome.substr(0, outcome.find('\n'));
+                }
+                std::map<std::string, std::size_t> distinct;
+                for (std::size_t k = before; k < import_calls.size(); ++k)
+                    ++distinct[import_calls[k]];
+                std::printf("thread %s: %s (pc %s), %zu import calls, %zu distinct\n",
+                            psprecomp::hex32(thread).c_str(), outcome.c_str(),
+                            psprecomp::hex32(cpu.pc).c_str(), import_calls.size() - before,
+                            distinct.size());
+            }
+        } else if (runtime.stop_reason().rfind("Missing HLE import ", 0) != 0) {
+            ++failures;
+        }
         return failures == 0 ? 0 : 1;
     } catch (const std::exception &e) {
         return fail(e.what());
