@@ -1,0 +1,273 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// mpo_difftest: runs the CPU difftest from the command line and from ctest.
+//
+//   mpo_difftest --selftest --tables DIR
+//       mpo vs mpo must agree, and mpo vs a fault-injecting mpo must not:
+//       proves the harness itself works, with no reference needed.
+//   mpo_difftest --b ppsspp --tables DIR [--class C] [--count N] [--seed S]
+//       mpo reference interpreter vs PPSSPP's interpreter (bit for bit except
+//       NaN payloads, which PPSSPP leaves to the compiler; see Policy).
+//   mpo_difftest --b unicorn --unicorn-command "PY -I unicorn_exec.py"
+//       mpo vs Unicorn (MIPS32) in a separate process, ALU/Allegrex/FPU only.
+//   mpo_difftest --list-specs
+//
+// Exit codes: 0 pass, 1 differences, 2 usage or executor error, 77 skipped.
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include "difftest/difftest.hpp"
+#include "vfpu/vfpu.hpp"
+
+#if MPO_HAVE_PPSSPP_REF
+#include "ppsspp_ref/ppsspp_ref.hpp"
+#endif
+
+namespace {
+
+using mpo::difftest::Executor;
+using mpo::difftest::InstrClass;
+using mpo::difftest::Policy;
+using mpo::difftest::RunReport;
+using mpo::difftest::TestCase;
+
+constexpr int kExitPass = 0;
+constexpr int kExitDiff = 1;
+constexpr int kExitError = 2;
+constexpr int kExitSkip = 77;
+
+struct Options {
+    std::string a = "mpo";
+    std::string b;
+    std::vector<InstrClass> classes;
+    std::string spec;
+    int count = 2000;
+    std::uint64_t seed = 0x4D504F; // "MPO"
+    std::string tables;
+    std::string unicorn_command;
+    bool selftest = false;
+    bool list_specs = false;
+    int max_details = 10;
+};
+
+int usage(const char *message) {
+    std::fprintf(stderr, "mpo_difftest: %s\n", message);
+    return kExitError;
+}
+
+bool parse(int argc, char **argv, Options *o) {
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        const auto value = [&](std::string *out) {
+            if (i + 1 >= argc) return false;
+            *out = argv[++i];
+            return true;
+        };
+        std::string text;
+        if (arg == "--a") {
+            if (!value(&o->a)) return false;
+        } else if (arg == "--b") {
+            if (!value(&o->b)) return false;
+        } else if (arg == "--class") {
+            if (!value(&text)) return false;
+            if (text == "all") {
+                for (const InstrClass cls : mpo::difftest::all_classes()) o->classes.push_back(cls);
+            } else {
+                InstrClass cls;
+                if (!mpo::difftest::parse_class(text, &cls)) return false;
+                o->classes.push_back(cls);
+            }
+        } else if (arg == "--spec") {
+            if (!value(&o->spec)) return false;
+        } else if (arg == "--count") {
+            if (!value(&text)) return false;
+            o->count = std::atoi(text.c_str());
+        } else if (arg == "--seed") {
+            if (!value(&text)) return false;
+            o->seed = std::strtoull(text.c_str(), nullptr, 0);
+        } else if (arg == "--tables") {
+            if (!value(&o->tables)) return false;
+        } else if (arg == "--unicorn-command") {
+            if (!value(&o->unicorn_command)) return false;
+        } else if (arg == "--max-details") {
+            if (!value(&text)) return false;
+            o->max_details = std::atoi(text.c_str());
+        } else if (arg == "--selftest") {
+            o->selftest = true;
+        } else if (arg == "--list-specs") {
+            o->list_specs = true;
+        } else {
+            return false;
+        }
+    }
+    return o->count > 0;
+}
+
+bool load_tables(const Options &o) {
+    if (o.tables.empty()) return false;
+    std::string error;
+    if (!mpo::vfpu::load_tables(o.tables, &error)) {
+        std::fprintf(stderr, "mpo_difftest: %s\n", error.c_str());
+        return false;
+    }
+    return true;
+}
+
+std::unique_ptr<Executor> make(const std::string &name, const Options &o, std::string *error) {
+    if (name == "mpo") return mpo::difftest::make_reference_interpreter();
+    if (name == "ppsspp") {
+#if MPO_HAVE_PPSSPP_REF
+        if (!mpo::ppsspp_ref::init(o.tables, error)) return nullptr;
+        return mpo::ppsspp_ref::make_executor();
+#else
+        *error = "built without the PPSSPP reference (MPO_BUILD_PPSSPP_REF=OFF)";
+        return nullptr;
+#endif
+    }
+    if (name == "unicorn") {
+        if (o.unicorn_command.empty()) {
+            *error = "skip: no --unicorn-command (configure with -DMPO_UNICORN_PYTHON=...)";
+            return nullptr;
+        }
+        return mpo::difftest::make_external_executor("unicorn", o.unicorn_command);
+    }
+    *error = "unknown executor " + name;
+    return nullptr;
+}
+
+std::vector<TestCase> cases_for(const Options &o, InstrClass cls) {
+    if (!o.spec.empty()) {
+        const mpo::difftest::Spec *spec = mpo::difftest::find_spec(o.spec);
+        if (!spec || spec->cls != cls) return {};
+        return mpo::difftest::generate_cases_for_spec(*spec, o.seed, o.count);
+    }
+    return mpo::difftest::generate_cases(cls, o.seed + static_cast<std::uint64_t>(cls), o.count);
+}
+
+void print_report(InstrClass cls, const RunReport &report) {
+    std::printf("%-9s cases=%d compared=%d skipped=%d mismatched=%d nan-payload-only=%d\n",
+                std::string(mpo::difftest::class_name(cls)).c_str(), report.cases, report.compared,
+                report.skipped, report.mismatched, report.nan_only);
+    for (const std::string &detail : report.details) std::printf("  %s", detail.c_str());
+}
+
+int run_selftest(const Options &o) {
+    int failures = 0;
+    for (const InstrClass cls : o.classes) {
+        const std::vector<TestCase> cases = cases_for(o, cls);
+        std::string error;
+        // 1. The reference against itself: must be identical and deterministic.
+        {
+            auto a = mpo::difftest::make_reference_interpreter();
+            auto b = mpo::difftest::make_reference_interpreter();
+            RunReport report;
+            if (!mpo::difftest::run_difftest(*a, *b, cases, Policy::kExact, o.max_details, &report,
+                                             &error)) {
+                std::fprintf(stderr, "%s\n", error.c_str());
+                return kExitError;
+            }
+            print_report(cls, report);
+            if (report.mismatched != 0 || report.skipped != 0) {
+                std::printf("  FAIL: mpo vs mpo must agree on every case\n");
+                ++failures;
+            }
+        }
+        // 2. Against a copy that corrupts every 7th case: must be caught.
+        {
+            auto a = mpo::difftest::make_reference_interpreter();
+            auto b = mpo::difftest::make_fault_injector(mpo::difftest::make_reference_interpreter(),
+                                                        "", 7);
+            RunReport report;
+            if (!mpo::difftest::run_difftest(*a, *b, cases, Policy::kExact, 0, &report, &error)) {
+                std::fprintf(stderr, "%s\n", error.c_str());
+                return kExitError;
+            }
+            const int expected = (static_cast<int>(cases.size()) + 6) / 7;
+            std::printf("  injected faults: %d expected, %d detected\n", expected,
+                        report.mismatched);
+            if (report.mismatched != expected) {
+                std::printf("  FAIL: the harness missed injected faults\n");
+                ++failures;
+            }
+        }
+    }
+    return failures == 0 ? kExitPass : kExitDiff;
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+    Options o;
+    if (!parse(argc, argv, &o)) return usage("bad arguments (see the header of difftest_main.cpp)");
+
+    if (o.list_specs) {
+        for (const mpo::difftest::Spec &spec : mpo::difftest::all_specs()) {
+            std::printf("%-9s %-18s %08x %08x %x\n",
+                        std::string(mpo::difftest::class_name(spec.cls)).c_str(), spec.name.c_str(),
+                        spec.fixed, spec.random_mask, spec.flags);
+        }
+        return kExitPass;
+    }
+
+    if (o.classes.empty()) {
+        if (o.b == "unicorn") {
+            o.classes = {InstrClass::kAlu, InstrClass::kMulDiv, InstrClass::kMem,
+                         InstrClass::kAllegrex, InstrClass::kFpu};
+        } else {
+            for (const InstrClass cls : mpo::difftest::all_classes()) o.classes.push_back(cls);
+        }
+    }
+    if (!load_tables(o)) {
+        // Without the tables only the non-VFPU classes can run.
+        std::erase_if(o.classes, [](InstrClass cls) {
+            return cls == InstrClass::kVfpu || cls == InstrClass::kVfpuSeq;
+        });
+        std::printf("note: no VFPU tables (--tables DIR), VFPU classes left out\n");
+        if (o.classes.empty()) {
+            std::printf("SKIP: nothing to run without the VFPU tables\n");
+            return kExitSkip;
+        }
+    }
+
+    if (o.selftest) return run_selftest(o);
+    if (o.b.empty()) return usage("--b is required");
+
+    std::string error;
+    auto a = make(o.a, o, &error);
+    auto b = a ? make(o.b, o, &error) : nullptr;
+    if (!a || !b) {
+        if (error.rfind("skip:", 0) == 0) {
+            std::printf("SKIP: %s\n", error.c_str() + 6);
+            return kExitSkip;
+        }
+        std::fprintf(stderr, "mpo_difftest: %s\n", error.c_str());
+        return kExitError;
+    }
+    // mpo vs mpo is exact; against PPSSPP, NaN payloads are not defined (see Policy).
+    Policy policy = Policy::kExact;
+    if (o.b == "unicorn") policy = Policy::kMips32;
+    if (o.b == "ppsspp" || o.a == "ppsspp") policy = Policy::kNanEquivalent;
+
+    int mismatched = 0;
+    int compared = 0;
+    for (const InstrClass cls : o.classes) {
+        const std::vector<TestCase> cases = cases_for(o, cls);
+        if (cases.empty()) continue;
+        RunReport report;
+        if (!mpo::difftest::run_difftest(*a, *b, cases, policy, o.max_details, &report, &error)) {
+            std::fprintf(stderr, "mpo_difftest: %s\n", error.c_str());
+            return error.rfind("skip:", 0) == 0 ? kExitSkip : kExitError;
+        }
+        print_report(cls, report);
+        mismatched += report.mismatched;
+        compared += report.compared;
+    }
+    std::printf("%s vs %s: %d compared, %d mismatched\n", a->name().c_str(), b->name().c_str(),
+                compared, mismatched);
+    if (compared == 0) return kExitSkip;
+    return mismatched == 0 ? kExitPass : kExitDiff;
+}

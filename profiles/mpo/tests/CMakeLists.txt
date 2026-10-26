@@ -29,3 +29,99 @@ if(Python3_FOUND)
                          ${CMAKE_CURRENT_SOURCE_DIR}/../tools/${mpo_tool_test}.py)
     endforeach()
 endif()
+
+# --- F07a: VFPU golden vectors and the CPU difftest harness -----------------
+include(${PROJECT_SOURCE_DIR}/third_party/ppsspp_cpu/ppsspp_vfpu_tables.cmake)
+include(${PROJECT_SOURCE_DIR}/third_party/ppsspp_cpu/ppsspp_cpu_ref.cmake)
+
+add_library(mpo_difftest_lib STATIC
+    difftest/case_gen.cpp
+    difftest/difftest_core.cpp
+    difftest/external_executor.cpp
+    difftest/ref_interpreter.cpp
+    golden/golden.cpp
+    golden/vfpu_functions.cpp
+)
+target_include_directories(mpo_difftest_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(mpo_difftest_lib PUBLIC mpo_vfpu)
+if(NOT MSVC)
+    target_compile_options(mpo_difftest_lib PRIVATE -ffp-contract=off)
+endif()
+mpo_target_warnings(mpo_difftest_lib)
+
+# Golden check with mpo_vfpu alone: runs in CI without any PPSSPP code.
+add_executable(mpo_vfpu_golden_test vfpu_golden_test.cpp)
+target_link_libraries(mpo_vfpu_golden_test PRIVATE mpo_difftest_lib)
+mpo_target_warnings(mpo_vfpu_golden_test)
+add_test(NAME mpo_vfpu_golden_test
+         COMMAND mpo_vfpu_golden_test --tables "${MPO_VFPU_TABLES_DIR}"
+                 --golden ${CMAKE_CURRENT_SOURCE_DIR}/data/vfpu_golden.txt)
+set_tests_properties(mpo_vfpu_golden_test PROPERTIES SKIP_RETURN_CODE 77)
+
+if(MPO_BUILD_PPSSPP_REF)
+    # PPSSPP's own interpreter, test-only. Upstream code: no project warnings,
+    # no sanitizers (it relies on wrap-around and x86 conversions for some UB,
+    # which -O0 keeps naive), and locals start at zero so the lanes it reads
+    # uninitialised match mpo_vfpu.
+    add_library(mpo_ppsspp_ref STATIC ${MPO_PPSSPP_CPU_SOURCES} ppsspp_ref/ppsspp_ref.cpp)
+    target_include_directories(mpo_ppsspp_ref BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ppsspp_ref/shim)
+    target_include_directories(mpo_ppsspp_ref SYSTEM PRIVATE ${MPO_PPSSPP_CPU_DIR})
+    target_include_directories(mpo_ppsspp_ref PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(mpo_ppsspp_ref PUBLIC mpo_difftest_lib)
+    if(MSVC)
+        message(FATAL_ERROR "mpo_ppsspp_ref needs GCC or Clang (-ftrivial-auto-var-init=zero)")
+    else()
+        include(CheckCXXCompilerFlag)
+        check_cxx_compiler_flag(-ftrivial-auto-var-init=zero MPO_HAVE_AUTO_VAR_INIT_ZERO)
+        if(NOT MPO_HAVE_AUTO_VAR_INIT_ZERO)
+            message(FATAL_ERROR "mpo_ppsspp_ref needs -ftrivial-auto-var-init=zero (GCC 12+, "
+                                "Clang 16+); or configure with -DMPO_BUILD_PPSSPP_REF=OFF")
+        endif()
+        target_compile_options(mpo_ppsspp_ref PRIVATE -w -O0 -ffp-contract=off -fno-sanitize=all
+                                                      -ftrivial-auto-var-init=zero)
+    endif()
+
+    find_package(Threads REQUIRED)
+    add_executable(mpo_vfpu_golden_gen golden/golden_gen.cpp)
+    target_link_libraries(mpo_vfpu_golden_gen PRIVATE mpo_ppsspp_ref Threads::Threads)
+    mpo_target_warnings(mpo_vfpu_golden_gen)
+    # The committed golden file must be exactly what PPSSPP produces today.
+    add_test(NAME mpo_vfpu_golden_regen
+             COMMAND mpo_vfpu_golden_gen --tables "${MPO_VFPU_TABLES_DIR}"
+                     --check ${CMAKE_CURRENT_SOURCE_DIR}/data/vfpu_golden.txt)
+endif()
+
+add_executable(mpo_difftest difftest/difftest_main.cpp)
+if(MPO_BUILD_PPSSPP_REF)
+    target_link_libraries(mpo_difftest PRIVATE mpo_ppsspp_ref)
+    target_compile_definitions(mpo_difftest PRIVATE MPO_HAVE_PPSSPP_REF=1)
+else()
+    target_link_libraries(mpo_difftest PRIVATE mpo_difftest_lib)
+    target_compile_definitions(mpo_difftest PRIVATE MPO_HAVE_PPSSPP_REF=0)
+endif()
+mpo_target_warnings(mpo_difftest)
+
+# The harness against a test executor (itself and a fault injector).
+add_test(NAME mpo_difftest_selftest
+         COMMAND mpo_difftest --selftest --class all --count 1500 --tables "${MPO_VFPU_TABLES_DIR}")
+set_tests_properties(mpo_difftest_selftest PROPERTIES SKIP_RETURN_CODE 77)
+if(MPO_BUILD_PPSSPP_REF)
+    add_test(NAME mpo_difftest_ppsspp
+             COMMAND mpo_difftest --b ppsspp --class all --count 20000
+                     --tables "${MPO_VFPU_TABLES_DIR}")
+    set_tests_properties(mpo_difftest_ppsspp PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# Unicorn (GPL-2.0-only) only ever runs as a separate process from a venv
+# outside the repo, e.g. -DMPO_UNICORN_PYTHON=$HOME/tools/venv-unicorn/bin/python.
+set(MPO_UNICORN_PYTHON "" CACHE FILEPATH
+    "Python with the unicorn module for the MIPS32 difftest (empty: the test is skipped)")
+if(MPO_UNICORN_PYTHON)
+    set(mpo_unicorn_command "\"${MPO_UNICORN_PYTHON}\" -I \"${CMAKE_CURRENT_SOURCE_DIR}/unicorn_exec.py\"")
+else()
+    set(mpo_unicorn_command "")
+endif()
+add_test(NAME mpo_difftest_unicorn
+         COMMAND mpo_difftest --b unicorn --count 4000 --tables "${MPO_VFPU_TABLES_DIR}"
+                 --unicorn-command "${mpo_unicorn_command}")
+set_tests_properties(mpo_difftest_unicorn PROPERTIES SKIP_RETURN_CODE 77)

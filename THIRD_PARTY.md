@@ -4,7 +4,7 @@ El proyecto es **GPL-3.0-or-later** (ver `LICENSE`). Toda dependencia nueva se r
 versión fijada y su licencia, y lleva su `LICENSE` o `NOTICE` al lado en `third_party/<nombre>/`. No
 se aceptan dependencias GPL-2.0-only ni con licencias incompatibles con GPLv3.
 
-Estado: **PSPRecomp**, **toml++** y **libkirk + PrxDecrypter** (descargados al configurar) están incorporados; el resto está **planificado**. La columna "Versión" se llena al incorporar cada uno.
+Estado: **PSPRecomp**, **toml++**, **libkirk + PrxDecrypter** y las **tablas e intérprete de la VFPU de PPSSPP** (estos tres, descargados al configurar) están incorporados; el resto está **planificado**. La columna "Versión" se llena al incorporar cada uno.
 
 | Componente | Uso | Licencia | Versión / commit | Notas |
 |---|---|---|---|---|
@@ -15,7 +15,10 @@ Estado: **PSPRecomp**, **toml++** y **libkirk + PrxDecrypter** (descargados al c
 | volk | Loader de Vulkan | MIT | — | |
 | VulkanMemoryAllocator | Memoria de GPU | MIT | — | |
 | glslang o shaderc | Compilar shaders a SPIR-V | BSD-3 / Apache-2.0 (varía según el archivo) | — | Solo en tiempo de build. |
-| PPSSPP (código portado) | GE (software, splines y beziers), SAS, VFPU, HLE y NIDs | GPL-2.0-or-later | tag `v1.20.4` | Cada archivo portado indica el archivo y el tag de origen. |
+| PPSSPP (código portado) | GE (software, splines y beziers), SAS, VFPU, HLE y NIDs | GPL-2.0-or-later | tag `v1.20.4` | Cada archivo portado indica el archivo y el tag de origen. VFPU: `profiles/mpo/host/vfpu/` (`mpo_vfpu`, F07a) porta `MIPSIntVFPU.cpp` y `MIPSVFPUUtils.cpp`; el intérprete de referencia `profiles/mpo/tests/difftest/ref_interpreter.cpp` porta la semántica de `MIPSInt.cpp`. |
+| Tablas de la VFPU de PPSSPP (`assets/vfpu/*.dat`) | `vsin`, `vcos`, `vasin`, `vexp2`, `vlog2` y `vrcp` bit a bit | GPL-2.0-or-later | PPSSPP `v1.20.4` (`fa50bb19`), 15 archivos con SHA-256 fijado en `third_party/ppsspp_cpu/ppsspp_vfpu_tables.cmake` | **No se versionan** (~5 MB de datos). CMake las descarga al configurar; `mpo_vfpu` las carga en ejecución. Ver `third_party/ppsspp_cpu/NOTICE.md` (F07a). |
+| Intérprete de PPSSPP (`Core/MIPS/MIPSInt*.cpp`, `MIPSVFPUUtils.cpp`, `MIPSTables.cpp` y cabeceras) | **Solo tests**: vectores dorados y referencia del difftest | GPL-2.0-or-later | PPSSPP `v1.20.4`, 23 archivos con SHA-256 fijado en `third_party/ppsspp_cpu/ppsspp_cpu_ref.cmake` | **No se versionan** y nunca se enlazan al runtime (`mpo_ppsspp_ref`, opción `MPO_BUILD_PPSSPP_REF`; apagada con MSVC). Ver `third_party/ppsspp_cpu/NOTICE.md` (F07a). |
+| Unicorn | Referencia MIPS32 del difftest de CPU | **GPL-2.0-only** (el motor; los bindings de Python son BSD) | `unicorn==2.1.4` (pip) | **Nunca se enlaza ni se vendoriza**: es una herramienta externa. `profiles/mpo/tests/unicorn_exec.py` corre en otro proceso, con un venv fuera del repo (`-DMPO_UNICORN_PYTHON=...`); sin él, el test se salta (F07a). |
 | at3_standalone (de PPSSPP/FFmpeg) | Decodificar ATRAC3 | LGPL-2.1-or-later | — | |
 | FFmpeg (build mínimo) | Video del título (`sceMpeg`) | LGPL-2.1-or-later | — | Solo los decoders necesarios. |
 | libkirk + `PrxDecrypter.cpp` (de PPSSPP) | Descifrar el `EBOOT.BIN` (`~PSP`) en el instalador | GPL-3.0+ (`kirk_engine`), GPL-2.0/3.0 (`bn`, `ec`), dominio público (`AES`, `SHA1`), GPL-2.0-or-later (`PrxDecrypter.cpp`) | PPSSPP `v1.20.4` (`fa50bb1976065c4f8b1b47af227d367fe9771555`), 10 archivos con SHA-256 fijado en `third_party/ppsspp_crypto/ppsspp_crypto.cmake` | **No se versionan**, porque traen claves KIRK y tablas de claves (§1.1). CMake los descarga al configurar y solo los enlaza `mpo_host` (incorporado en F02). La procedencia y las licencias están en `third_party/ppsspp_crypto/NOTICE.md`. Se puede compilar sin red con `MPO_PPSSPP_SOURCE_DIR` o con `MPO_ENABLE_PRX_DECRYPT=OFF`. |
