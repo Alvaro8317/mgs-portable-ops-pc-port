@@ -557,10 +557,16 @@ std::uint32_t ModuleManager::get_module_id_by_address(std::uint32_t address) con
 }
 
 void ModuleManager::on_thread_return(kernel::Uid thread, std::uint32_t v0) {
-    const auto found = function_threads_.find(thread);
-    if (found == function_threads_.end()) return;
-    const kernel::Uid uid = found->second;
-    function_threads_.erase(found);
+    // The thread exits below and its fiber is abandoned: no iterator may be
+    // alive in this frame (checked iterators stay linked to their container;
+    // see "Pendiente y trampas" in docs/sessions/F08b.md).
+    kernel::Uid uid = 0;
+    {
+        const auto found = function_threads_.find(thread);
+        if (found == function_threads_.end()) return;
+        uid = found->second;
+        function_threads_.erase(found);
+    }
     Module *m = get(uid);
     if (m == nullptr) {
         system_.kernel().exit_delete_thread(v0);
