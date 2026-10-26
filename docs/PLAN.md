@@ -63,7 +63,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 
 | Ola | Fases | Requisitos |
 |---|---|---|
-| 1 | F06, F07a, F08a, F11a, F16a | F03, F04 y F05 (cumplidos) |
+| 1 ✅ | F06, F07a, F08a, F11a, F16a | F03, F04 y F05 (cumplidos). Integrada el 2026-10-25. |
 | 2 | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno |
 | 3 | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12 |
 | — | F09 → F10b → F11b → F13 → F14b → F15 → F16b → F17b → F18 → F19 → F20b → F21 → F22 | en serie |
@@ -78,22 +78,22 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | F03 | Análisis de `mgp_main` en Ghidra | M0 | ✅ hecha |
 | F04 | Overlays de etapa y formato `.rlc` | M0 | ✅ hecha |
 | F05 | Inventario del GE con dumps de PPSSPP | M0 | ✅ hecha |
-| F06 | `psp_analyze` sobre MPO y brechas del framework | M0 | ⬜ pendiente (ola 1) |
-| F07a | Semántica de la VFPU y arnés de difftest | M1 | ⬜ pendiente (ola 1) |
+| F06 | `psp_analyze` sobre MPO y brechas del framework | M0 | ✅ hecha (ola 1) |
+| F07a | Semántica de la VFPU y arnés de difftest | M1 | ✅ hecha (ola 1) |
 | F07b | Generación AOT, intérprete y difftest del emisor | M1 | ⬜ pendiente (ola 2) |
-| F08a | Primitivas del kernel sobre minicoro | M1 | ⬜ pendiente (ola 1) |
+| F08a | Primitivas del kernel sobre minicoro | M1 | ✅ hecha (ola 1) |
 | F08b | Kernel HLE: integración, módulos y arranque | M1 | ⬜ pendiente (ola 3) |
 | F09 | IO, tiempo y vblank | M2 | ⬜ pendiente |
 | F10a | Ventana, presentación e input (autónomo) | M2 | ⬜ pendiente (ola 2) |
 | F10b | Presentación e input en el juego | M2 | ⬜ pendiente |
-| F11a | GE por software: reproductor de `.ppdmp` y 2D | M2 | ⬜ pendiente (ola 1) |
+| F11a | GE por software: reproductor de `.ppdmp` y 2D | M2 | ✅ hecha (ola 1) |
 | F11b | `sceGe*` en el juego y stub de `sceMpeg` | M2 | ⬜ pendiente |
 | F12 | GE por software: completo | M2 | ⬜ pendiente (ola 2) |
 | F13 | Overlays de etapa en runtime | M2 | ⬜ pendiente |
 | F14a | Renderer Vulkan: base sobre los dumps | M3 | ⬜ pendiente (ola 3) |
 | F14b | Renderer Vulkan en el juego | M3 | ⬜ pendiente |
 | F15 | Renderer Vulkan: framebuffers y efectos | M3 | ⬜ pendiente |
-| F16a | Audio autónomo: SAS, ATRAC3 y salida SDL3 | M4 | ⬜ pendiente (ola 1) |
+| F16a | Audio autónomo: SAS, ATRAC3 y salida SDL3 | M4 | ✅ hecha (ola 1) |
 | F16b | Audio en el juego: `sceAudio`, `sceSas` y `sceAtrac` | M4 | ⬜ pendiente |
 | F17a | Decodificador de PMF y fuente PGF (autónomos) | M4 | ⬜ pendiente (ola 2) |
 | F17b | Video del título y fuentes en el juego | M4 | ⬜ pendiente |
@@ -319,6 +319,33 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     de PPSSPP.
 - **Criterios de hecho**: el binario se genera y compila en Windows y Linux, y el difftest pasa sin
   diferencias en N casos por clase.
+- **Notas (ola 1)**: ver `docs/sessions/F06.md`, `docs/sessions/F07a.md` y
+  `docs/analysis/psp_analyze.md` §9.
+  - **Primero, la base del framework** (`CLAUDE.md` §9, decisión 7):
+    - crear el fork de PSPRecomp con la rama `mpo` (upstream, la capa genérica de Yakumo y
+      `framework/patches/0001` y `0002`);
+    - apuntar el submódulo a esa rama.
+
+    Sin el parche 0002, `psp_recomp --auto` no termina con `mgp_main`. Sin el 0001, queda sin
+    cubrir el 10.6 % del código.
+  - Generar con `recomp_hints.py` → `psp_recomp --auto --hints` y medir la cobertura con
+    `recomp_compare.py`.
+  - Brechas de esta fase:
+    - 2: rangos ejecutables sin `.rodata`;
+    - 5: intérprete;
+    - 8: disposición de unidades;
+    - 10: las tres funciones que se parchean a `jr ra`, como `register_function` del perfil;
+    - 13: `vi2s`, `vi2uc`, `vcrs.t` y `vsgn`, que ya tienen vectores dorados;
+    - 14: el gancho de la VFPU hacia `mpo_vfpu`.
+  - VFPU:
+    - las funciones que van al gancho son las que usan tablas (`vsin`, `vcos`, `vasin`, `vexp2`,
+      `vrexp2`, `vlog2`, `vrcp`, `vnrcp` y `vnsin`);
+    - `vrsq`, `vsqrt` y `vdot` ya coinciden con PPSSPP.
+  - Difftest:
+    - se reusa el arnés de F07a (`profiles/mpo/tests/difftest/`) con un `Executor` que compile los
+      casos con el emisor;
+    - los NaN se fijan con `vfpu::fadd`/`fmul` o se comparan con `Policy::kNanEquivalent`.
+  - Las tablas de la VFPU tienen que llegar al runtime, ya sea junto al binario o embebidas.
 
 ### F08a — Primitivas del kernel sobre minicoro (ola 1)
 
@@ -353,6 +380,19 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Si un NID no está implementado, que falle de forma visible. Añadir el histograma de llamadas HLE.
 - **Criterios de hecho**: hay una traza del arranque hasta que los hilos se crean y ejecutan, y la
   lista de imports pendientes está ordenada por frecuencia. **M1 cerrado.**
+- **Notas (ola 1)**: la API está en `profiles/mpo/host/kernel/kernel.hpp`; ver
+  `docs/sessions/F08a.md`.
+  - Implementar `HostHooks` (`run_thread`, `call_guest` y `on_switch`).
+  - `Runtime::run()` de PSPRecomp no sabe de fibras, así que hace falta un **bucle de dispatch por
+    hilo**. Puede ser un parche genérico.
+  - Los puntos de visibilidad llaman a `kernel.preemption_point()`.
+  - Al salir de un hilo, su fibra se abandona sin desenrollar la pila. Ningún frame que cruce una
+    llamada HLE puede tener objetos que sean dueños de memoria.
+  - Los imports entre módulos de Konami (71 en `mgp_main` y 3 en `kjfs`) se resuelven con
+    `register_hle`, saltando al export (F06).
+  - El `$gp` de `mgp_main` es `0x08A07E90`.
+  - Quedan para esta fase o para F09: ModuleMgr, InterruptManager, UtilsForUser, sceSuspendForUser
+    y `ExitGame`.
 
 ---
 
@@ -371,6 +411,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Revisar si `KCEJ_FS` y `data.cnf` funcionan con todo esto.
 - **Criterios de hecho**: la traza muestra al juego abriendo y leyendo `slot.dat` y los `_zar` sin
   errores, con el vblank estable.
+- **Notas (ola 1)**: el tiempo del kernel sale del `Clock` inyectado de `mpo_kernel`. El
+  vblank se programa con `schedule_event` y se marca con `set_in_interrupt` (`docs/sessions/F08a.md`).
 
 ### F10a — Ventana, presentación e input, autónomo (ola 2)
 
@@ -385,6 +427,12 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Probarlo con los framebuffers que deja F11a al reproducir los dumps.
 - **Criterios de hecho**: en WSLg o en Windows se ve un framebuffer de prueba en los cuatro formatos
   y una traza muestra el input traducido.
+- **Notas (ola 1)**:
+  - SDL3 3.4.18 ya está fijado en `third_party/sdl3/sdl3.cmake` (F16a), pero solo con audio.
+    Hay que poner `MPO_SDL3_AUDIO_ONLY=OFF` y añadir a la CI de Linux los paquetes de X11 o de
+    Wayland (`libx11-dev`, `libxext-dev`, `libxcursor-dev`… o `libwayland-dev` y
+    `libxkbcommon-dev`). Si no, el configure de SDL falla.
+  - Para probar la presentación, `mpo_ppdmp_replay` (F11a) deja framebuffers reales.
 
 ### F10b — Presentación e input en el juego
 
@@ -441,6 +489,15 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     `BASE`, `BOUNDINGBOX`…). Esto se mide con el histograma HLE.
   - `ge_usage.vertex_size()` coincide con los dumps reales y sirve de referencia para el
     decodificador.
+- **Notas (ola 1)**: el GE es `mpo_ge` (`profiles/mpo/host/ge/`); la API está en
+  `docs/sessions/F11a.md`.
+  - Una sola instancia de `Ge`, con una `MemoryView` sobre la `GuestMemory` del runtime. La cola de
+    listas, los IDs, los callbacks y `ListSync`/`DrawSync` van en el HLE.
+  - `sceGeGetMtx` necesita los valores de las matrices "visibles por la CPU" (`matrixVisible` en
+    PPSSPP), que `GeState` todavía no guarda.
+  - El envoltorio de display lists de `mgp_main` (`0x089C5AD8–0x089C6D50`) llama a `sceGe_user`
+    desde la misma unidad que los stubs. Sin el parche 0002 de F06, esas llamadas nunca llegan al
+    HLE.
 
 ### F12 — GE por software: completo (ola 2)
 
@@ -467,6 +524,15 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     - líneas.
   - **No aparecen** y se dejan fuera hasta que una captura los muestre: mipmaps, DXT, logic ops,
     stencil, color test, beziers, splines con skinning y render-to-texture.
+- **Notas (ola 1)**:
+  - El banco de pruebas es `mpo_ppdmp_replay` sobre los 11 dumps. Lo que falta lo lista
+    `Stats::unsupported`, y `ge_frame_diff.py` compara contra las capturas de PPSSPP.
+  - En los dumps 3D faltan:
+    - el modo transform;
+    - los splines (409 y 87 en las cinemáticas);
+    - el skinning;
+    - las 120 líneas del radar;
+    - el test de BOUNDINGBOX, que hoy siempre responde "visible".
 
 ### F13 — Overlays de etapa en runtime
 
@@ -488,6 +554,11 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     menú). La más grande ocupa `0xFC400` bytes.
   - Para elegir la librería del overlay, se identifica por el SHA-256 de `<s>.prx` y de `<s>.rlc`
     (91 distintas).
+- **Notas (ola 1)**:
+  - Los ganchos de overlays y `--prefix` vienen de la capa de Yakumo (brechas 6 y 7 de F06).
+  - Con un solo `Runtime`, cargar una etapa apaga la vía rápida para todo (brecha 8). Solo afecta
+    al rendimiento.
+  - Las 464 entradas de `mgp_main` que solo usan las etapas ya están sembradas por Ghidra.
 
 ---
 
@@ -507,6 +578,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Modo del reproductor de dumps con `--renderer=soft|vulkan`.
 - **Criterios de hecho**: los dumps de F05 se ven en Vulkan sin errores de validación y la
   diferencia contra el renderer por software queda medida.
+- **Notas (ola 1)**: el banco es `mpo_ppdmp_replay` con `--renderer=soft|vulkan`, y el
+  renderer por software es la referencia para comparar frames con `ge_frame_diff.py`.
 
 ### F14b — Renderer Vulkan en el juego
 
@@ -574,6 +647,22 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Conectarlo con `KCEJ_SOUND2` recompilado y con el scheduler (hilos de audio).
 - **Criterios de hecho**: la música, los efectos y el codec suenan sin cortes. `audio_report` contra
   una grabación de referencia de PPSSPP queda dentro del umbral (las grabaciones quedan en local).
+- **Notas (ola 1)**: la API y el cableado están en `docs/sessions/F16a.md`.
+  - `AtracManager::NotifyLoadModule(0x105, bss, 0x67C)` se llama desde `sceUtilityLoadAvModule`.
+    Sin eso no se puede crear ningún ID de atrac.
+  - Conectar `SasCore::SetAtracBridge`.
+  - Retrasar el hilo:
+    - `EstimateMixUs()` después de `__sceSasCore`;
+    - `LastDelayUs()` después de cada `sceAtrac*`.
+  - Implementar `AudioWaitHost` en el kernel.
+  - Llamar a `AudioChannels::Update()` cada 64 muestras (1 451 µs) y pasar el resultado a
+    `StereoResampler` y de ahí a `SdlAudioOutput`.
+  - `sound2` sin pistas deja el 9.8 % sin cubrir y usa `vsgn` (F06).
+  - `__sceSasSetNoise` da silencio, igual que en PPSSPP. Hay que confirmarlo con la grabación.
+  - Para oír audio en Linux hay que instalar `libpulse-dev`, `libpipewire-0.3-dev` o
+    `libasound2-dev` antes de configurar.
+  - **El usuario aporta** una grabación de PPSSPP del menú y de un tramo de misión con radio, en
+    `analysis/`.
 
 ### F17a — Decodificador de PMF y fuente PGF, autónomos (ola 2)
 
@@ -586,6 +675,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Volcar frames y glifos a `analysis/f17a/` (fuera del repo).
 - **Criterios de hecho**: los 30 PMF se decodifican sin errores y los glifos de `MGP.PGF` se
   renderizan; ambos quedan descritos en la nota.
+- **Notas (ola 1)**: el audio de los PMF se puede decodificar con el ATRAC3plus de
+  `mpo_audio` (`CreateAtracDecoder` o `AtracContext::DecodeLowLevel`).
 
 ### F17b — Video del título y fuentes en el juego
 

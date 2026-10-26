@@ -96,11 +96,12 @@ híbrido hacia una decompilación parcial).
 
 - Usamos **PSPRecomp** (`jessicanataliagta/PSPRecomp`, MIT, C++20). Por qué:
   - Está pensado para cualquier juego: el framework va en la raíz y cada juego en `profiles/<id>/`.
-  - Trae intérprete de respaldo.
-  - Tiene ganchos para overlays: `set_runtime_missing_function_hook`, `unregister_functions` y una
-    librería compartida por overlay. Esto es **imprescindible** aquí porque MPO carga PRX por etapa
-    (ver §4).
-  - Yakumo ya lo llevó a Linux con Vulkan.
+  - Yakumo ya lo llevó a Linux con Vulkan, y su copia del framework (MIT) añade el **intérprete de
+    respaldo** y los **ganchos para overlays** (`set_runtime_missing_function_hook`,
+    `unregister_functions` y una librería compartida por overlay). Los ganchos son
+    **imprescindibles** aquí, porque MPO carga PRX por etapa (ver §4).
+  - **Ojo** (F06 [V]): el PSPRecomp de upstream fijado (`f6e7d41`) **no** trae ni el intérprete ni
+    esos ganchos. Por eso la base es un fork con la capa de Yakumo (ver §9, decisión 7).
 - El juego vive en `profiles/mpo/`. Los cambios al framework mismo se mantienen genéricos y bajo MIT,
   para poder proponerlos upstream.
 - Si en M0 aparece una limitación seria (por ejemplo, con los PRX de etapa y sus `.rlc`), primero se
@@ -252,6 +253,10 @@ La PSP-1000 es el objetivo: el juego es de 2006 y no usa la RAM extra.
 Son de gow-psp-recomp y valen aunque usemos PSPRecomp.
 
 - **Una función de C++ por cada función del juego.** La firma es `void f_XXXXXXXX(Ctx*)`.
+  - **Ojo** (F06 [V]): el emisor del PSPRecomp fijado no hace esto, sino que genera un grafo de
+    control global repartido en unidades de tamaño fijo. Las reglas de abajo siguen valiendo como
+    semántica. Si se cambia la forma del código generado, se decide en F07b (ver
+    `docs/analysis/psp_analyze.md`).
 - **Delay slots**: la condición y el destino de `jr` se capturan **antes** del delay slot. En un
   branch-likely, el delay slot se ejecuta solo si el salto se toma.
 - **Llamadas directas**:
@@ -267,8 +272,14 @@ Son de gow-psp-recomp y valen aunque usemos PSPRecomp.
 - **VFPU**:
   - Las instrucciones sencillas se emiten inline y las complejas como llamadas a helpers.
   - Hay que modelar los prefijos (`vpfxs/t/d`).
-  - `vsin`, `vcos`, `vrsq` y otras usan **las tablas o aproximaciones de PPSSPP**, para que el
-    resultado coincida bit a bit.
+  - El resultado tiene que coincidir bit a bit con el intérprete de PPSSPP (F07a [V]):
+    - `vsin`, `vcos`, `vasin`, `vexp2`, `vrexp2`, `vlog2` y `vrcp` (y sus versiones negadas
+      `vnsin` y `vnrcp`) usan **las tablas de PPSSPP** (`vfpu_sin`… en `mpo_vfpu`);
+    - `vrsq` y `vsqrt` usan la raíz cuadrada del host, como PPSSPP (`ppsspp_vrsq`, `ppsspp_vsqrt`);
+    - `vdot`, `vhdp`, `vfad`, `vavg`, `vtfm` y `vmmul` suman en `float` de izquierda a derecha
+      (`ppsspp_dot4`).
+  - Los NaN de una suma o un producto dependen del compilador. `mpo_vfpu` los fija con
+    `vfpu::fadd`/`fmul`; el código generado los usa o se compara tratando dos NaN como iguales.
   - Antes de diseñar, se mide cuánto usa VFPU `mgp_main`.
 - **Sin código automodificable** en sentido estricto (F03 y F04), pero hay dos parches de código:
   - al arrancar, `mgp_main` convierte tres funciones de depuración en `jr ra`;
@@ -385,6 +396,16 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
      distintas que mantener.
 6. **Trabajo en paralelo por olas** (tomada el 2026-10-25): las fases autónomas (`FXXa`) se hacen a
    la vez, cada una en su worktree (ver `docs/PLAN.md`).
+7. **Base del framework: un fork de PSPRecomp** (tomada el 2026-10-25, a partir de F06):
+   - es un fork en la cuenta de GitHub del usuario, con una rama `mpo` que lleva upstream más los
+     commits genéricos de la capa de framework de Yakumo (MIT: intérprete, ganchos de overlays,
+     `--prefix`, filtro `SHF_EXECINSTR`, `vsgn`) y nuestros parches (`framework/patches/`: pistas de
+     análisis y stubs de imports);
+   - el submódulo apunta a esa rama, y cada parche genérico se puede enviar upstream como PR;
+   - se descartaron dos alternativas:
+     - una serie de parches sobre upstream, porque sería frágil con todo lo que hay que traer de
+       Yakumo;
+     - apuntar a la copia de Yakumo, porque nos ataría a su ritmo y nos alejaría de upstream.
 
 ### Abiertas
 

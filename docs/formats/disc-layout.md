@@ -43,7 +43,7 @@ validado con `mpo --install` contra `profiles/mpo/config/supported.toml` (F01, 2
   `sNN_MM*.pmf`. Hay **cinemáticas en video además del título**, así que `sceMpeg`/`scePsmf` es más
   importante de lo que suponía `CLAUDE.md` §4 (afecta a F17).
 - **242 streams `.sep`** en `USRDIR/oss/` (85 MB): música (`oss_bgm_*`) y otros sonidos. El formato
-  queda para F16.
+  está en [`sep.md`](sep.md) (F16a).
 - `USRDIR/slot.dat` (209 MB) y `USRDIR/codec.dat` (252 800 bytes).
 
 ## Cómo se regenera

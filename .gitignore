@@ -50,3 +50,6 @@ venv/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Claude Code agent worktrees (parallel waves)
+.claude/worktrees/

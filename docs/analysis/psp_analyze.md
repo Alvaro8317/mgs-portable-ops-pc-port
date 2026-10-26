@@ -238,8 +238,12 @@ instrucciones en `rt.unsupported(…)` y deja de emitir el bloque.
   - `vsin`, `vcos`, `vrsq`, `vsqrt`, `vasin`, `vexp2`, `vrexp2`, `vlog2`, `vrcp`, `vnrcp` y `vnsin`
     (`std::sin`, `1/std::sqrt`…). Uso en `mgp_main` (F03): `vrsq` 280, `vsqrt` 236, `vcos` 98,
     `vsin` 92, `vasin` 2, `vrcp` 4 y transcendentes `.t`/`.q` 4.
-  - `vdot` (734) y los productos de `vmmul`/`vtfm`/`vhdp` suman en `float` normal; PPSSPP usa
-    `vfpu_dot()`.
+  - `vdot` (734) y los productos de `vmmul`/`vtfm`/`vhdp` suman en `float` normal.
+  - **Corrección (F07a [V])**: esa parte ya coincide con PPSSPP, que también suma en `float` de
+    izquierda a derecha (`USE_VFPU_DOT` está en `false`). `vfpu_dot()` solo entra en `vmmul` con el
+    compat flag `MoreAccurateVMMUL`, que está apagado para MPO. `vrsq` y `vsqrt` también usan la raíz
+    del host en PPSSPP. Lo único que hay que cambiar en el emisor son las funciones con tablas: `vsin`,
+    `vcos`, `vasin`, `vexp2`, `vrexp2`, `vlog2`, `vrcp`, `vnrcp` y `vnsin` (ver `docs/sessions/F07a.md`).
 
 ## 7. El framework fijado contra el de Yakumo [V, en el código]
 
