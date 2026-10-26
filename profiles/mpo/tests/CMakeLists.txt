@@ -19,7 +19,7 @@ add_test(NAME mpo_crypto_test COMMAND mpo_crypto_test)
 
 # Python tools in profiles/mpo/tools: tests with synthetic data only.
 if(Python3_FOUND)
-    foreach(mpo_tool_test IN ITEMS tools_test zstd_lite_test ge_usage_test)
+    foreach(mpo_tool_test IN ITEMS tools_test zstd_lite_test ge_usage_test ge_frame_diff_test)
         add_test(NAME mpo_${mpo_tool_test}
                  COMMAND Python3::Interpreter -I ${CMAKE_CURRENT_SOURCE_DIR}/${mpo_tool_test}.py)
     endforeach()
@@ -29,3 +29,11 @@ if(Python3_FOUND)
                          ${CMAKE_CURRENT_SOURCE_DIR}/../tools/${mpo_tool_test}.py)
     endforeach()
 endif()
+
+# GE: list interpreter, software renderer and .ppdmp replay on synthetic data.
+add_executable(mpo_ge_test ge_test.cpp)
+target_link_libraries(mpo_ge_test PRIVATE mpo_ge_replay)
+mpo_target_warnings(mpo_ge_test)
+add_test(NAME mpo_ge_test COMMAND mpo_ge_test)
+add_test(NAME mpo_ppdmp_replay_usage COMMAND mpo_ppdmp_replay)
+set_tests_properties(mpo_ppdmp_replay_usage PROPERTIES WILL_FAIL TRUE)

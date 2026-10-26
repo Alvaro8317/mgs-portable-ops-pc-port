@@ -30,3 +30,5 @@ target_link_libraries(mpo PRIVATE mpo_host)
 target_compile_definitions(mpo PRIVATE
     MPO_DEFAULT_SUPPORTED_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../config/supported.toml")
 mpo_target_warnings(mpo)
+
+add_subdirectory(ge)
