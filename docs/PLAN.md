@@ -322,9 +322,12 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Notas (ola 1)**: ver `docs/sessions/F06.md`, `docs/sessions/F07a.md` y
   `docs/analysis/psp_analyze.md` §9.
   - **Primero, la base del framework** (`CLAUDE.md` §9, decisión 7):
-    - crear el fork de PSPRecomp con la rama `mpo` (upstream, la capa genérica de Yakumo y
-      `framework/patches/0001` y `0002`);
-    - apuntar el submódulo a esa rama.
+    - el fork ya existe: `https://github.com/Alvaro8317/PSPRecomp` (creado el 2026-10-25, su
+      `main` es `f6e7d41`, igual que el submódulo);
+    - armar en local la rama `mpo` (upstream, la capa genérica de Yakumo y
+      `framework/patches/0001` y `0002`). **El push de `mpo` al fork lo hace el integrador**, con el
+      visto bueno del usuario;
+    - apuntar el submódulo a esa rama (URL del fork en `.gitmodules`).
 
     Sin el parche 0002, `psp_recomp --auto` no termina con `mgp_main`. Sin el 0001, queda sin
     cubrir el 10.6 % del código.
