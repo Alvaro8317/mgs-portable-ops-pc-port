@@ -166,7 +166,7 @@ void TestStridesAndAddresses() {
             d.format = format;
             d.stride = stride;
             d.address = 0x04000000;
-            std::fill(vram.begin(), vram.end(), 0);
+            std::fill(vram.begin(), vram.end(), std::uint8_t{0});
             FillFramebuffer(&vram, 0, d);
             CheckFramebuffer(memory, d, name + " stride " + std::to_string(stride));
             // Same buffer through the uncached and kernel aliases and the
@@ -216,7 +216,7 @@ void TestBadFramebuffers() {
     small_mem.AddRegion(0x08800000, small);
     d.address = 0x08800000;
     d.format = PixelFormat::kRgb565;
-    std::fill(out.begin(), out.end(), 0x55);
+    std::fill(out.begin(), out.end(), std::uint8_t{0x55});
     r = ConvertFramebuffer(small_mem, d, out);
     Expect(r.status == ConvertStatus::kPartial, "partial status");
     ExpectEq(r.rows_missing, 272 - 100, "rows missing");
