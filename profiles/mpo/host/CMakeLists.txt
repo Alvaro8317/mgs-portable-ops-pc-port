@@ -3,6 +3,7 @@
 include(${PROJECT_SOURCE_DIR}/third_party/ppsspp_crypto/ppsspp_crypto.cmake)
 
 add_subdirectory(kernel)
+add_subdirectory(vfpu)
 
 add_library(mpo_host STATIC
     crypto/psp_module.cpp
