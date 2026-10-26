@@ -86,6 +86,8 @@ std::string_view class_name(InstrClass cls) {
         return "vfpu";
     case InstrClass::kVfpuSeq:
         return "vfpuseq";
+    case InstrClass::kBranch:
+        return "branch";
     }
     return "?";
 }
@@ -93,7 +95,7 @@ std::string_view class_name(InstrClass cls) {
 std::span<const InstrClass> all_classes() {
     static constexpr InstrClass kAll[] = {
         InstrClass::kAlu, InstrClass::kMulDiv, InstrClass::kMem,     InstrClass::kAllegrex,
-        InstrClass::kFpu, InstrClass::kVfpu,   InstrClass::kVfpuSeq,
+        InstrClass::kFpu, InstrClass::kVfpu,   InstrClass::kVfpuSeq, InstrClass::kBranch,
     };
     return kAll;
 }

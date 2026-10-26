@@ -1,0 +1,140 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// mpo_aot_casegen: writes the difftest cases as a tiny MIPS executable for
+// psp_recomp (F07b), using the layout of aot_layout.hpp.
+//
+//   mpo_aot_casegen --seed S --count N --elf cases.elf --hints cases.hints
+//                   [--expect-units K]
+//
+// The ELF has one R+X PT_LOAD with every slot; the hints declare each slot as
+// a code range and a function entry, so psp_recomp --auto --hints emits
+// exactly the case instructions. --expect-units checks the number of 16 KiB
+// generated units the build expects (it names their files in advance).
+
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <string>
+#include <vector>
+
+#include "difftest/aot_layout.hpp"
+
+namespace {
+
+constexpr std::uint32_t kUnitBytes = 0x4000u;
+
+void put16(std::vector<std::uint8_t> &bytes, std::size_t offset, std::uint32_t value) {
+    bytes[offset] = static_cast<std::uint8_t>(value);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value >> 8);
+}
+
+void put32(std::vector<std::uint8_t> &bytes, std::size_t offset, std::uint32_t value) {
+    for (int i = 0; i < 4; ++i)
+        bytes[offset + static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(value >> (8 * i));
+}
+
+std::vector<std::uint8_t> make_elf(const std::vector<mpo::difftest::AotCase> &layout) {
+    constexpr std::size_t kHeader = 52;
+    constexpr std::size_t kProgramHeader = 32;
+    constexpr std::size_t kCodeOffset = 0x100;
+    const std::uint32_t base = layout.front().address;
+    const std::uint32_t span = layout.back().address + mpo::difftest::kAotSlotBytes - base;
+    std::vector<std::uint8_t> bytes(kCodeOffset + span, std::uint8_t{0});
+    bytes[0] = 0x7F;
+    bytes[1] = 'E';
+    bytes[2] = 'L';
+    bytes[3] = 'F';
+    bytes[4] = 1;           // ELFCLASS32
+    bytes[5] = 1;           // little endian
+    bytes[6] = 1;           // EV_CURRENT
+    put16(bytes, 16, 2);    // ET_EXEC
+    put16(bytes, 18, 8);    // EM_MIPS
+    put32(bytes, 20, 1);    // e_version
+    put32(bytes, 24, base); // e_entry
+    put32(bytes, 28, kHeader);
+    put16(bytes, 40, kHeader);
+    put16(bytes, 42, kProgramHeader);
+    put16(bytes, 44, 1); // e_phnum
+    put16(bytes, 46, 40);
+    put32(bytes, kHeader + 0, 1); // PT_LOAD
+    put32(bytes, kHeader + 4, kCodeOffset);
+    put32(bytes, kHeader + 8, base);
+    put32(bytes, kHeader + 12, base);
+    put32(bytes, kHeader + 16, span);
+    put32(bytes, kHeader + 20, span);
+    put32(bytes, kHeader + 24, 5); // R+X
+    put32(bytes, kHeader + 28, 16);
+    for (const mpo::difftest::AotCase &c : layout) {
+        for (int k = 0; k < c.num_words; ++k) {
+            put32(bytes, kCodeOffset + (c.address - base) + static_cast<std::size_t>(k) * 4,
+                  c.words[static_cast<std::size_t>(k)]);
+        }
+    }
+    return bytes;
+}
+
+int fail(const std::string &message) {
+    std::fprintf(stderr, "mpo_aot_casegen: %s\n", message.c_str());
+    return 2;
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+    std::uint64_t seed = 0x4D504F;
+    int count = 0;
+    long expect_units = -1;
+    std::string elf_path;
+    std::string hints_path;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (i + 1 >= argc) return fail("missing value for " + arg);
+        const std::string value = argv[++i];
+        if (arg == "--seed") {
+            seed = std::strtoull(value.c_str(), nullptr, 0);
+        } else if (arg == "--count") {
+            count = std::atoi(value.c_str());
+        } else if (arg == "--elf") {
+            elf_path = value;
+        } else if (arg == "--hints") {
+            hints_path = value;
+        } else if (arg == "--expect-units") {
+            expect_units = std::strtol(value.c_str(), nullptr, 0);
+        } else {
+            return fail("unknown option " + arg);
+        }
+    }
+    if (count <= 0 || elf_path.empty() || hints_path.empty())
+        return fail("usage: see aot_casegen.cpp");
+
+    const std::vector<mpo::difftest::AotCase> layout = mpo::difftest::aot_layout(seed, count);
+    if (layout.empty()) return fail("the cases do not fit in guest RAM; lower --count");
+    const std::uint32_t span =
+        layout.back().address + mpo::difftest::kAotSlotBytes - layout.front().address;
+    const long units = static_cast<long>((span + kUnitBytes - 1) / kUnitBytes);
+    if (expect_units >= 0 && units != expect_units) {
+        return fail("the layout needs " + std::to_string(units) + " units, the build expects " +
+                    std::to_string(expect_units));
+    }
+
+    const std::vector<std::uint8_t> elf = make_elf(layout);
+    std::ofstream elf_out(elf_path, std::ios::binary | std::ios::trunc);
+    elf_out.write(reinterpret_cast<const char *>(elf.data()),
+                  static_cast<std::streamsize>(elf.size()));
+    if (!elf_out) return fail("cannot write " + elf_path);
+
+    std::ofstream hints(hints_path, std::ios::trunc);
+    hints << "# difftest cases for psp_recomp (generated by mpo_aot_casegen)\n";
+    int runnable = 0;
+    char line[96];
+    for (const mpo::difftest::AotCase &c : layout) {
+        std::snprintf(line, sizeof(line), "code 0x%08X 0x%08X\nseed 0x%08X aot_case\n", c.address,
+                      c.address + static_cast<std::uint32_t>(c.num_words) * 4u, c.address);
+        hints << line;
+        runnable += c.runnable ? 1 : 0;
+    }
+    if (!hints) return fail("cannot write " + hints_path);
+    std::printf("mpo_aot_casegen: %zu cases (%d runnable), %ld units\n", layout.size(), runnable,
+                units);
+    return 0;
+}
