@@ -25,6 +25,8 @@ else()
 endif()
 mpo_target_warnings(mpo_host)
 
+add_subdirectory(audio)
+
 add_executable(mpo main.cpp)
 target_link_libraries(mpo PRIVATE mpo_host)
 target_compile_definitions(mpo PRIVATE

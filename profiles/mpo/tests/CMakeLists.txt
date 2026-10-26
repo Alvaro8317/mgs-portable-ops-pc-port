@@ -17,6 +17,23 @@ target_link_libraries(mpo_crypto_test PRIVATE mpo_host)
 mpo_target_warnings(mpo_crypto_test)
 add_test(NAME mpo_crypto_test COMMAND mpo_crypto_test)
 
+# mpo_audio (F16a): synthetic data and golden vectors only.
+foreach(mpo_audio_test IN ITEMS audio_sas_test audio_atrac_test audio_output_test)
+    add_executable(mpo_${mpo_audio_test} ${mpo_audio_test}.cpp)
+    target_link_libraries(mpo_${mpo_audio_test} PRIVATE mpo_audio)
+    mpo_target_warnings(mpo_${mpo_audio_test})
+    add_test(NAME mpo_${mpo_audio_test} COMMAND mpo_${mpo_audio_test})
+endforeach()
+if(TARGET mpo_audio_sdl)
+    target_link_libraries(mpo_audio_output_test PRIVATE mpo_audio_sdl)
+    target_compile_definitions(mpo_audio_output_test PRIVATE MPO_HAVE_SDL_AUDIO=1)
+endif()
+option(MPO_AUDIO_PPSSPP_DIFFTEST
+       "Build mpo_audio_ppsspp_difftest from the PPSSPP sources in MPO_PPSSPP_SOURCE_DIR" OFF)
+if(MPO_AUDIO_PPSSPP_DIFFTEST)
+    add_subdirectory(audio_ppsspp_ref)
+endif()
+
 # Python tools in profiles/mpo/tools: tests with synthetic data only.
 if(Python3_FOUND)
     foreach(mpo_tool_test IN ITEMS tools_test zstd_lite_test ge_usage_test)
