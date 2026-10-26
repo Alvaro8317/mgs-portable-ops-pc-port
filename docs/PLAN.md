@@ -365,8 +365,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     100 % de las palabras de código de Ghidra. Compila con Clang y GCC en unos 17 minutos a `-j4`.
   - El difftest del emisor y del intérprete no da diferencias en 8 clases, con 1 000 y 5 000 casos
     por clase, contra `mpo_vfpu`, PPSSPP y Unicorn.
-  - El criterio "compila en Windows" lo cubren `mpo_difftest_emitter` e `mpo_difftest_interpreter`
-    en la CI de MSVC. El corpus de `mgp_main` nunca se compila en la CI, porque necesita el juego.
+  - El criterio "compila en Windows" lo cubren `mpo_difftest_emitter` e `mpo_difftest_interpreter`,
+    que pasan con MSVC Release y Debug (run `40368991489`), junto con los tests del framework. El
+    corpus de `mgp_main` nunca se compila en la CI, porque necesita el juego.
 
 ### F08a — Primitivas del kernel sobre minicoro (ola 1)
 
