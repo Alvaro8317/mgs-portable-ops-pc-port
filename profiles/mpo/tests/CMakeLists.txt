@@ -299,3 +299,9 @@ if(MPO_BUILD_PPSSPP_REF)
              COMMAND mpo_difftest_aot --a emitter --b ppsspp --class all ${mpo_aot_args})
     set_tests_properties(mpo_difftest_emitter_ppsspp PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# F08b: mpo_hle on synthetic guest code (interpreter), no game data.
+add_executable(mpo_hle_test hle_test.cpp)
+target_link_libraries(mpo_hle_test PRIVATE psprecomp_core mpo_hle)
+mpo_target_warnings(mpo_hle_test)
+add_test(NAME mpo_hle_test COMMAND mpo_hle_test)

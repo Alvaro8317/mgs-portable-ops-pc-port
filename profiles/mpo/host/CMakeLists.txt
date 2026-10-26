@@ -47,3 +47,6 @@ add_subdirectory(frontend)
 # F17a: PMF videos and PGF fonts (they use mpo_audio and mpo_ge_replay).
 add_subdirectory(video)
 add_subdirectory(font)
+
+# F08b: the kernel HLE on the recompiled CPU, the module loader and mpo_boot.
+add_subdirectory(hle)
