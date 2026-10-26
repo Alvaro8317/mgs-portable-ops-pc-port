@@ -322,3 +322,36 @@ imports (240, iguales a F03) y las tablas de saltos (todos los destinos son semi
   parche genérico se puede enviar como PR upstream. Mientras no exista el fork, los parches viven
   en `framework/patches/` y se aplican con `git am`.
 - Lo decide el integrador o el usuario; crear el fork necesita su cuenta de GitHub.
+
+## 11. Estado de las brechas tras F07b
+
+La base del framework es desde F07b la rama `mpo` del fork (`CLAUDE.md` §9, decisión 7): upstream
+`f6e7d41`, la capa genérica de Yakumo (`TeamGDB/Yakumo` `4a5debda`, MIT), los parches 0001 y 0002
+rebasados y los commits genéricos de F07b. La lista de commits está en `docs/sessions/F07b.md`.
+
+| # | Brecha | Estado |
+|---|---|---|
+| 1 | Hints externos | Hecho (0001, en `mpo`). Nuevo `patch <dirección> <palabra>` para código que el juego reescribe al arrancar. |
+| 2 | `.rodata` como código | Hecho: filtro `SHF_EXECINSTR` de Yakumo; con hints, los rangos `code` de Ghidra. |
+| 3 | Bucle con `jal` a un stub de otra unidad | Hecho (Yakumo ya lo traía). |
+| 4 | `goto` a un stub de la misma unidad | Hecho (0002 rebasado: las palabras de los stubs no se emiten). |
+| 5 | Intérprete de respaldo | Hecho (Yakumo) y probado con el difftest (`mpo_difftest_interpreter`). |
+| 6 | Ganchos de overlays | Traídos de Yakumo; se usan en F13. |
+| 7 | Una librería por overlay | `--prefix` de Yakumo; el cargador del perfil es de F13. |
+| 8 | Una disposición de unidades por `Runtime` | Resuelto por diseño: un corpus con `--prefix` registra por dirección y no toca la tabla densa del ejecutable principal (test `test_prefixed_corpus_keeps_main_layout`). |
+| 10 | Tres funciones parcheadas a `jr ra` | Hecho como `patch` en `config/hints/mgp_main.txt`: un `register_function` en la entrada no alcanza, porque las llamadas desde la misma unidad son `goto` directos. `mpo_aot_probe` comprueba que vuelven al instante. |
+| 13 | `vi2s`, `vi2uc`, `vcrs.t`, `vsgn` | Hecho: toda la VFPU va al ejecutor (`mpo_vfpu`). |
+| 14 | VFPU no bit a bit | Hecho: `psp_recomp --vfpu-executor` y `set_vfpu_executor()` (MIT); el perfil instala `mpo_vfpu`. |
+| 15 | `break` | Hecho (Yakumo). |
+| 16 | Relocaciones sin tabla de secciones | Pendiente (baja prioridad). |
+| 17 | Tamaño del C++ | `mgp_main`: 118 unidades de `0x4000` bytes, 116 MB de C++. Medido en `docs/sessions/F07b.md`. |
+
+**Cambio de modelo de emisión** (capa de Yakumo): `psp_recomp --auto` ya no emite solo lo que
+alcanza el CFG, sino **cada palabra de los rangos ejecutables, y cada una es una entrada del
+dispatcher**. Con los rangos `code` de Ghidra, `mgp_main` registra 481 676 entradas (todas las
+palabras de código menos los 240 stubs, que tienen su wrapper de import). La unidad por defecto pasa
+de `0x20000` a `0x4000` bytes.
+
+**Semántica de la CPU corregida en el framework** (encontrada por el difftest del emisor contra
+PPSSPP; ver `docs/sessions/F07b.md`): conversiones float→int, `divu` por cero, `INT_MIN / -1`,
+`jalr` con `rd = 0`, y un salto a una dirección de una unidad que no es entrada.
