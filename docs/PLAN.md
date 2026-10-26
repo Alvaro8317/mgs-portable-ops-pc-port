@@ -94,7 +94,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F08a | Primitivas del kernel sobre minicoro | M1 | ✅ hecha (ola 1) |
 | F08b | Kernel HLE: integración, módulos y arranque | M1 | ⬜ pendiente (ola 3) |
 | F09 | IO, tiempo y vblank | M2 | ⬜ pendiente |
-| F10a | Ventana, presentación e input (autónomo) | M2 | ⬜ pendiente (ola 2) |
+| F10a | Ventana, presentación e input (autónomo) | M2 | ✅ hecha (ola 2) |
 | F10b | Presentación e input en el juego | M2 | ⬜ pendiente |
 | F11a | GE por software: reproductor de `.ppdmp` y 2D | M2 | ✅ hecha (ola 1) |
 | F11b | `sceGe*` en el juego y stub de `sceMpeg` | M2 | ⬜ pendiente |
@@ -440,12 +440,12 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Probarlo con los framebuffers que deja F11a al reproducir los dumps.
 - **Criterios de hecho**: en WSLg o en Windows se ve un framebuffer de prueba en los cuatro formatos
   y una traza muestra el input traducido.
-- **Notas (ola 1)**:
-  - SDL3 3.4.18 ya está fijado en `third_party/sdl3/sdl3.cmake` (F16a), pero solo con audio.
-    Hay que poner `MPO_SDL3_AUDIO_ONLY=OFF` y añadir a la CI de Linux los paquetes de X11 o de
-    Wayland (`libx11-dev`, `libxext-dev`, `libxcursor-dev`… o `libwayland-dev` y
-    `libxkbcommon-dev`). Si no, el configure de SDL falla.
-  - Para probar la presentación, `mpo_ppdmp_replay` (F11a) deja framebuffers reales.
+- **Notas (ola 2)**: hecha, ver `docs/sessions/F10a.md`.
+  - `MPO_SDL3_AUDIO_ONLY` vale `OFF` por defecto. Un build viejo lo tiene en `ON` en la caché, así
+    que hay que reconfigurar con `-DMPO_SDL3_AUDIO_ONLY=OFF`.
+  - La CI de Linux instala `libx11-dev` y `libxext-dev`. Cada extensión de X11 se activa solo si
+    está su cabecera.
+  - **Pendiente del usuario**: verlo a ojo y probar un mando real (procedimiento en la nota).
 
 ### F10b — Presentación e input en el juego
 
@@ -456,6 +456,16 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - `sceCtrl` (`ReadBuffer*`, `PeekBuffer*`, modo analógico) conectado al input de F10a.
 - **Criterios de hecho**: algo dibujado por el juego aparece en la ventana (aunque el GE esté
   incompleto) y el input llega a `sceCtrlReadBuffer*`.
+- **Notas (ola 2)**: la API de F10a es `mpo_frontend` (`GuestMemory`, `ConvertFramebuffer`,
+  `InputTranslator`, `SceCtrlData`) más `mpo_frontend_sdl` (`SdlPresenter`, `SdlInput`,
+  `LoadInputMapping`). El mapeo por defecto está en `profiles/mpo/config/input.toml`. Ver
+  `docs/sessions/F10a.md`.
+  - `sceDisplaySetFrameBuf` guarda un `FramebufferDesc`, que se aplica en el vblank y se presenta
+    con `SdlPresenter::Present`.
+  - `sceCtrl` llama a `Sample()` en cada vblank y aplica encima lo suyo: el modo digital (el stick a
+    128), los latches y el anillo de 64 buffers, como `__CtrlUpdateLatch` de PPSSPP.
+  - Falta decidir `SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS` (sin él, SDL descarta el mando cuando
+    la ventana no tiene foco) y de dónde se carga el `input.toml` del usuario.
 
 ### F11a — GE por software: reproductor de `.ppdmp` y 2D (ola 1)
 
@@ -593,6 +603,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   diferencia contra el renderer por software queda medida.
 - **Notas (ola 1)**: el banco es `mpo_ppdmp_replay` con `--renderer=soft|vulkan`, y el
   renderer por software es la referencia para comparar frames con `ge_frame_diff.py`.
+- **Notas (ola 2)**: la ventana es de `SdlPresenter` (F10a), con `SDL_VULKAN` encendido. Para
+  Vulkan, la ventana se crea con `SDL_WINDOW_VULKAN`, o se separa la creación de la ventana del
+  renderer de SDL.
 
 ### F14b — Renderer Vulkan en el juego
 
