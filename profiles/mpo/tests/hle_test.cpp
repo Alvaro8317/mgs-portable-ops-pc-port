@@ -106,12 +106,18 @@ constexpr std::uint32_t stub(Stub s) {
     return kStubs + 8u * static_cast<std::uint32_t>(s);
 }
 
-// What psp_recomp's import wrappers do (generated_registry.cpp).
+// What psp_recomp's import wrappers do (generated_registry.cpp): one slot
+// per stub, through invoke_import_cached. Not the uncached invoke_import: it
+// keeps two iterators of the runtime's HLE maps alive across the call, and a
+// call that never returns (ExitThread) abandons them on the fiber's stack.
+// With checked iterators (MSVC Debug, _GLIBCXX_DEBUG) the maps keep a list of
+// their iterators, and destroying them later walks into the freed stack.
 void import_wrapper(psprecomp::Runtime &rt, Ctx &ctx) {
     const std::uint32_t import_pc = ctx.pc;
     const std::uint32_t return_address = ctx.gpr[31];
-    const StubImport &import = kStubImports[(import_pc - kStubs) / 8u];
-    rt.invoke_import(import.library, import.nid, ctx);
+    const std::uint32_t slot = (import_pc - kStubs) / 8u;
+    const StubImport &import = kStubImports[slot];
+    rt.invoke_import_cached(slot, import.library, import.nid, ctx);
     if (!rt.stopped() && ctx.pc == import_pc) ctx.pc = return_address;
 }
 
