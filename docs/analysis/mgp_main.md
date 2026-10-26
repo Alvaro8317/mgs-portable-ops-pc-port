@@ -29,8 +29,10 @@ desensamblado ni texto extraído. Todo se reproduce con las herramientas de `pro
 
 ## 2. Identidad y bloques [V]
 
-- `sceModuleInfo`: nombre `mgp_main`, atributo `0x0000`, versión 1.1, `gp` = `0x08819150`
-  (`0x15150` relativo).
+- `sceModuleInfo`: nombre `mgp_main`, atributo `0x0000`, versión 1.1, `gp` = **`0x08A07E90`**:
+  el campo vale `0x15150` y lo reloca un `R_MIPS_32` contra el segmento 1 (`.data`,
+  `0x089F2D40`), no contra `0x08804000`. Corregido en F06 (antes decía `0x08819150`); ningún
+  código de `mgp_main` usa direccionamiento relativo a `$gp` (ver `psp_analyze.md`).
 - `module_start` (`0x08804128`) declara **SDK `0x02080010`** (`sceKernelSetCompiledSdkVersion`) y
   **compilador `0x30306`** (`sceKernelSetCompilerVersion`, o sea GCC 3.3.6) [V].
 - No exporta funciones propias: solo `module_start` (`0x08804128`), `module_stop` (`0x088044C0`),
