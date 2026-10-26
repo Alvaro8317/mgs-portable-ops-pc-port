@@ -445,6 +445,11 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     `sceAudioOutputPannedBlocking` y `__sceSasCoreWithMix`; el de más sitios es
     `sceRtcGetCurrentTick` (39).
   - `mpo_hle_test` corre en la CI sin datos del juego. `mpo_boot` solo se compila con el corpus.
+  - Al integrar, `mpo_hle_test` caía solo en MSVC Debug: los iteradores comprobados que quedan vivos
+    en la pila de una fibra abandonada (un hilo que sale desde el HLE) apuntan a memoria liberada.
+    Se arregló en el perfil (`2f7bfd1`) y en `mpo` (`b0f1937`). La regla está en la nota, y la CI
+    tiene un job de Linux con `-D_GLIBCXX_DEBUG` (`gcc checked-iterators`) que destapa esta clase
+    de fallo.
 
 ---
 
@@ -706,6 +711,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     distinto que softgpu y falta el dither posterior.
   - Desde la integración de la ola 3, la CI de Linux instala lavapipe (`mesa-vulkan-drivers`) y
     las capas de validación, y corre `mpo_vulkan_renderer_test` con `MPO_VK_REQUIRE_VALIDATION=1`.
+  - `mpo_vulkan_shaders_fresh` fallaba en Windows porque el checkout con `core.autocrlf` deja los
+    shaders en CRLF. `compile_shaders.py` hashea las fuentes normalizadas a LF (`d7e779e`).
   - **Pendiente del usuario**: la prueba en una GPU real en Windows (procedimiento en la nota).
 
 ### F14b — Renderer Vulkan en el juego

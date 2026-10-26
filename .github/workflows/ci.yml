@@ -60,6 +60,16 @@ jobs:
           - variant: release
             build_type: Release
             sanitizers: ''
+          # libstdc++ checked iterators: the Linux twin of MSVC Debug's
+          # _ITERATOR_DEBUG_LEVEL=2. Catches an iterator left alive in a frame
+          # that a thread exit abandons (docs/sessions/F08b.md).
+          - compiler: gcc
+            variant: checked-iterators
+            cc: gcc
+            cxx: g++
+            build_type: Debug
+            sanitizers: ''
+            cxx_flags: -D_GLIBCXX_DEBUG
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
@@ -81,6 +91,7 @@ jobs:
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           "-DMPO_SANITIZERS=${{ matrix.sanitizers }}"
+          "-DCMAKE_CXX_FLAGS=${{ matrix.cxx_flags }}"
           -DMPO_WARNINGS_AS_ERRORS=ON
       - name: Build
         run: cmake --build build --parallel
