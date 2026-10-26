@@ -39,10 +39,40 @@ float float16_to_float32(std::uint16_t half);
 float expand_half(std::uint16_t half);
 std::uint16_t shrink_to_half(float full);
 
+// --- Compiler-proof float helpers ---
+//
+// MSVC breaks bit-exactness in three ways that GCC and Clang do not (CI run
+// 40260589237, see docs/sessions/F07a.md):
+// - /O2 turns float ternaries such as `v <= min ? min : v` into maxss/minss,
+//   which do not tell -0.0 from +0.0, so a zero comes out with the wrong sign;
+// - it folds std::bit_cast of a constant into a float immediate and makes a
+//   signaling NaN quiet on the way (0x7F800001 becomes 0x7FC00001);
+// - in Debug std::fabs is a call into the UCRT, which also quiets a
+//   signaling NaN.
+
+// cond ? a : b, chosen on the bits so the optimizer cannot turn it into a
+// float min/max.
+inline float select_bits(bool cond, float a, float b) {
+    return std::bit_cast<float>(cond ? std::bit_cast<std::uint32_t>(a)
+                                     : std::bit_cast<std::uint32_t>(b));
+}
+
+// The float with exactly these bits, opaque to constant folding. Use it for
+// constant NaN results.
+inline float exact_float(std::uint32_t bits) {
+    volatile std::uint32_t opaque = bits;
+    return std::bit_cast<float>(static_cast<std::uint32_t>(opaque));
+}
+
+// |f| by clearing the sign bit; a NaN keeps its payload.
+inline float fabs_bits(float f) {
+    return std::bit_cast<float>(std::bit_cast<std::uint32_t>(f) & 0x7FFFFFFFu);
+}
+
 // Saturation used by the D prefix: NaN is preserved, -0.0 becomes +0.0 when
 // min is +0.0.
 inline float vfpu_clamp(float v, float min, float max) {
-    return v >= max ? max : (v <= min ? min : v);
+    return select_bits(v >= max, max, select_bits(v <= min, min, v));
 }
 
 inline bool my_isinf(float f) {
@@ -95,7 +125,7 @@ inline float ppsspp_vrsq(float x) {
     return 1.0f / std::sqrt(x);
 }
 inline float ppsspp_vsqrt(float x) {
-    return std::fabs(std::sqrt(x));
+    return fabs_bits(std::sqrt(x));
 }
 
 // vdot.q as PPSSPP's interpreter does it: 0 + s0*t0 + s1*t1 + s2*t2 + s3*t3

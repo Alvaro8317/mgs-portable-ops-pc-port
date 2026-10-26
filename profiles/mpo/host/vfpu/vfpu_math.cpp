@@ -11,6 +11,8 @@
 // - vfpu_dot is the portable vfpu_dot_cpp reference; upstream's SSE2 variant
 //   is documented as equivalent and the golden tests check it.
 // - Integer expressions keep upstream's widths and wrap-arounds on purpose.
+// - Constant NaN results go through exact_float(), so MSVC cannot quiet them
+//   (see vfpu_math.hpp).
 
 #include "vfpu/vfpu_math.hpp"
 
@@ -347,8 +349,7 @@ float vfpu_sin(float x) {
     std::uint32_t significand = (bits & 0x007FFFFFu) | 0x00800000u;
     if (exponent == 0xFFu) {
         // NOTE: this bitpattern is a signaling NaN on x86.
-        bits = sign ^ 0x7F800001u;
-        return bits_to_float(bits);
+        return exact_float(sign ^ 0x7F800001u);
     }
     if (exponent < 0x7Fu) {
         if (exponent < 0x7Fu - 23u)
@@ -379,8 +380,8 @@ float vfpu_cos(float x) {
     const std::uint32_t exponent = (bits >> 23) & 0xFFu;
     std::uint32_t significand = (bits & 0x007FFFFFu) | 0x00800000u;
     if (exponent == 0xFFu) {
-        bits = sign ^ 0x7F800001u;
-        return bits_to_float(bits);
+        // sign is always 0 here, so this is a constant signaling NaN.
+        return exact_float(0x7F800001u);
     }
     if (exponent < 0x7Fu) {
         if (exponent < 0x7Fu - 23u)
@@ -419,11 +420,11 @@ float vfpu_sqrt(float x) {
     }
     if (bits >> 31) {
         // Other negatives get NaN.
-        return bits_to_float(0x7F800001u);
+        return exact_float(0x7F800001u);
     }
     if ((bits >> 23) == 255u) {
         // Inf/NaN gets Inf/NaN.
-        return bits_to_float(0x7F800000u + ((bits & 0x007FFFFFu) != 0u));
+        return exact_float(0x7F800000u + ((bits & 0x007FFFFFu) != 0u));
     }
     const std::int32_t exponent = std::int32_t(bits >> 23) - 127;
     // Bottom bit of exponent (inverted) + significand (except bottom bit).
@@ -442,7 +443,7 @@ float vfpu_rsqrt(float x) {
     }
     if (bits >> 31) {
         // Other negatives get negative NaN.
-        return bits_to_float(0xFF800001u);
+        return exact_float(0xFF800001u);
     }
     if ((bits >> 23) == 255u) {
         // inf gets 0, NaN gets NaN.
@@ -462,7 +463,7 @@ float vfpu_asin(float x) {
     const std::uint32_t sign = bits & 0x80000000u;
     bits = bits & 0x7FFFFFFFu;
     if (bits > 0x3F800000u) {
-        return bits_to_float(0x7F800001u ^ sign);
+        return exact_float(0x7F800001u ^ sign);
     }
     bits = vfpu_asin_fixed(t, std::uint32_t(std::int32_t(std::fabs(x) * 8388608.0f))); // 0x1p23
     x = float(std::int32_t(bits)) * 9.31322574615478515625e-10f;                       // 0x1p-30
@@ -479,7 +480,7 @@ float vfpu_exp2(float x) {
     }
     if (x != x) {
         // NaN gets NaN.
-        return bits_to_float(0x7F800001u);
+        return exact_float(0x7F800001u);
     }
     if (x <= -126.0f) {
         // Small numbers get 0 (exp2(-126) is smallest positive non-denormal).
@@ -513,11 +514,11 @@ float vfpu_log2(float x) {
     }
     if (bits & 0x80000000u) {
         // Other negatives get NaN.
-        return bits_to_float(0x7F800001u);
+        return exact_float(0x7F800001u);
     }
     if ((bits >> 23) == 255u) {
         // NaN gets NaN, +inf gets +inf.
-        return bits_to_float(0x7F800000u + ((bits & 0x007FFFFFu) != 0));
+        return exact_float(0x7F800000u + ((bits & 0x007FFFFFu) != 0));
     }
     const std::uint32_t e = (bits & 0x7F800000u) - 0x3F800000u;
     const std::uint32_t i = bits & 0x007FFFFFu;
@@ -595,11 +596,11 @@ float vfpu_dot(const float a[4], const float b[4]) {
         exps[i] = aexp + bexp - 127;
         if (aexp == 255) {
             // INF * 0 = NAN
-            if ((src0 & 0x007FFFFF) != 0 || bexp == 0) return bits_to_float(0x7F800001u);
+            if ((src0 & 0x007FFFFF) != 0 || bexp == 0) return exact_float(0x7F800001u);
             mants[i] = get_mant(0) << kExtraBits;
             exps[i] = 255;
         } else if (bexp == 255) {
-            if ((src1 & 0x007FFFFF) != 0 || aexp == 0) return bits_to_float(0x7F800001u);
+            if ((src1 & 0x007FFFFF) != 0 || aexp == 0) return exact_float(0x7F800001u);
             mants[i] = get_mant(0) << kExtraBits;
             exps[i] = 255;
         } else {
@@ -611,7 +612,7 @@ float vfpu_dot(const float a[4], const float b[4]) {
         if (exps[i] > max_exp) max_exp = exps[i];
         if (exps[i] >= 255) {
             // Infinity minus infinity is not a real number.
-            if (last_inf != -1 && signs[i] != last_inf) return bits_to_float(0x7F800001u);
+            if (last_inf != -1 && signs[i] != last_inf) return exact_float(0x7F800001u);
             last_inf = signs[i];
         }
     }

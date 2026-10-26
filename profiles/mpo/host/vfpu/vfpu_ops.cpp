@@ -118,12 +118,13 @@ inline bool write_mask(const Regs &r, int i) {
     return ((r.ctrl[kCtrlDPrefix] >> (8 + i)) & 1) != 0;
 }
 
-// Preserves NaN in first param, takes sign of equal second param.
+// Preserves NaN in first param, takes sign of equal second param. Selected on
+// the bits so MSVC cannot turn them into maxss/minss (see vfpu_math.hpp).
 inline float nanmax(float f, float cst) {
-    return f <= cst ? cst : f;
+    return select_bits(f <= cst, cst, f);
 }
 inline float nanmin(float f, float cst) {
-    return f >= cst ? cst : f;
+    return select_bits(f >= cst, cst, f);
 }
 inline float nanclamp(float f, float lower, float upper) {
     return nanmin(nanmax(f, lower), upper);
@@ -678,7 +679,7 @@ void op_vmmul(const Regs &r, u32 op, bool more_accurate_vmmul) {
                 } else if ((bits & 0x7F800000) == 0) {
                     bits &= 0xFF800000;
                 }
-                sum = bitsf(bits);
+                sum = exact_float(bits); // May be a constant signaling NaN.
             } else {
                 const int count = (a == n - 1 && b == n - 1) ? 4 : n;
                 for (int c = 0; c < count; c++) sum = fadd(sum, fmul(s[b * 4 + c], t[a * 4 + c]));
@@ -896,7 +897,7 @@ void op_vocp(const Regs &r, u32 op) {
 
     for (int i = 0; i < num_elements(sz); i++) {
         // Always positive NaN. Note that s is always negated from the registers.
-        d[i] = my_isnan(s[i]) ? std::fabs(s[i]) : fadd(t[i], s[i]);
+        d[i] = my_isnan(s[i]) ? fabs_bits(s[i]) : fadd(t[i], s[i]);
     }
     retain_invalid_swizzle_st(r, d, sz);
     apply_prefix_d(r, d, sz);
@@ -1333,7 +1334,7 @@ void op_vhdp(const Regs &r, u32 op) {
 
     float sum = 0.0f;
     for (int i = 0; i < 4; i++) sum = fadd(sum, fmul(s[i], t[i]));
-    float d = my_isnan(sum) ? std::fabs(sum) : sum;
+    float d = my_isnan(sum) ? fabs_bits(sum) : sum;
     apply_prefix_d(r, &d, kSingle);
     write_vector(r, &d, kSingle, vd);
     eat_prefixes(r);
@@ -1384,7 +1385,11 @@ void vsrt_common(const Regs &r, u32 op, u32 t_swizzle, const bool use_max[4]) {
     apply_prefix_st(t, rewrite_prefix(r, kCtrlTPrefix, swizzle(3, 3, 3, 3), t_swizzle), sz);
 
     // TODO upstream: may mishandle NAN / negative zero / etc.
-    for (int i = 0; i < 4; i++) d[i] = use_max[i] ? std::max(s[i], t[i]) : std::min(s[i], t[i]);
+    // std::max(s, t) and std::min(s, t), on the bits (see vfpu_math.hpp).
+    for (int i = 0; i < 4; i++) {
+        d[i] = use_max[i] ? select_bits(s[i] < t[i], t[i], s[i])
+                          : select_bits(t[i] < s[i], t[i], s[i]);
+    }
     retain_invalid_swizzle_st(r, d, sz);
     apply_prefix_d(r, d, sz);
     write_vector(r, d, sz, vd);
@@ -1853,7 +1858,8 @@ void op_vminmax(const Regs &r, u32 op) {
                     d[i] = bitsf(static_cast<u32>(std::min(ti(i), si(i))));
                 }
             } else {
-                d[i] = std::min(t[i], s[i]);
+                // std::min(t, s), on the bits so a zero keeps t's sign.
+                d[i] = select_bits(s[i] < t[i], s[i], t[i]);
             }
         }
         break;
@@ -1867,7 +1873,8 @@ void op_vminmax(const Regs &r, u32 op) {
                     d[i] = bitsf(static_cast<u32>(std::max(ti(i), si(i))));
                 }
             } else {
-                d[i] = std::max(t[i], s[i]);
+                // std::max(t, s), on the bits so a zero keeps t's sign.
+                d[i] = select_bits(t[i] < s[i], s[i], t[i]);
             }
         }
         break;
