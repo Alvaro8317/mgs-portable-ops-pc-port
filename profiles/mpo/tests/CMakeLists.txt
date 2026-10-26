@@ -163,3 +163,9 @@ add_test(NAME mpo_difftest_unicorn
          COMMAND mpo_difftest --b unicorn --count 4000 --tables "${MPO_VFPU_TABLES_DIR}"
                  --unicorn-command "${mpo_unicorn_command}")
 set_tests_properties(mpo_difftest_unicorn PROPERTIES SKIP_RETURN_CODE 77)
+
+# mpo_apscan (F20a): virtual APs and the sceNetApctl scan model, no game data.
+add_executable(mpo_apscan_test apscan_test.cpp)
+target_link_libraries(mpo_apscan_test PRIVATE mpo_apscan)
+mpo_target_warnings(mpo_apscan_test)
+add_test(NAME mpo_apscan_test COMMAND mpo_apscan_test)
