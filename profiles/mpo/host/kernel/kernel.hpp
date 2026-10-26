@@ -165,6 +165,7 @@ struct ThreadInfo {
     std::uint32_t stack_size{};
     std::uint32_t gp{};
     std::int32_t num_releases{};
+    Uid module_id{};
 };
 
 class Kernel {
@@ -355,6 +356,13 @@ public:
     // Notifies a callback from host code (power, UMD, exit), like PPSSPP's
     // __KernelNotifyCallback.
     void notify_callback_from_host(Uid callback, std::uint32_t notify_arg);
+
+    // A UID from the kernel's object pool for an object the host keeps itself
+    // (F08b: loaded modules, which PPSSPP keeps in the same pool), so it never
+    // collides with a thread or semaphore UID.
+    Uid create_host_object(const char *name);
+    bool delete_host_object(Uid uid);
+    [[nodiscard]] bool is_host_object(Uid uid) const;
 
     // ---- Introspection -----------------------------------------------------
     [[nodiscard]] bool thread_info(Uid thread, ThreadInfo &out) const;

@@ -930,7 +930,27 @@ bool Kernel::thread_info(Uid uid, ThreadInfo &out) const {
     out.stack_size = t->stack_size;
     out.gp = t->gp;
     out.num_releases = t->num_releases;
+    out.module_id = t->module_id;
     return true;
+}
+
+Uid Kernel::create_host_object(const char *name) {
+    auto object = std::make_unique<HostObject>();
+    object->name = Impl::clip_name(name);
+    return impl_->create_object(std::move(object));
+}
+
+bool Kernel::delete_host_object(Uid uid) {
+    Impl &k = *impl_;
+    const Object *object = k.lookup(uid);
+    if (object == nullptr || object->type != ObjType::kHost) return false;
+    k.take_object(uid);
+    return true;
+}
+
+bool Kernel::is_host_object(Uid uid) const {
+    const Object *object = impl_->lookup(uid);
+    return object != nullptr && object->type == ObjType::kHost;
 }
 
 std::vector<Uid> Kernel::thread_list() const {
