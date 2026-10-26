@@ -37,3 +37,6 @@ target_compile_definitions(mpo PRIVATE
 mpo_target_warnings(mpo)
 
 add_subdirectory(ge)
+# F17a: PMF videos and PGF fonts (they use mpo_audio and mpo_ge_replay).
+add_subdirectory(video)
+add_subdirectory(font)

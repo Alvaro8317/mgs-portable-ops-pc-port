@@ -28,6 +28,22 @@ if(TARGET mpo_audio_sdl)
     target_link_libraries(mpo_audio_output_test PRIVATE mpo_audio_sdl)
     target_compile_definitions(mpo_audio_output_test PRIVATE MPO_HAVE_SDL_AUDIO=1)
 endif()
+# mpo_video and mpo_font (F17a): synthetic PSMF/H.264 and PGF data only. The
+# decode test exits 77 (skipped) when the build has no FFmpeg.
+add_executable(mpo_video_psmf_test video_psmf_test.cpp)
+target_link_libraries(mpo_video_psmf_test PRIVATE mpo_video)
+mpo_target_warnings(mpo_video_psmf_test)
+add_test(NAME mpo_video_psmf_test COMMAND mpo_video_psmf_test)
+add_executable(mpo_video_decode_test video_decode_test.cpp)
+target_link_libraries(mpo_video_decode_test PRIVATE mpo_video)
+mpo_target_warnings(mpo_video_decode_test)
+add_test(NAME mpo_video_decode_test COMMAND mpo_video_decode_test)
+set_tests_properties(mpo_video_decode_test PROPERTIES SKIP_RETURN_CODE 77)
+add_executable(mpo_font_pgf_test font_pgf_test.cpp)
+target_link_libraries(mpo_font_pgf_test PRIVATE mpo_font)
+mpo_target_warnings(mpo_font_pgf_test)
+add_test(NAME mpo_font_pgf_test COMMAND mpo_font_pgf_test)
+
 option(MPO_AUDIO_PPSSPP_DIFFTEST
        "Build mpo_audio_ppsspp_difftest from the PPSSPP sources in MPO_PPSSPP_SOURCE_DIR" OFF)
 if(MPO_AUDIO_PPSSPP_DIFFTEST)
