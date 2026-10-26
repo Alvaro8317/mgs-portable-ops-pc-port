@@ -47,3 +47,6 @@ add_subdirectory(frontend)
 # F17a: PMF videos and PGF fonts (they use mpo_audio and mpo_ge_replay).
 add_subdirectory(video)
 add_subdirectory(font)
+
+# F14a: Vulkan GE renderer (mpo_vulkan) and --renderer=vulkan in mpo_ppdmp_replay.
+add_subdirectory(vulkan)

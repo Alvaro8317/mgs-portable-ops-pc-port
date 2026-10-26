@@ -3,7 +3,13 @@
 // mpo_ppdmp_replay: replays PPSSPP frame dumps (.ppdmp) on the software GE
 // (mpo_ge) and writes the resulting framebuffers as PNG.
 //
-//   mpo_ppdmp_replay --out <dir> [--alpha] <dump.ppdmp | dir>...
+//   mpo_ppdmp_replay --out <dir> [--alpha] [--renderer=soft|vulkan] <dump.ppdmp | dir>...
+//
+// --renderer=vulkan (F14a) rasterizes on the GPU with mpo::vk::GeRenderer
+// instead of softgpu, then reads the targets back into VRAM, so the PNG
+// files come out of the same code and compare 1:1 with the soft ones
+// (ge_frame_diff.py). The Vulkan validation layers are on in Debug builds
+// (MPO_VK_VALIDATION=0/1 overrides); any validation error fails the dump.
 //
 // For each dump it writes <stem>.target.png, the colour buffer the GE was
 // drawing to at the end of the frame (480x272 from its top-left corner; the
@@ -23,6 +29,13 @@
 #include "dump_replayer.hpp"
 #include "image.hpp"
 #include "ppdmp.hpp"
+
+#if MPO_HAVE_VULKAN
+#include <memory>
+
+#include "context.hpp"
+#include "ge_renderer.hpp"
+#endif
 
 namespace {
 
@@ -47,10 +60,41 @@ const char *FormatName(std::uint32_t fmt) {
 
 void Usage() {
     std::fprintf(stderr,
-                 "usage: mpo_ppdmp_replay --out <dir> [--alpha] <dump.ppdmp | dir>...\n"
-                 "  --out <dir>  folder for the PNG files (git-ignored, e.g. analysis/f11a)\n"
-                 "  --alpha      keep the framebuffer alpha/stencil bits in the PNG\n");
+                 "usage: mpo_ppdmp_replay --out <dir> [--alpha] [--renderer=soft|vulkan]"
+                 " <dump.ppdmp | dir>...\n"
+                 "  --out <dir>        folder for the PNG files (git-ignored, e.g. analysis/f11a)\n"
+                 "  --alpha            keep the framebuffer alpha/stencil bits in the PNG\n"
+                 "  --renderer=<name>  soft (softgpu, default) or vulkan (GPU, F14a)\n");
 }
+
+#if MPO_HAVE_VULKAN
+struct VulkanBench {
+    std::unique_ptr<mpo::vk::VulkanContext> ctx;
+};
+
+bool OpenVulkan(VulkanBench *vk) {
+    mpo::vk::ContextOptions opts;
+    opts.app_name = "mpo_ppdmp_replay";
+    opts.validation = mpo::vk::DefaultValidation();
+    opts.log = [](std::string_view line) {
+        std::printf("  %.*s\n", static_cast<int>(line.size()), line.data());
+    };
+    mpo::vk::VulkanContext::Status status;
+    std::string err;
+    vk->ctx = mpo::vk::VulkanContext::Create(opts, &status, &err);
+    if (!vk->ctx) {
+        std::fprintf(stderr, "vulkan: %s\n", err.c_str());
+        return false;
+    }
+    const auto &caps = vk->ctx->caps();
+    std::printf("vulkan: %s (%s), API %s, %s, validation %s%s\n", caps.device_name.c_str(),
+                caps.driver_name.c_str(), mpo::vk::VersionString(caps.api_version).c_str(),
+                caps.dynamic_rendering ? "dynamic rendering" : "render passes",
+                caps.validation_active ? "on" : "off",
+                caps.sync_validation_active ? " (+synchronization)" : "");
+    return true;
+}
+#endif
 
 bool WriteFb(const mpo::ge::MemoryView &mem, const DisplayFramebuffer &fb, bool alpha,
              const fs::path &path) {
@@ -66,7 +110,8 @@ bool WriteFb(const mpo::ge::MemoryView &mem, const DisplayFramebuffer &fb, bool 
     return true;
 }
 
-bool ReplayOne(const fs::path &path, const fs::path &out_dir, bool alpha) {
+bool ReplayOne(const fs::path &path, const fs::path &out_dir, bool alpha, void *vulkan) {
+    (void)vulkan; // null unless --renderer=vulkan
     std::printf("== %s\n", path.filename().string().c_str());
     mpo::ge::replay::FrameDump dump;
     if (std::string err = mpo::ge::replay::LoadFrameDump(path, &dump); !err.empty()) {
@@ -81,7 +126,50 @@ bool ReplayOne(const fs::path &path, const fs::path &out_dir, bool alpha) {
     replayer.ge().stats().log = [](std::string_view what) {
         std::printf("  unsupported: %.*s\n", static_cast<int>(what.size()), what.data());
     };
-    const std::string err = replayer.Run(dump, &summary);
+#if MPO_HAVE_VULKAN
+    std::unique_ptr<mpo::vk::GeRenderer> gpu;
+    int validation_before = 0;
+    if (vulkan) {
+        auto *vk = static_cast<VulkanBench *>(vulkan);
+        validation_before = vk->ctx->validation().errors.load();
+        std::string verr;
+        gpu = mpo::vk::GeRenderer::Create(vk->ctx.get(), replayer.memory(), &verr);
+        if (!gpu) {
+            std::fprintf(stderr, "  error: vulkan renderer: %s\n", verr.c_str());
+            return false;
+        }
+        gpu->stats().log = [](std::string_view what) {
+            std::printf("  vulkan approximate: %.*s\n", static_cast<int>(what.size()), what.data());
+        };
+        replayer.ge().SetDrawBackend(gpu.get());
+    }
+#endif
+    std::string err = replayer.Run(dump, &summary);
+#if MPO_HAVE_VULKAN
+    if (gpu) {
+        std::string verr;
+        if (!gpu->EndFrame(true, &verr) && err.empty()) err = "vulkan: " + verr;
+        replayer.ge().SetDrawBackend(nullptr);
+        const auto &vs = gpu->stats();
+        std::printf("  vulkan: draws %llu, batches %llu, pipelines %zu, textures %zu"
+                    " (uploads %llu, hits %llu), CLUT uploads %llu, line pixels %llu\n",
+                    static_cast<unsigned long long>(vs.draws),
+                    static_cast<unsigned long long>(vs.batches), gpu->pipeline_count(),
+                    gpu->texture_count(), static_cast<unsigned long long>(vs.texture_uploads),
+                    static_cast<unsigned long long>(vs.texture_hits),
+                    static_cast<unsigned long long>(vs.clut_uploads),
+                    static_cast<unsigned long long>(vs.line_pixels));
+        for (const auto &[what, count] : vs.approximations) {
+            std::printf("  vulkan approximate: %s x%llu\n", what.c_str(),
+                        static_cast<unsigned long long>(count));
+        }
+        gpu.reset();
+        auto *vk = static_cast<VulkanBench *>(vulkan);
+        const int errors = vk->ctx->validation().errors.load() - validation_before;
+        std::printf("  vulkan validation errors %d\n", errors);
+        if (errors > 0 && err.empty()) err = "vulkan validation errors";
+    }
+#endif
     const auto &st = replayer.ge().stats();
     std::printf("  register blocks %zu, GE commands %llu, draw commands %llu, vertices %llu\n",
                 summary.register_blocks, static_cast<unsigned long long>(summary.commands),
@@ -136,6 +224,7 @@ bool ReplayOne(const fs::path &path, const fs::path &out_dir, bool alpha) {
 int main(int argc, char **argv) {
     fs::path out_dir;
     bool alpha = false;
+    std::string renderer = "soft";
     std::vector<fs::path> inputs;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
@@ -143,6 +232,10 @@ int main(int argc, char **argv) {
             out_dir = argv[++i];
         } else if (arg == "--alpha") {
             alpha = true;
+        } else if (arg.rfind("--renderer=", 0) == 0) {
+            renderer = std::string(arg.substr(11));
+        } else if (arg == "--renderer" && i + 1 < argc) {
+            renderer = argv[++i];
         } else if (arg == "-h" || arg == "--help") {
             Usage();
             return 0;
@@ -180,9 +273,21 @@ int main(int argc, char **argv) {
         std::fprintf(stderr, "no .ppdmp files found\n");
         return 2;
     }
+    void *vulkan = nullptr;
+#if MPO_HAVE_VULKAN
+    VulkanBench bench;
+    if (renderer == "vulkan") {
+        if (!OpenVulkan(&bench)) return 3;
+        vulkan = &bench;
+    }
+#endif
+    if (renderer != "soft" && vulkan == nullptr) {
+        std::fprintf(stderr, "renderer '%s' is not available in this build\n", renderer.c_str());
+        return 2;
+    }
     int failures = 0;
     for (const fs::path &dump : dumps) {
-        if (!ReplayOne(dump, out_dir, alpha)) ++failures;
+        if (!ReplayOne(dump, out_dir, alpha, vulkan)) ++failures;
     }
     std::printf("%zu dump(s), %d failed\n", dumps.size(), failures);
     return failures == 0 ? 0 : 1;

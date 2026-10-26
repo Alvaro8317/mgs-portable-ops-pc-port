@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <span>
 
+#include "draw_backend.hpp"
 #include "ge_constants.hpp"
 #include "ge_state.hpp"
 #include "memory_view.hpp"
@@ -71,7 +72,11 @@ DecodeParams ComputeDecodeParams(const GeState &gs, std::uint32_t vtype);
 class PrimitiveAssembler {
 public:
     PrimitiveAssembler(const MemoryView &mem, Stats &stats)
-        : mem_(mem), raster_(mem), stats_(stats) {}
+        : mem_(mem), soft_(mem), stats_(stats) {}
+
+    // Sends the primitives to `backend` instead of the software rasterizer
+    // (nullptr restores it). The backend must outlive its use here.
+    void SetBackend(DrawBackend *backend) { backend_ = backend ? backend : &soft_; }
 
     // Submits `count` vertices of `prim` (PRIM command). `vertex_addr` and
     // `index_addr` are absolute PSP addresses. Returns the bytes of vertex data
@@ -113,7 +118,8 @@ private:
     [[nodiscard]] BinCoords Scissor(BinCoords range) const;
 
     const MemoryView &mem_;
-    Rasterizer raster_;
+    SoftwareBackend soft_;
+    DrawBackend *backend_ = &soft_;
     Stats &stats_;
 
     // Per-draw context, valid during SubmitVertices().

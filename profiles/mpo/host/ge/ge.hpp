@@ -74,6 +74,10 @@ public:
     void RestoreContext(std::span<const std::uint32_t> words);
     void SaveContext(std::span<std::uint32_t> words) const;
 
+    // Where primitives are drawn: the software rasterizer by default, or
+    // another backend (the Vulkan renderer). nullptr restores the default.
+    void SetDrawBackend(DrawBackend *backend) { assembler_.SetBackend(backend); }
+
     [[nodiscard]] GeState &state() { return state_; }
     [[nodiscard]] const GeState &state() const { return state_; }
     [[nodiscard]] Stats &stats() { return stats_; }
