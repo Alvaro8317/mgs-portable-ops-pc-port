@@ -53,3 +53,6 @@ add_subdirectory(vulkan)
 
 # F08b: the kernel HLE on the recompiled CPU, the module loader and mpo_boot.
 add_subdirectory(hle)
+
+# F18a: sceUtility savedata, message and OSK dialogs (mpo_savedata).
+add_subdirectory(savedata)
