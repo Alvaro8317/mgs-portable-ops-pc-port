@@ -53,6 +53,7 @@ constexpr UtilityModuleInfo kUtilityModules[] = {
     {0x600, 0x00000000, "irda", {}},
     {0x601, 0x00000000, "unk_0x601", {}},
 };
+constexpr std::uint32_t kAvModuleAtrac3plus = 0x302u;
 constexpr std::uint32_t kAvModuleBadId = 0x80110F01u;
 constexpr std::uint32_t kAvModuleAlreadyLoaded = 0x80110F02u;
 constexpr std::uint32_t kAvModuleNotLoaded = 0x80110F03u;
@@ -83,6 +84,7 @@ System::System(psprecomp::Runtime &runtime, const SystemConfig &config)
     ctrl_ = std::make_unique<Ctrl>(*this, *display_);
     ge_ = std::make_unique<GeManager>(*this, *interrupts_);
     mpeg_ = std::make_unique<Mpeg>(*this);
+    audio_ = std::make_unique<Audio>(*this);
     hle_->set_unimplemented_policy(config.unimplemented);
     bridge_.set_callback_return(alloc_kernel_scratch(16u, "hle-callback-return"));
     bridge_.set_thread_return_handler(
@@ -109,6 +111,7 @@ System::System(psprecomp::Runtime &runtime, const SystemConfig &config)
 
 System::~System() {
     // The kernel abandons the fibers; nothing of the guest runs past here.
+    audio_.reset();
     mpeg_.reset();
     ge_.reset();
     ctrl_.reset();
@@ -135,6 +138,7 @@ void System::register_hle() {
     ctrl_->register_hle();
     ge_->register_hle();
     mpeg_->register_hle();
+    audio_->register_hle();
 }
 
 bool System::mount(std::string *error) {
@@ -183,6 +187,8 @@ std::uint32_t System::load_utility_module(std::uint32_t module, bool av) {
     utility_modules_[module] = address;
     hle_->trace_event("utility module %03X '%s': %u bytes at %08X", module, info->name, info->size,
                       address);
+    // NotifyLoadStatusAtrac.
+    if (module == kAvModuleAtrac3plus) audio_->notify_atrac_module(true, address);
     return 0u;
 }
 
@@ -191,6 +197,7 @@ std::uint32_t System::unload_utility_module(std::uint32_t module, bool av) {
     if (found == utility_modules_.end()) return av ? kAvModuleNotLoaded : kModuleNotLoaded;
     if (found->second != 0u) (void)kernel_->user_memory().free(found->second);
     utility_modules_.erase(found);
+    if (module == kAvModuleAtrac3plus) audio_->notify_atrac_module(false, 0u);
     return 0u;
 }
 

@@ -364,6 +364,8 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
     de PPSSPP.
   - Se comparan los frames contra los dumps del GE debugger de PPSSPP.
   - Se compara la secuencia de llamadas HLE.
+  - Se compara el audio (`mpo_boot --audio-wav`) contra el "Dump audio" de PPSSPP con
+    `mpo_audio_report`, evento por evento (F16b).
 - **Repetición de input**: se graba el input (lectura por lectura) y se reproduce de forma
   determinista. Las capturas cada N frames se comparan contra referencias locales (no van al repo).
 - **Toggles A/B por variable de entorno** para cada optimización del renderer, para poder bisecar

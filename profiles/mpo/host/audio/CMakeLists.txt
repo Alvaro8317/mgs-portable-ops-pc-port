@@ -29,6 +29,15 @@ else()
     target_compile_options(mpo_audio PRIVATE -Wno-conversion -Wno-sign-conversion)
 endif()
 
+# F16b: the port's audio against a PPSSPP recording.
+add_library(mpo_audio_report STATIC audio_report.cpp)
+target_include_directories(mpo_audio_report PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+mpo_target_warnings(mpo_audio_report)
+add_executable(mpo_audio_report_tool audio_report_main.cpp)
+target_link_libraries(mpo_audio_report_tool PRIVATE mpo_audio_report)
+set_target_properties(mpo_audio_report_tool PROPERTIES OUTPUT_NAME mpo_audio_report)
+mpo_target_warnings(mpo_audio_report_tool)
+
 add_executable(mpo_at3_to_wav at3_to_wav.cpp)
 target_link_libraries(mpo_at3_to_wav PRIVATE mpo_audio)
 mpo_target_warnings(mpo_at3_to_wav)

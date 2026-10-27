@@ -30,6 +30,11 @@ foreach(mpo_audio_test IN ITEMS audio_sas_test audio_atrac_test audio_output_tes
     mpo_target_warnings(mpo_${mpo_audio_test})
     add_test(NAME mpo_${mpo_audio_test} COMMAND mpo_${mpo_audio_test})
 endforeach()
+# F16b: the comparison against PPSSPP's recordings, on synthetic signals.
+add_executable(mpo_audio_report_test audio_report_test.cpp)
+target_link_libraries(mpo_audio_report_test PRIVATE mpo_audio_report)
+mpo_target_warnings(mpo_audio_report_test)
+add_test(NAME mpo_audio_report_test COMMAND mpo_audio_report_test)
 if(TARGET mpo_audio_sdl)
     target_link_libraries(mpo_audio_output_test PRIVATE mpo_audio_sdl)
     target_compile_definitions(mpo_audio_output_test PRIVATE MPO_HAVE_SDL_AUDIO=1)

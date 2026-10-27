@@ -19,7 +19,8 @@
 // (F11b) runs the display lists of sceGe on mpo_ge (GeManager), and sceMpeg
 // plays the videos on the media engine of F17a without showing them (Mpeg).
 // The stage overlays (F13) install their recompiled corpus when the game loads
-// them (OverlayManager).
+// them (OverlayManager). sceAudio, sceSasCore and sceAtrac3plus (F16b) mix on
+// mpo_audio and hand every 64-sample block to Audio::set_output (Audio).
 
 #pragma once
 
@@ -30,6 +31,7 @@
 #include <string>
 #include <vector>
 
+#include "hle/audio.hpp"
 #include "hle/cpu_bridge.hpp"
 #include "hle/ctrl.hpp"
 #include "hle/display.hpp"
@@ -87,6 +89,7 @@ public:
     [[nodiscard]] Ctrl &ctrl() noexcept { return *ctrl_; }
     [[nodiscard]] GeManager &ge() noexcept { return *ge_; }
     [[nodiscard]] Mpeg &mpeg() noexcept { return *mpeg_; }
+    [[nodiscard]] Audio &audio() noexcept { return *audio_; }
     [[nodiscard]] const SystemConfig &config() const noexcept { return config_; }
 
     // Mounts the ISO and the memory stick of the config (boot() does it too).
@@ -124,6 +127,7 @@ private:
     std::unique_ptr<Ctrl> ctrl_;
     std::unique_ptr<GeManager> ge_;
     std::unique_ptr<Mpeg> mpeg_;
+    std::unique_ptr<Audio> audio_;
     bool mounted_ = false;
     std::map<std::uint32_t, std::uint32_t> utility_modules_;
 };

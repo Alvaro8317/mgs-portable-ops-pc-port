@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b → F17b → F18b → F15b → F19 → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b → F18b → F15b → F19 → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -106,7 +106,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F15a | Renderer Vulkan: blending por shader y efectos (autónomo) | M3 | ✅ hecha (ola 4) |
 | F15b | Renderer Vulkan: framebuffers en el juego | M3 | ⬜ pendiente |
 | F16a | Audio autónomo: SAS, ATRAC3 y salida SDL3 | M4 | ✅ hecha (ola 1) |
-| F16b | Audio en el juego: `sceAudio`, `sceSas` y `sceAtrac` | M4 | ⬜ pendiente |
+| F16b | Audio en el juego: `sceAudio`, `sceSas` y `sceAtrac` | M4 | ✅ hecha (Windows y la música de misión: pendientes) |
 | F17a | Decodificador de PMF y fuente PGF (autónomos) | M4 | ✅ hecha (ola 2) |
 | F17b | Video del título y fuentes en el juego | M4 | ⬜ pendiente |
 | F18a | Savedata, OSK y diálogos (autónomo) | M4 | ✅ hecha (ola 4) |
@@ -1014,6 +1014,16 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   `sceAudioOutputPannedBlocking`, que son los imports pendientes más llamados (`docs/sessions/F08b.md`).
 - **Notas (F11b)**: con la política `stop`, el primer import sin HLE ya es
   `sceSasCore::__sceSasInit`, a los 232 848 µs (`docs/sessions/F11b.md`).
+- **Notas (F16b)**: hecha, ver `docs/sessions/F16b.md`.
+  - `hle::Audio` registra `sceAudio` (23 NIDs), `sceSasCore` (32) y `sceAtrac3plus` (38) sobre
+    `mpo_audio`. El mezclador es un evento cada 64 muestras; `mpo_boot --audio 1` lo reproduce con
+    SDL3 y `--audio-wav` lo vuelca. `mpo_audio_report` compara contra las grabaciones de PPSSPP.
+  - **[V]** Los efectos de Start y Círculo del menú salen idénticos bit a bit a los de la grabación
+    `extra2` de PPSSPP.
+  - **Pendiente**:
+    - la prueba en tiempo real en Windows (el audio de WSLg se atasca a los ~17 s);
+    - la música de misión y el codec (`sceAtrac`), que se comparan en F19 contra
+      `analysis/f16b/mission_*.wav`.
 
 ### F17a — Decodificador de PMF y fuente PGF, autónomos (ola 2)
 
@@ -1067,6 +1077,13 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     los reproduce la etapa `title` en los framebuffers 8888 `0x04000000`, `0x04088000` y
     `0x04110000`.
   - El texto de "Checking Memory Stick…" (después de NEW GAME) sale de `sceFont`.
+- **Notas (F16b)**: **[V]** la música del título es el audio de `MPO_OP_LONG.pmf`: la grabación
+  `analysis/f16b/menu_*.wav` de PPSSPP coincide con su PCM (desde el segundo 57,9) con correlación
+  1,000. Con el PCM real en `sceMpegAtracDecode`, se comprueba con
+  `mpo_audio_report <nuestro.wav> --ref analysis/f16b/menu_*.wav --ref analysis/f16b/extra1_*.wav`.
+  - Después, comparar otra vez el recorrido Start → menú → Círculo contra `extra2`: en PPSSPP hay un
+    fondo de banda ancha a −45 dB que aquí no se pide, porque el flujo del menú depende de
+    `sceFont` y `sceUtilityMsgDialog` (ver `docs/sessions/F16b.md`).
 - **Notas (F05)**: el decodificador real sustituye al stub de `sceMpeg`/`scePsmf` de F11.
   - La intro y el "Press Start" se muestran en tres framebuffers 8888 en `0x04000000`, `0x04088000`
     y `0x04110000`, sin draws del GE.
@@ -1176,6 +1193,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Notas (F13)**: el criterio de F13 "entrar a la primera etapa sin código interpretado" se
   comprueba aquí con el reporte de `mpo_boot` (tabla "stage overlays"). Las etapas de la misión y
   su transición tienen que estar en `build_overlays.py --stages`.
+- **Notas (F16b)**: el criterio de audio de F16b que falta (la música y el codec sin cortes) se
+  comprueba aquí: `mpo_boot --audio-wav` en la misión y
+  `mpo_audio_report <nuestro.wav> --ref analysis/f16b/mission_*.wav`. Es lo primero que usa
+  `sceAtrac` en el juego (los `.sep` de `USRDIR/oss/`).
 
 ### F20a — Generador de APs virtuales, autónomo (ola 2)
 

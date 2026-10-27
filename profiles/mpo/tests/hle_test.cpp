@@ -20,7 +20,10 @@
 // transfer into VRAM, a signal and a finish with their sub-interrupt
 // handlers, ListSync and DrawSync, a stalled list), sceMpeg (PSMF header,
 // ring buffer and its read callback) and the binding of the import stubs of
-// a module loaded without recompiled code.
+// a module loaded without recompiled code; F16b: sceAudio (a blocking output
+// that waits for the mixer, a busy channel, the samples in the mix),
+// sceSasCore (the delay after a mix) and sceAtrac3plus (no ID before
+// sceUtilityLoadAvModule loads the module).
 
 #include <algorithm>
 #include <cstdint>
@@ -145,6 +148,15 @@ enum Stub : std::uint32_t {
     kMpegRegistStream,
     kMpegRingbufferAvailableSize,
     kMpegRingbufferPut,
+    // F16b.
+    kAudioChReserve,
+    kAudioOutputPannedBlocking,
+    kAudioOutputPanned,
+    kAudioGetChannelRestLength,
+    kSasInit,
+    kSasCoreWithMix,
+    kUtilityLoadAvModule,
+    kAtracGetAtracID,
     kStubCount,
 };
 constexpr StubImport kStubImports[kStubCount] = {
@@ -175,7 +187,11 @@ constexpr StubImport kStubImports[kStubCount] = {
     {"sceMpeg", 0xC132E22Fu},          {"sceMpeg", 0xD8C5F121u},
     {"sceMpeg", 0x21FF80E4u},          {"sceMpeg", 0x611E9E11u},
     {"sceMpeg", 0x42560F23u},          {"sceMpeg", 0xB5F6DC87u},
-    {"sceMpeg", 0xB240A59Eu},
+    {"sceMpeg", 0xB240A59Eu},          {"sceAudio", 0x5EC81C55u},
+    {"sceAudio", 0x13F592BCu},         {"sceAudio", 0xE2D56B2Du},
+    {"sceAudio", 0xB011922Fu},         {"sceSasCore", 0x42778A9Fu},
+    {"sceSasCore", 0x50A14DFCu},       {"sceUtility", 0xC629AF26u},
+    {"sceAtrac3plus", 0x780F88D1u},
 };
 constexpr std::uint32_t stub(Stub s) {
     return kStubs + 8u * static_cast<std::uint32_t>(s);
@@ -1561,6 +1577,137 @@ void test_mpeg() {
     CHECK_EQ(f.word(kData + 40u), 4u);
 }
 
+// sceAudio, sceSasCore and sceAtrac3plus on mpo_audio.
+void test_audio() {
+    Fixture f;
+    psprecomp::Runtime &rt = f.runtime;
+    std::vector<std::int32_t> mixed;
+    f.system->audio().set_output([&mixed](const std::int32_t *mix, int frames) {
+        mixed.insert(mixed.end(), mix, mix + 2 * frames);
+    });
+    constexpr std::uint32_t kSamples = kData + 0x1000u;
+    constexpr std::uint32_t kFrames = 256u;
+    for (std::uint32_t i = 0; i < kFrames; ++i) {
+        const auto value = static_cast<std::uint16_t>(100u + i);
+        rt.memory().store16(kSamples + 4u * i, value);
+        rt.memory().store16(kSamples + 4u * i + 2u, static_cast<std::uint16_t>(-value));
+    }
+    constexpr std::uint32_t kSasCore = kData + 0x2000u; // 64-byte aligned.
+    constexpr std::uint32_t kSasBuffer = kData + 0x3000u;
+
+    Asm main(rt, kCode);
+    const std::uint32_t entry = main.here();
+    main.enter();
+    main.li(s7, kData);
+    main.li(a0, 0x1000u); // PSP_CODEC_AT3PLUS, before the module.
+    main.call(kAtracGetAtracID);
+    main.sw(v0, 0, s7);
+    main.li(a0, 0u); // PSP_AV_MODULE_AVCODEC
+    main.call(kUtilityLoadAvModule);
+    main.sw(v0, 4, s7);
+    main.li(a0, 2u); // PSP_AV_MODULE_ATRAC3PLUS
+    main.call(kUtilityLoadAvModule);
+    main.sw(v0, 8, s7);
+    main.li(a0, 0x1001u); // PSP_CODEC_AT3
+    main.call(kAtracGetAtracID);
+    main.sw(v0, 12, s7);
+
+    main.li(a0, 0xFFFFFFFFu); // Any channel.
+    main.li(a1, kFrames);
+    main.li(a2, 0u); // Stereo.
+    main.call(kAudioChReserve);
+    main.sw(v0, 16, s7);
+    main.move(s0, v0);
+    const auto output = [&](Stub s) {
+        main.move(a0, s0);
+        main.li(a1, 0x8000u);
+        main.li(a2, 0x8000u);
+        main.li(a3, kSamples);
+        main.call(s);
+    };
+    output(kAudioOutputPannedBlocking); // Empty queue: no wait.
+    main.sw(v0, 20, s7);
+    main.call(kGetSystemTimeWide);
+    main.sw(v0, 24, s7);
+    output(kAudioOutputPanned); // Queued: busy.
+    main.sw(v0, 28, s7);
+    output(kAudioOutputPannedBlocking); // Waits for the 256 queued frames.
+    main.sw(v0, 32, s7);
+    main.call(kGetSystemTimeWide);
+    main.sw(v0, 36, s7);
+    main.move(a0, s0);
+    main.call(kAudioGetChannelRestLength);
+    main.sw(v0, 40, s7);
+
+    main.li(a0, kSasCore);
+    main.li(a1, 256u);
+    main.li(a2, 32u);
+    main.li(a3, 0u);
+    main.li(t0, 44100u);
+    main.call(kSasInit);
+    main.sw(v0, 44, s7);
+    main.call(kGetSystemTimeWide);
+    main.sw(v0, 48, s7);
+    main.li(a0, kSasCore);
+    main.li(a1, kSasBuffer);
+    main.li(a2, 0x1000u);
+    main.li(a3, 0x1000u);
+    main.call(kSasCoreWithMix);
+    main.sw(v0, 52, s7);
+    main.call(kGetSystemTimeWide);
+    main.sw(v0, 56, s7);
+    main.li(t0, 1u);
+    main.sw(t0, 60, s7);
+    main.leave();
+
+    (void)start_thread(*f.system, "audio", entry, 0x20u);
+    CHECK(f.system->run(100'000u) == mk::RunResult::kDeadline);
+    CHECK_EQ(f.word(kData + 60u), 1u);
+    CHECK_EQ(f.word(kData), 0x80630003u); // SCE_ERROR_ATRAC_NO_ATRACID
+    CHECK_EQ(f.word(kData + 4u), 0u);
+    CHECK_EQ(f.word(kData + 8u), 0u);
+    CHECK_EQ(f.word(kData + 12u), 2u); // Contexts 2 and 3 start as ATRAC3.
+    CHECK_EQ(f.word(kData + 16u), 7u); // GetFreeChannel: from the top.
+    CHECK_EQ(f.word(kData + 20u), kFrames);
+    CHECK_EQ(f.word(kData + 28u), 0x80260002u); // SCE_ERROR_AUDIO_CHANNEL_BUSY
+    CHECK_EQ(f.word(kData + 32u), kFrames);
+    // Woken by the fourth mixer update after the first output: 4 x 322176
+    // cycles at 222 MHz (5805 us), give or take where the first one fell.
+    const std::uint32_t waited = f.word(kData + 36u) - f.word(kData + 24u);
+    CHECK(waited > 4u * 1451u - 1452u && waited <= 4u * 1452u);
+    CHECK_EQ(f.word(kData + 40u), kFrames); // The second copy is still queued.
+    CHECK_EQ(f.word(kData + 44u), 0u);
+    CHECK_EQ(f.word(kData + 52u), 0u);
+    // EstimateMixUs with no voice playing and a 256-sample grain: 20 + 153.
+    const std::uint32_t mix_us = f.word(kData + 56u) - f.word(kData + 48u);
+    CHECK(mix_us >= 173u && mix_us < 200u);
+
+    // The mix: both copies, back to back, at full volume (0x8000).
+    const mh::Audio::Stats &stats = f.system->audio().stats();
+    CHECK_EQ(stats.channels_reserved, 1u);
+    CHECK_EQ(stats.blocking_waits, 1u);
+    CHECK_EQ(stats.sas_mixes, 1u);
+    CHECK_EQ(stats.blocks, mixed.size() / 128u);
+    std::size_t first = 0;
+    while (first < mixed.size() && mixed[first] == 0) ++first;
+    CHECK(first % 128u == 0u);
+    CHECK(mixed.size() >= first + 4u * kFrames);
+    for (std::uint32_t i = 0; i < 2u * kFrames && first + 2u * i + 1u < mixed.size(); ++i) {
+        const auto value = static_cast<std::int32_t>(100u + i % kFrames);
+        if (mixed[first + 2u * i] != value || mixed[first + 2u * i + 1u] != -value) {
+            CHECK(false);
+            break;
+        }
+    }
+    // Nothing after the two copies.
+    for (std::size_t i = first + 4u * kFrames; i < mixed.size(); ++i) {
+        if (mixed[i] != 0) {
+            CHECK(false);
+            break;
+        }
+    }
+}
+
 void run_test(const char *name, void (*test)()) {
     const int before = g_failures;
     std::fprintf(stderr, "%s...\n", name);
@@ -1587,6 +1734,7 @@ int main() {
     run_test("test_rtc", &test_rtc);
     run_test("test_ge", &test_ge);
     run_test("test_mpeg", &test_mpeg);
+    run_test("test_audio", &test_audio);
     std::printf("mpo_hle_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

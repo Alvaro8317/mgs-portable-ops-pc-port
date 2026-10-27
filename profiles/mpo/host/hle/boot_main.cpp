@@ -12,6 +12,7 @@
 //            [--press <buttons>@<ms>[+<ms>]]... [--capture <dir>] [--capture-every N]
 //            [--window 0|1] [--scale N] [--input-map <input.toml>]
 //            [--overlays <dir>|none] [--renderer soft|vulkan] [--capture-window 0|1]
+//            [--audio 0|1] [--audio-wav <file>]
 //
 // It measures the start-up (registering the dispatch table: time and memory),
 // runs PSP threads until --until-us of virtual time (default 5 s), a runtime
@@ -51,6 +52,17 @@
 // the swapchain image (what the window shows) instead of VRAM. The report
 // adds the renderer's counters and the validation messages; a validation
 // error fails the run (MPO_VK_VALIDATION=1 turns the layers on in Release).
+//
+// F16b: sceAudio, sceSasCore and sceAtrac3plus play.
+//   --audio 1                 plays the mix on the default SDL3 audio device
+//                             (on by default with --window 1; SDL_AUDIO_DRIVER
+//                             picks the driver). It only sounds right at the
+//                             PSP's speed (--realtime 1).
+//   --audio-wav <file>        writes the mix as a 44.1 kHz stereo WAV, clamped
+//                             like PPSSPP's "Dump audio", from the first block
+//                             the mixer produces.
+// The report adds the mixer's blocks, the SAS mixes, the ATRAC decodes and the
+// device's underruns and overruns.
 
 #include <algorithm>
 #include <chrono>
@@ -74,6 +86,7 @@
 #endif
 
 #include "framebuffer.h"
+#include "guest_memory.h"
 #include "hle/system.hpp"
 #include "image.hpp"
 #include "input.h"
@@ -82,6 +95,7 @@
 #include "recomp/vfpu_executor.hpp"
 #include "savedata/save_paths.hpp"
 #include "vfpu/vfpu.hpp"
+#include "wav_writer.h"
 
 #if MPO_BOOT_SDL
 #include <SDL3/SDL.h>
@@ -89,6 +103,11 @@
 #include "input_config.h"
 #include "sdl_input.h"
 #include "sdl_presenter.h"
+#endif
+
+#if MPO_BOOT_AUDIO
+#include "sdl_audio_output.h"
+#include "stereo_resampler.h"
 #endif
 
 #if MPO_BOOT_VULKAN
@@ -314,6 +333,8 @@ int main(int argc, char **argv) {
     std::string overlays_dir = MPO_DEFAULT_OVERLAYS;
     bool vulkan = false;
     bool capture_window = false;
+    int audio = -1; // -1: on with a window.
+    std::string audio_wav;
     for (int i = 1; i + 1 < argc; i += 2) {
         const std::string option = argv[i];
         const std::string value = argv[i + 1];
@@ -377,6 +398,10 @@ int main(int argc, char **argv) {
             vulkan = value == "vulkan";
         } else if (option == "--capture-window") {
             capture_window = value != "0";
+        } else if (option == "--audio") {
+            audio = value != "0" ? 1 : 0;
+        } else if (option == "--audio-wav") {
+            audio_wav = value;
         } else {
             return fail("unknown option " + option);
         }
@@ -395,6 +420,14 @@ int main(int argc, char **argv) {
         return fail("--capture-window 1 needs --renderer vulkan, --window 1 and --capture");
     // A window plays at the PSP's speed unless asked otherwise.
     if (window && !realtime_given) config.realtime = true;
+    if (audio < 0) audio = window ? 1 : 0;
+#if !MPO_BOOT_AUDIO
+    if (audio == 1 && window) {
+        std::printf("audio: this build has no SDL3 audio output (mpo_audio_sdl)\n");
+        audio = 0;
+    }
+    if (audio == 1) return fail("--audio 1 needs a build with SDL3 audio (mpo_audio_sdl)");
+#endif
 
     std::string error;
     if (!mpo::vfpu::load_tables(tables, &error)) return fail(error);
@@ -453,6 +486,31 @@ int main(int argc, char **argv) {
             const std::size_t overlays = system.overlays().load_libraries(overlays_dir);
             std::printf("stage overlays: %zu corpora from %s\n", overlays, overlays_dir.c_str());
         }
+
+        // ---- F16b: the audio mix ----
+        std::vector<std::int16_t> wav_samples;
+#if MPO_BOOT_AUDIO
+        // The resampler outlives the device (declared first).
+        mpo::audio::StereoResampler resampler;
+        mpo::audio::SdlAudioOutput audio_output;
+        if (audio == 1) {
+            if (!audio_output.Open(&resampler, {}, &error)) return fail("audio: " + error);
+            std::printf("audio: driver %s, %d Hz, %d frames per period%s\n",
+                        audio_output.DriverName().c_str(), audio_output.SampleRate(),
+                        audio_output.DeviceFrames(),
+                        config.realtime ? "" : " (not realtime: it will not sound right)");
+        }
+#endif
+        system.audio().set_output([&](const std::int32_t *mix, int frames) {
+            if (!audio_wav.empty()) {
+                for (int i = 0; i < frames * 2; ++i)
+                    wav_samples.push_back(mpo::audio::ClampS16(mix[i]));
+            }
+#if MPO_BOOT_AUDIO
+            if (audio_output.IsOpen())
+                resampler.PushSamples(mix, static_cast<unsigned int>(frames));
+#endif
+        });
 
         // ---- F10b: what the display shows, and the controller ----
         mpo::frontend::InputTranslator translator;
@@ -730,6 +788,36 @@ int main(int argc, char **argv) {
                     static_cast<unsigned long long>(ge.handlers),
                     static_cast<unsigned long long>(ge.errors),
                     static_cast<unsigned long long>(system.mpeg().frames()));
+        const mpo::hle::Audio::Stats &as = system.audio().stats();
+        std::printf("audio: %llu blocks mixed from %llu us (%.1f s, %llu audible), %u channels "
+                    "reserved, %llu blocking waits, %llu sas mixes, %llu atrac decodes\n",
+                    static_cast<unsigned long long>(as.blocks),
+                    static_cast<unsigned long long>(as.first_block_us),
+                    static_cast<double>(as.blocks) * mpo::audio::kHwBlockSize /
+                        mpo::audio::kHwSampleRate,
+                    static_cast<unsigned long long>(as.audible_blocks), as.channels_reserved,
+                    static_cast<unsigned long long>(as.blocking_waits),
+                    static_cast<unsigned long long>(as.sas_mixes),
+                    static_cast<unsigned long long>(as.atrac_decodes));
+        system.audio().set_output({});
+#if MPO_BOOT_AUDIO
+        if (audio_output.IsOpen()) {
+            const mpo::audio::StereoResampler::Stats rs = resampler.GetStats();
+            std::printf("audio device: %llu frames played, %d underruns, %d overruns, "
+                        "%d/%d frames buffered\n",
+                        static_cast<unsigned long long>(audio_output.FramesPulled()), rs.underruns,
+                        rs.overruns, rs.bufferedFrames, rs.targetFrames);
+            audio_output.Close();
+        }
+#endif
+        if (!audio_wav.empty()) {
+            if (!mpo::audio::WriteWav16(audio_wav, wav_samples, 2, mpo::audio::kHwSampleRate))
+                std::fprintf(stderr, "mpo_boot: cannot write %s\n", audio_wav.c_str());
+            else
+                std::printf("audio wav: %s (%.1f s)\n", audio_wav.c_str(),
+                            static_cast<double>(wav_samples.size() / 2u) /
+                                mpo::audio::kHwSampleRate);
+        }
 #if MPO_BOOT_VULKAN
         bool validation_failed = false;
         if (gpu) {

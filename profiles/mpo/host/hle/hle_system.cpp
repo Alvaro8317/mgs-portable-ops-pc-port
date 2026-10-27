@@ -6,10 +6,8 @@
 //   - sceOpenPSIDGetOpenPSID: PPSSPP's fixed id (F20b);
 //   - sceUtilityGetSystemParamInt and sceImposeSetLanguageMode: PPSSPP's
 //     default system settings, English and Cross to confirm (F18b).
-//   - sceAudio channels (F16b): reserve, release, data length and volume
-//     keep PPSSPP's checks, and a blocking output waits as long as its samples
-//     last at 44.1 kHz, without mixing anything. Without that wait the sound
-//     threads (priority 0x10/0x11) spin and starve every thread below them.
+//
+// sceAudio left this file for hle_audio.cpp in F16b.
 //
 // Ported from PPSSPP Core/HLE/sceUmd.cpp, scePower.cpp, sceOpenPSID.cpp,
 // sceUtility.cpp and sceImpose.cpp @ v1.20.4.
@@ -50,17 +48,6 @@ constexpr std::uint32_t kPowerState = 0x00001000u | 0x00000080u | 0x00000064u;
 
 constexpr std::array<std::uint8_t, 16> kOpenPsid = {0x10, 0x02, 0xA3, 0x44, 0x13, 0xF5, 0x93, 0xB0,
                                                     0xCC, 0x6E, 0xD1, 0x32, 0x27, 0x85, 0x0F, 0x9D};
-
-constexpr std::uint32_t kAudioChannels = 8u;
-constexpr std::uint32_t kAudioSampleMax = 65536u - 64u;
-constexpr std::uint32_t kAudioFormatStereo = 0x00u;
-constexpr std::uint32_t kAudioFormatMono = 0x10u;
-constexpr std::uint32_t kErrAudioChannelNotInit = 0x80260001u;
-constexpr std::uint32_t kErrAudioInvalidChannel = 0x80260003u;
-constexpr std::uint32_t kErrAudioNoChannels = 0x80260005u;
-constexpr std::uint32_t kErrAudioNotAligned = 0x80260006u;
-constexpr std::uint32_t kErrAudioInvalidFormat = 0x80260007u;
-constexpr std::uint32_t kErrAudioChannelNotReserved = 0x80260008u;
 
 constexpr std::uint32_t kLanguageEnglish = 1u;
 constexpr std::uint32_t kButtonCross = 1u;
@@ -169,68 +156,6 @@ void register_system_hle(System &system) {
         ret(c, 0u);
     });
     stub("sceImpose", 0x36AA6E91u, "sceImposeSetLanguageMode", [](Ctx &c) { ret(c, 0u); });
-
-    struct AudioChannel {
-        bool reserved{};
-        std::uint32_t samples{};
-    };
-    auto channels = std::make_shared<std::array<AudioChannel, kAudioChannels>>();
-    stub("sceAudio", 0x5EC81C55u, "sceAudioChReserve", [channels](Ctx &c) {
-        auto channel = static_cast<std::int32_t>(arg(c, 0));
-        const std::uint32_t samples = arg(c, 1);
-        const std::uint32_t format = arg(c, 2);
-        if (channel < 0) {
-            // GetFreeChannel: from the top, never channel 0.
-            channel = -1;
-            for (std::uint32_t i = kAudioChannels - 1u; i > 0u && channel < 0; --i)
-                if (!(*channels)[i].reserved) channel = static_cast<std::int32_t>(i);
-            if (channel < 0) return ret(c, kErrAudioNoChannels);
-        }
-        if (static_cast<std::uint32_t>(channel) >= kAudioChannels)
-            return ret(c, kErrAudioInvalidChannel);
-        if ((samples & 63u) != 0u || samples == 0u || samples > kAudioSampleMax)
-            return ret(c, kErrAudioNotAligned);
-        if (format != kAudioFormatStereo && format != kAudioFormatMono)
-            return ret(c, kErrAudioInvalidFormat);
-        AudioChannel &slot = (*channels)[static_cast<std::size_t>(channel)];
-        if (slot.reserved) return ret(c, kErrAudioInvalidChannel);
-        slot = AudioChannel{true, samples};
-        ret(c, static_cast<std::uint32_t>(channel));
-    });
-    stub("sceAudio", 0x6FC46853u, "sceAudioChRelease", [channels](Ctx &c) {
-        const std::uint32_t channel = arg(c, 0);
-        if (channel >= kAudioChannels) return ret(c, kErrAudioInvalidChannel);
-        if (!(*channels)[channel].reserved) return ret(c, kErrAudioChannelNotInit);
-        (*channels)[channel] = AudioChannel{};
-        ret(c, 0u);
-    });
-    stub("sceAudio", 0xCB2E439Eu, "sceAudioSetChannelDataLen", [channels](Ctx &c) {
-        const std::uint32_t channel = arg(c, 0);
-        const std::uint32_t samples = arg(c, 1);
-        if (channel >= kAudioChannels) return ret(c, kErrAudioInvalidChannel);
-        if (!(*channels)[channel].reserved) return ret(c, kErrAudioChannelNotInit);
-        if ((samples & 63u) != 0u || samples == 0u || samples > kAudioSampleMax)
-            return ret(c, kErrAudioNotAligned);
-        (*channels)[channel].samples = samples;
-        ret(c, 0u);
-    });
-    stub("sceAudio", 0xB7E1D8E7u, "sceAudioChangeChannelVolume", [channels](Ctx &c) {
-        const std::uint32_t channel = arg(c, 0);
-        if (channel >= kAudioChannels) return ret(c, kErrAudioInvalidChannel);
-        if (!(*channels)[channel].reserved) return ret(c, kErrAudioChannelNotInit);
-        ret(c, 0u);
-    });
-    const auto output = [&k, channels](Ctx &c) {
-        const std::uint32_t channel = arg(c, 0);
-        if (channel >= kAudioChannels) return ret(c, kErrAudioInvalidChannel);
-        if (!(*channels)[channel].reserved) return ret(c, kErrAudioChannelNotReserved);
-        const std::uint32_t samples = (*channels)[channel].samples;
-        // The time the samples take to play; nothing is mixed (F16b).
-        ret(c, k.delay_result(
-                   0u, static_cast<std::uint32_t>(std::uint64_t{samples} * 1'000'000u / 44'100u)));
-    };
-    stub("sceAudio", 0x13F592BCu, "sceAudioOutputPannedBlocking", output);
-    stub("sceAudio", 0x136CAF51u, "sceAudioOutputBlocking", output);
 }
 
 } // namespace mpo::hle

@@ -5,13 +5,15 @@
 # unimplemented NIDs), the kernel NIDs and the module loader; F09 adds IO on
 # mpo_io, the game clock and RTC, the vblank (sceDisplay) and interrupts;
 # F10b, sceCtrl; F11b, sceGe on mpo_ge and sceMpeg on mpo_video; F13, the
-# stage overlays (OverlayManager and their libraries).
+# stage overlays (OverlayManager and their libraries); F16b, sceAudio, sceSasCore
+# and sceAtrac3plus on mpo_audio.
 # Like mpo_recomp it only sees the framework headers: whatever links it also
 # links psprecomp_core (an object library) once.
 
 add_library(mpo_hle STATIC
     cpu_bridge.cpp
     game_clock.cpp
+    hle_audio.cpp
     hle_ctrl.cpp
     hle_display.cpp
     hle_ge.cpp
@@ -30,7 +32,7 @@ target_include_directories(mpo_hle PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_include_directories(mpo_hle SYSTEM PUBLIC
     $<TARGET_PROPERTY:psprecomp_core,INTERFACE_INCLUDE_DIRECTORIES>)
 # mpo_frontend (F10a, no SDL): SceCtrlData and the button masks for sceCtrl.
-target_link_libraries(mpo_hle PUBLIC mpo_kernel mpo_io mpo_frontend mpo_ge mpo_video)
+target_link_libraries(mpo_hle PUBLIC mpo_kernel mpo_io mpo_frontend mpo_ge mpo_video mpo_audio)
 # dlopen for the overlay libraries (nothing on Windows).
 target_link_libraries(mpo_hle PRIVATE ${CMAKE_DL_LIBS})
 if(MSVC)
@@ -122,6 +124,11 @@ if(TARGET mpo_generated_mgp_main)
     if(TARGET mpo_frontend_sdl)
         target_link_libraries(mpo_boot PRIVATE mpo_frontend_sdl)
         target_compile_definitions(mpo_boot PRIVATE MPO_BOOT_SDL=1)
+    endif()
+    # F16b: --audio plays the mix on SDL3 (mpo_audio_sdl).
+    if(TARGET mpo_audio_sdl)
+        target_link_libraries(mpo_boot PRIVATE mpo_audio_sdl)
+        target_compile_definitions(mpo_boot PRIVATE MPO_BOOT_AUDIO=1)
     endif()
     # F14b: --renderer vulkan, and with SDL a Vulkan swapchain for --window.
     if(TARGET mpo_vulkan)
