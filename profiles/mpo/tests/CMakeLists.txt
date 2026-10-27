@@ -301,7 +301,7 @@ if(MPO_BUILD_PPSSPP_REF)
 endif()
 
 # F14a: Vulkan GE renderer. mpo_vulkan_renderer_test needs a Vulkan device and
-# exits 77 (skipped) without one (the CI today).
+# exits 77 (skipped) without one (the CI installs lavapipe since F14a).
 if(TARGET mpo_vulkan)
     add_executable(mpo_vulkan_texture_decode_test vulkan_texture_decode_test.cpp)
     target_link_libraries(mpo_vulkan_texture_decode_test PRIVATE mpo_vulkan)
@@ -312,6 +312,10 @@ if(TARGET mpo_vulkan)
     mpo_target_warnings(mpo_vulkan_renderer_test)
     add_test(NAME mpo_vulkan_renderer_test COMMAND mpo_vulkan_renderer_test)
     set_tests_properties(mpo_vulkan_renderer_test PROPERTIES SKIP_RETURN_CODE 77)
+    # F15a: the soft-vs-Vulkan comparison tool needs dumps; without
+    # arguments it prints its usage and fails.
+    add_test(NAME mpo_vulkan_compare_usage COMMAND mpo_vulkan_compare)
+    set_tests_properties(mpo_vulkan_compare_usage PROPERTIES WILL_FAIL TRUE)
 endif()
 if(Python3_FOUND)
     add_test(NAME mpo_vulkan_shaders_fresh
