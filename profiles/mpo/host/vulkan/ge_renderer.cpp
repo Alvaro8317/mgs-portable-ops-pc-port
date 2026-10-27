@@ -631,9 +631,9 @@ bool GeRenderer::StageUpload(const void *data, std::size_t size, UploadArena::Al
 int GeRenderer::GetColorTarget(std::uint32_t offset, int stride, ge::BufferFormat format) {
     offset &= ge::MemoryView::kVramSize - 1;
     for (std::size_t i = 0; i < color_targets_.size(); ++i) {
-        const ColorTarget &t = color_targets_[i];
+        ColorTarget &t = color_targets_[i];
         if (t.offset == offset && t.stride == stride && t.format == format)
-            return static_cast<int>(i);
+            return SyncColorTarget(t) ? static_cast<int>(i) : -1;
     }
     for (const ColorTarget &t : color_targets_) {
         if (t.offset == offset) {
@@ -663,25 +663,51 @@ int GeRenderer::GetColorTarget(std::uint32_t offset, int stride, ge::BufferForma
         return -1;
     }
     // Initial contents: the VRAM framebuffer as it is now.
-    std::vector<std::uint32_t> pixels(static_cast<std::size_t>(w) * h);
-    const auto bpp = static_cast<std::uint32_t>(BytesPerPixel(format));
-    for (int y = 0; y < h; ++y) {
+    const int bpp = BytesPerPixel(format);
+    t.shadow.row_bytes = std::min(w, stride) * bpp;
+    t.shadow.bytes.assign(static_cast<std::size_t>(t.shadow.row_bytes) * h, std::uint8_t{0});
+    t.shadow.checked_frame = frame_serial_;
+    if (!UploadColorRows(t, 0, h - 1, true)) return -1;
+    ++stats_.target_uploads;
+    color_targets_.push_back(std::move(t));
+    return static_cast<int>(color_targets_.size() - 1);
+}
+
+bool GeRenderer::UploadColorRows(ColorTarget &t, int y1, int y2, bool initial) {
+    const int w = t.image.width;
+    const int rows = y2 - y1 + 1;
+    std::vector<std::uint32_t> pixels(static_cast<std::size_t>(w) * static_cast<std::size_t>(rows));
+    const auto bpp = static_cast<std::uint32_t>(BytesPerPixel(t.format));
+    for (int y = y1; y <= y2; ++y) {
         for (int x = 0; x < w; ++x) {
-            const std::uint32_t off = offset + static_cast<std::uint32_t>(y * stride + x) * bpp;
+            const std::uint32_t off = t.offset + static_cast<std::uint32_t>(y * t.stride + x) * bpp;
             const std::uint32_t raw = bpp == 4 ? mem_.VramRead32(off) : mem_.VramRead16(off);
-            pixels[PixelIndex(x, y, w)] = FromVram(format, raw);
+            pixels[PixelIndex(x, y - y1, w)] = FromVram(t.format, raw);
         }
     }
+    SnapshotRows(t.shadow, t.offset, t.stride * static_cast<int>(bpp), y1, y2);
     UploadArena::Allocation a;
-    if (!StageUpload(pixels.data(), pixels.size() * 4, &a)) return -1;
+    if (!StageUpload(pixels.data(), pixels.size() * 4, &a)) return false;
     VkCommandBuffer cmd = frame().init_cmd;
-    ImageBarrier(cmd, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    if (initial) {
+        ImageBarrier(cmd, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    } else {
+        // After the draws, destination reads, copies and presentation blits
+        // of earlier submissions.
+        ImageBarrier(cmd, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_ACCESS_TRANSFER_WRITE_BIT);
+    }
     VkBufferImageCopy copy{};
     copy.bufferOffset = a.offset;
     copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copy.imageExtent = {static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(h), 1};
+    copy.imageOffset = {0, y1, 0};
+    copy.imageExtent = {static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(rows), 1};
     vkCmdCopyBufferToImage(cmd, a.buffer, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                            &copy);
     ImageBarrier(cmd, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -689,17 +715,15 @@ int GeRenderer::GetColorTarget(std::uint32_t offset, int stride, ge::BufferForma
                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                  VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-    ++stats_.target_uploads;
-    color_targets_.push_back(std::move(t));
-    return static_cast<int>(color_targets_.size() - 1);
+    return true;
 }
 
 int GeRenderer::GetDepthTarget(std::uint32_t offset, int stride, int width) {
     offset &= ge::MemoryView::kVramSize - 1;
     for (std::size_t i = 0; i < depth_targets_.size(); ++i) {
-        const DepthTarget &t = depth_targets_[i];
+        DepthTarget &t = depth_targets_[i];
         if (t.offset == offset && t.stride == stride && t.width == width)
-            return static_cast<int>(i);
+            return SyncDepthTarget(t) ? static_cast<int>(i) : -1;
     }
     DepthTarget t;
     t.offset = offset;
@@ -719,34 +743,126 @@ int GeRenderer::GetDepthTarget(std::uint32_t offset, int stride, int width) {
         Fail(err);
         return -1;
     }
-    std::vector<std::uint16_t> depth(static_cast<std::size_t>(width) * h);
-    for (int y = 0; y < h; ++y) {
+    t.shadow.row_bytes = std::min(width, stride) * 2;
+    t.shadow.bytes.assign(static_cast<std::size_t>(t.shadow.row_bytes) * h, std::uint8_t{0});
+    t.shadow.checked_frame = frame_serial_;
+    if (!UploadDepthRows(t, 0, h - 1, true)) return -1;
+    ++stats_.target_uploads;
+    depth_targets_.push_back(std::move(t));
+    return static_cast<int>(depth_targets_.size() - 1);
+}
+
+bool GeRenderer::UploadDepthRows(DepthTarget &t, int y1, int y2, bool initial) {
+    const int width = t.width;
+    const int rows = y2 - y1 + 1;
+    std::vector<std::uint16_t> depth(static_cast<std::size_t>(width) *
+                                     static_cast<std::size_t>(rows));
+    for (int y = y1; y <= y2; ++y) {
         for (int x = 0; x < width; ++x) {
-            depth[PixelIndex(x, y, width)] =
-                mem_.VramRead16(offset + static_cast<std::uint32_t>(y * stride + x) * 2);
+            depth[PixelIndex(x, y - y1, width)] =
+                mem_.VramRead16(t.offset + static_cast<std::uint32_t>(y * t.stride + x) * 2);
         }
     }
+    SnapshotRows(t.shadow, t.offset, t.stride * 2, y1, y2);
     UploadArena::Allocation a;
-    if (!StageUpload(depth.data(), depth.size() * 2, &a)) return -1;
+    if (!StageUpload(depth.data(), depth.size() * 2, &a)) return false;
     VkCommandBuffer cmd = frame().init_cmd;
-    ImageBarrier(cmd, t.image.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    const VkPipelineStageFlags tests =
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    if (initial) {
+        ImageBarrier(cmd, t.image.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    } else {
+        ImageBarrier(cmd, t.image.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, tests | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_ACCESS_TRANSFER_WRITE_BIT);
+    }
     VkBufferImageCopy copy{};
     copy.bufferOffset = a.offset;
     copy.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-    copy.imageExtent = {static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(h), 1};
+    copy.imageOffset = {0, y1, 0};
+    copy.imageExtent = {static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(rows), 1};
     vkCmdCopyBufferToImage(cmd, a.buffer, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                            &copy);
     ImageBarrier(
         cmd, t.image.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_ACCESS_TRANSFER_WRITE_BIT,
-        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        VK_ACCESS_TRANSFER_WRITE_BIT, tests,
         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-    ++stats_.target_uploads;
-    depth_targets_.push_back(std::move(t));
-    return static_cast<int>(depth_targets_.size() - 1);
+    return true;
+}
+
+const std::uint8_t *GeRenderer::VramRow(std::uint32_t offset, int stride_bytes, int row_bytes,
+                                        int y) const {
+    if (y < 0 || stride_bytes < 0 || row_bytes < 0) return nullptr;
+    const std::uint64_t start =
+        static_cast<std::uint64_t>(offset) +
+        static_cast<std::uint64_t>(y) * static_cast<std::uint64_t>(stride_bytes);
+    if (start + static_cast<std::uint64_t>(row_bytes) > ge::MemoryView::kVramSize) return nullptr;
+    return mem_.VramAt(static_cast<std::uint32_t>(start), static_cast<std::uint32_t>(row_bytes));
+}
+
+void GeRenderer::SnapshotRows(VramShadow &shadow, std::uint32_t offset, int stride_bytes, int y1,
+                              int y2) {
+    const auto row_bytes = static_cast<std::size_t>(shadow.row_bytes);
+    for (int y = y1; y <= y2; ++y) {
+        std::uint8_t *dst = shadow.bytes.data() + static_cast<std::size_t>(y) * row_bytes;
+        const std::uint8_t *src = VramRow(offset, stride_bytes, shadow.row_bytes, y);
+        if (src != nullptr) {
+            std::memcpy(dst, src, row_bytes);
+        } else {
+            std::memset(dst, 0, row_bytes);
+        }
+    }
+}
+
+std::vector<std::pair<int, int>> GeRenderer::ChangedRows(const VramShadow &shadow,
+                                                         std::uint32_t offset, int stride_bytes,
+                                                         int rows) const {
+    std::vector<std::pair<int, int>> spans;
+    const auto row_bytes = static_cast<std::size_t>(shadow.row_bytes);
+    for (int y = 0; y < rows; ++y) {
+        const std::uint8_t *vram = VramRow(offset, stride_bytes, shadow.row_bytes, y);
+        if (vram == nullptr) break; // past the end of VRAM: nothing can change
+        const std::uint8_t *old = shadow.bytes.data() + static_cast<std::size_t>(y) * row_bytes;
+        if (std::memcmp(vram, old, row_bytes) == 0) continue;
+        if (!spans.empty() && spans.back().second == y - 1) {
+            spans.back().second = y;
+        } else {
+            spans.emplace_back(y, y);
+        }
+    }
+    return spans;
+}
+
+bool GeRenderer::SyncColorTarget(ColorTarget &t) {
+    if (t.shadow.checked_frame == frame_serial_) return true;
+    t.shadow.checked_frame = frame_serial_;
+    const int bpp = BytesPerPixel(t.format);
+    const auto spans = ChangedRows(t.shadow, t.offset, t.stride * bpp, t.image.height);
+    if (spans.empty()) return true;
+    ++stats_.target_resyncs;
+    for (const auto &[y1, y2] : spans) {
+        if (!UploadColorRows(t, y1, y2, false)) return false;
+        stats_.target_resync_rows += static_cast<std::uint64_t>(y2 - y1 + 1);
+    }
+    return true;
+}
+
+bool GeRenderer::SyncDepthTarget(DepthTarget &t) {
+    if (t.shadow.checked_frame == frame_serial_) return true;
+    t.shadow.checked_frame = frame_serial_;
+    const auto spans = ChangedRows(t.shadow, t.offset, t.stride * 2, t.image.height);
+    if (spans.empty()) return true;
+    ++stats_.target_resyncs;
+    for (const auto &[y1, y2] : spans) {
+        if (!UploadDepthRows(t, y1, y2, false)) return false;
+        stats_.target_resync_rows += static_cast<std::uint64_t>(y2 - y1 + 1);
+    }
+    return true;
 }
 
 bool GeRenderer::ResolveTexture(const ge::SamplerState &st, VkImageView *rgba, VkImageView *index) {
@@ -2085,6 +2201,10 @@ bool GeRenderer::EndFrame(bool readback, std::string *error) {
                     }
                 }
             }
+            // The rest of these rows already matched VRAM: the target was
+            // synchronised at its first use in the frame.
+            if (y2 >= y1)
+                SnapshotRows(t.shadow, t.offset, t.stride * static_cast<int>(bpp), y1, y2);
             t.dirty = DirtyRect{};
             ++stats_.readbacks;
         }
@@ -2104,6 +2224,7 @@ bool GeRenderer::EndFrame(bool readback, std::string *error) {
                                      d);
                 }
             }
+            if (y2 >= y1) SnapshotRows(t.shadow, t.offset, t.stride * 2, y1, y2);
             t.dirty = DirtyRect{};
             ++stats_.readbacks;
         }
@@ -2121,6 +2242,29 @@ bool GeRenderer::FindTarget(std::uint32_t fb_address, TargetInfo *out) const {
         out->height = t.image.height;
         out->stride = t.stride;
         out->format = t.format;
+        return true;
+    }
+    return false;
+}
+
+bool GeRenderer::TargetMatchesVram(std::uint32_t fb_address, int stride, ge::BufferFormat format,
+                                   int width, int rows) const {
+    if (frame_open_ || failed_) return false;
+    const std::uint32_t offset = fb_address & (ge::MemoryView::kVramSize - 1);
+    for (const ColorTarget &t : color_targets_) {
+        if (t.offset != offset || t.stride != stride || t.format != format) continue;
+        if (!t.dirty.Empty()) return false;
+        const int bpp = BytesPerPixel(format);
+        const int row_bytes = std::min(width * bpp, t.shadow.row_bytes);
+        const int n = std::min(rows, t.image.height);
+        for (int y = 0; y < n; ++y) {
+            const std::uint8_t *vram = VramRow(offset, stride * bpp, row_bytes, y);
+            if (vram == nullptr) return false;
+            const std::uint8_t *old =
+                t.shadow.bytes.data() +
+                static_cast<std::size_t>(y) * static_cast<std::size_t>(t.shadow.row_bytes);
+            if (std::memcmp(vram, old, static_cast<std::size_t>(row_bytes)) != 0) return false;
+        }
         return true;
     }
     return false;

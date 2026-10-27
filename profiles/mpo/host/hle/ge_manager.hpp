@@ -20,13 +20,21 @@
 // $a0 = token, $a1 = the callback's argument and $a2 = the END's pc + 4, and
 // then ends the interrupt: a finished list is completed, its ListSync waiters
 // wake up and the queue runs again.
+//
+// F14b: the draws go to ge().SetDrawBackend's renderer (softgpu by default).
+// A renderer that keeps the framebuffers elsewhere (the Vulkan one) sets an
+// after-run hook, which runs when each ge::Ge::Run returns, before any guest
+// code: there it writes back to VRAM what it drew, so the CPU sees VRAM as
+// softgpu would leave it.
 
 #pragma once
 
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
+#include <utility>
 #include <vector>
 
 #include "ge.hpp"
@@ -70,6 +78,8 @@ public:
     void register_hle();
 
     [[nodiscard]] ge::Ge &ge() noexcept { return ge_; }
+    // Called after every ge::Ge::Run (F14b). Empty: nothing.
+    void set_after_run(std::function<void()> hook) { after_run_ = std::move(hook); }
     [[nodiscard]] const Stats &stats() const noexcept { return stats_; }
 
     // The calls, as the HLE wrappers see them (also for tests). List IDs are
@@ -163,6 +173,7 @@ private:
     std::array<bool, kMaxCallbacks> used_callbacks_{};
     std::vector<kernel::Uid> draw_waiters_;
     std::map<int, std::vector<kernel::Uid>> list_waiters_;
+    std::function<void()> after_run_;
     Stats stats_;
 };
 

@@ -2,7 +2,9 @@
 //
 // Presentation of a GE render target on a window surface: a swapchain with
 // frames in flight, and a blit (scaled, letterboxed by the caller's
-// rectangle) from the target image to the swapchain image. It knows nothing
+// rectangle) from the target image to the swapchain image. A framebuffer
+// that is not on the GPU (F14b: the video frames the CPU writes to VRAM)
+// goes through PresentRgba, which uploads it first. It knows nothing
 // about the window system: the surface comes from the VulkanContext (created
 // by SDL in sdl_window.cpp), the drawable size from the caller.
 
@@ -47,6 +49,10 @@ public:
     // presenting) into it. Returns false on a Vulkan error.
     bool Present(VkImage src, int src_w, int src_h, const PresentRect &dst, bool linear,
                  std::vector<std::uint8_t> *capture, std::string *error);
+    // The same for `width` x `height` RGBA8 pixels in CPU memory (rows packed),
+    // uploaded to an image of the presenter first.
+    bool PresentRgba(const std::uint8_t *rgba, int width, int height, const PresentRect &dst,
+                     bool linear, std::vector<std::uint8_t> *capture, std::string *error);
 
     [[nodiscard]] int width() const { return static_cast<int>(extent_.width); }
     [[nodiscard]] int height() const { return static_cast<int>(extent_.height); }
@@ -60,12 +66,26 @@ private:
         VkFence fence = VK_NULL_HANDLE;
         VkSemaphore acquired = VK_NULL_HANDLE;
         bool pending = false;
+        Buffer upload; // PresentRgba's pixels
+    };
+    // What PresentImpl blits from: a target (left in
+    // COLOR_ATTACHMENT_OPTIMAL) or, with `pixels`, the presenter's upload
+    // image, filled from them first.
+    struct Source {
+        VkImage image = VK_NULL_HANDLE;
+        const std::uint8_t *pixels = nullptr;
+        int width = 0;
+        int height = 0;
     };
 
     explicit SwapchainPresenter(VulkanContext *ctx) : ctx_(ctx) {}
     bool Init(int width, int height, bool vsync, std::string *error);
     bool CreateSwapchain(std::string *error);
     void DestroySwapchain();
+    bool PresentImpl(const Source &src, const PresentRect &dst, bool linear,
+                     std::vector<std::uint8_t> *capture, std::string *error);
+    // The upload image and the frame's staging buffer for `width` x `height`.
+    bool EnsureUpload(Frame &f, int width, int height, std::string *error);
 
     VulkanContext *ctx_;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
@@ -84,6 +104,10 @@ private:
     std::vector<Frame> frames_;
     int frame_index_ = 0;
     Buffer capture_buffer_;
+    Image upload_image_;
+    // The upload image's layout: UNDEFINED until the first PresentRgba, then
+    // TRANSFER_SRC_OPTIMAL between presents.
+    bool upload_initialised_ = false;
 };
 
 } // namespace mpo::vk

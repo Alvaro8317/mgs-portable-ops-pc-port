@@ -23,8 +23,12 @@
 //   (depth) buffer address. A target is created on first use from the VRAM
 //   contents at that moment; EndFrame(readback) converts what was drawn back
 //   into VRAM in the GE format, so VRAM holds what softgpu would have left.
-//   Tracking CPU writes to VRAM, render-to-texture and texturing from a
-//   target are F15.
+//   F14b: each target keeps a copy of the VRAM bytes it was last uploaded
+//   from or read back to; at its first use in a frame, the rows of VRAM that
+//   no longer match (the CPU wrote them: video frames, memcpy) are uploaded
+//   again. With EndFrame(true) after every list run (mpo_boot), the game sees
+//   VRAM as softgpu would leave it between runs. Render-to-texture and
+//   texturing from a target within one frame are F15b.
 // - Textures: level 0, decoded on the CPU (unswizzled; CLUT formats keep the
 //   raw index) and cached by address, format, size and a hash of the source
 //   bytes. The palette goes to the shader in a uniform buffer.
@@ -45,6 +49,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "context.hpp"
@@ -68,6 +73,10 @@ struct RendererStats {
     std::uint64_t texture_hits = 0;
     std::uint64_t clut_uploads = 0;
     std::uint64_t target_uploads = 0;
+    // F14b: targets uploaded again at their first use in a frame because VRAM
+    // changed under them, and the rows uploaded.
+    std::uint64_t target_resyncs = 0;
+    std::uint64_t target_resync_rows = 0;
     std::uint64_t readbacks = 0;
     // Destination reads (F15a): batches that read it, barriers inside a
     // render pass between groups of primitives, target copies.
@@ -170,6 +179,13 @@ public:
     // VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; a user (the presenter) that
     // reads one must transition it and put it back, on the same queue.
     bool FindTarget(std::uint32_t fb_address, TargetInfo *out) const;
+    // Whether the colour target of the framebuffer at `fb_address` (this
+    // stride and format) holds what VRAM holds in the first `width` x `rows`
+    // pixels: no frame open, nothing drawn since the last readback and no CPU
+    // write since. Then a presenter can show the target instead of VRAM
+    // (F14b).
+    [[nodiscard]] bool TargetMatchesVram(std::uint32_t fb_address, int stride,
+                                         ge::BufferFormat format, int width, int rows) const;
 
     [[nodiscard]] RendererStats &stats() { return stats_; }
     [[nodiscard]] const std::string &error() const { return error_; }
@@ -189,6 +205,13 @@ private:
         [[nodiscard]] bool Empty() const { return x2 < x1 || y2 < y1; }
         void Add(int ax1, int ay1, int ax2, int ay2);
     };
+    // The VRAM bytes under a target (row by row, `row_bytes` each) as of its
+    // last upload or readback, and the frame it was last compared in.
+    struct VramShadow {
+        std::vector<std::uint8_t> bytes;
+        int row_bytes = 0;
+        std::uint64_t checked_frame = 0;
+    };
     struct ColorTarget {
         std::uint32_t offset = 0;
         int stride = 0;
@@ -196,6 +219,7 @@ private:
         Image image;
         Buffer readback;
         DirtyRect dirty;
+        VramShadow shadow;
         // Destination reads: the copy (DstRead::kCopy) and the set 1
         // descriptor (the input attachment or the copy), made on first use.
         Image copy;
@@ -227,6 +251,7 @@ private:
         Image image;
         Buffer readback;
         DirtyRect dirty;
+        VramShadow shadow;
     };
     struct TextureKey {
         std::uint32_t addr = 0;
@@ -284,6 +309,22 @@ private:
 
     int GetColorTarget(std::uint32_t offset, int stride, ge::BufferFormat format);
     int GetDepthTarget(std::uint32_t offset, int stride, int width);
+    // Records the upload of rows [y1, y2] of a target from VRAM into the
+    // frame's init commands. `initial`: the image has no contents yet.
+    bool UploadColorRows(ColorTarget &t, int y1, int y2, bool initial);
+    bool UploadDepthRows(DepthTarget &t, int y1, int y2, bool initial);
+    // F14b: at a target's first use in a frame, uploads again the rows whose
+    // VRAM bytes changed since its shadow was taken.
+    bool SyncColorTarget(ColorTarget &t);
+    bool SyncDepthTarget(DepthTarget &t);
+    // The VRAM bytes of row `y` of a target at `offset` (`row_bytes` long),
+    // or nullptr past the end of VRAM.
+    [[nodiscard]] const std::uint8_t *VramRow(std::uint32_t offset, int stride_bytes, int row_bytes,
+                                              int y) const;
+    void SnapshotRows(VramShadow &shadow, std::uint32_t offset, int stride_bytes, int y1, int y2);
+    // Spans [first, last] of rows whose VRAM bytes differ from the shadow.
+    [[nodiscard]] std::vector<std::pair<int, int>>
+    ChangedRows(const VramShadow &shadow, std::uint32_t offset, int stride_bytes, int rows) const;
     bool ResolveTexture(const ge::SamplerState &st, VkImageView *rgba, VkImageView *index);
     bool UploadClut(const std::uint8_t *clut, std::uint32_t *offset, VkBuffer *buffer);
     VkDescriptorSet GetDescriptorSet(VkImageView rgba, VkImageView index, VkBuffer clut_buffer);

@@ -369,7 +369,8 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
 - **Toggles A/B por variable de entorno** para cada optimización del renderer, para poder bisecar
   cuando un frame sale mal (como los `MHP3RD_NO_*` de Yakumo). Los del renderer Vulkan son
   `MPO_VK_NO_13`, `MPO_VK_BLEND`, `MPO_VK_DST_READ`, `MPO_VK_NO_BATCH`, `MPO_VK_NO_TEX_CACHE`,
-  `MPO_VK_NO_DEPTH_CLAMP`, `MPO_VK_NO_RASTER_ORDER` y `MPO_VK_NO_LOCAL_READ` (F14a y F15a).
+  `MPO_VK_NO_DEPTH_CLAMP`, `MPO_VK_NO_RASTER_ORDER`, `MPO_VK_NO_LOCAL_READ` (F14a y F15a) y
+  `MPO_VK_PRESENT_UPLOAD` (presentar siempre subiendo desde la VRAM, F14b).
 - **Tests sin el juego** (`ctest` sin datos): decoder, emisor, formatos y HLE puro. Son los únicos que
   corren en CI pública.
 - **CI**: matriz de Windows (MSVC) y Linux (Clang + GCC), con ASan y UBSan en Linux.

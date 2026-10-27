@@ -319,6 +319,12 @@ if(TARGET mpo_vulkan)
     mpo_target_warnings(mpo_vulkan_renderer_test)
     add_test(NAME mpo_vulkan_renderer_test COMMAND mpo_vulkan_renderer_test)
     set_tests_properties(mpo_vulkan_renderer_test PROPERTIES SKIP_RETURN_CODE 77)
+    # F14b: the renderer between list runs, with CPU writes to VRAM.
+    add_executable(mpo_vulkan_vram_sync_test vulkan_vram_sync_test.cpp)
+    target_link_libraries(mpo_vulkan_vram_sync_test PRIVATE mpo_vulkan)
+    mpo_target_warnings(mpo_vulkan_vram_sync_test)
+    add_test(NAME mpo_vulkan_vram_sync_test COMMAND mpo_vulkan_vram_sync_test)
+    set_tests_properties(mpo_vulkan_vram_sync_test PROPERTIES SKIP_RETURN_CODE 77)
     # F15a: the soft-vs-Vulkan comparison tool needs dumps; without
     # arguments it prints its usage and fails.
     add_test(NAME mpo_vulkan_compare_usage COMMAND mpo_vulkan_compare)

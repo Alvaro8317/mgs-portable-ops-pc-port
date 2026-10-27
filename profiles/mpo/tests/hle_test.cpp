@@ -1392,6 +1392,10 @@ void test_ge() {
     main.sw(t0, 40, s7);
     main.leave();
 
+    // F14b: the after-run hook sees every ge::Ge::Run, before guest code.
+    std::uint64_t after_runs = 0;
+    f.system->ge().set_after_run([&] { ++after_runs; });
+
     (void)start_thread(*f.system, "ge", entry, 0x20u);
     CHECK(f.system->run(1'000'000u) == mk::RunResult::kIdle);
     CHECK(!rt.stopped());
@@ -1424,6 +1428,10 @@ void test_ge() {
     CHECK_EQ(stats.handlers, 3u);
     CHECK_EQ(stats.signals, 1u);
     CHECK_EQ(stats.finishes, 2u);
+    // list_a to its signal and then to its finish; list_b to its stall and
+    // then to its finish.
+    CHECK_EQ(stats.runs, 4u);
+    CHECK_EQ(after_runs, stats.runs);
     CHECK(!f.system->kernel().in_interrupt());
 }
 

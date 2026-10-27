@@ -198,8 +198,10 @@ SwapchainPresenter::~SwapchainPresenter() {
         if (f.acquired) vkDestroySemaphore(dev, f.acquired, nullptr);
         if (f.fence) vkDestroyFence(dev, f.fence, nullptr);
         if (f.pool) vkDestroyCommandPool(dev, f.pool, nullptr);
+        DestroyBuffer(*ctx_, &f.upload);
     }
     DestroyBuffer(*ctx_, &capture_buffer_);
+    DestroyImage(*ctx_, &upload_image_);
 }
 
 void SwapchainPresenter::Resize(int width, int height) {
@@ -212,6 +214,53 @@ void SwapchainPresenter::Resize(int width, int height) {
 bool SwapchainPresenter::Present(VkImage src, int src_w, int src_h, const PresentRect &dst,
                                  bool linear, std::vector<std::uint8_t> *capture,
                                  std::string *error) {
+    Source source;
+    source.image = src;
+    source.width = src_w;
+    source.height = src_h;
+    return PresentImpl(source, dst, linear, capture, error);
+}
+
+bool SwapchainPresenter::PresentRgba(const std::uint8_t *rgba, int width, int height,
+                                     const PresentRect &dst, bool linear,
+                                     std::vector<std::uint8_t> *capture, std::string *error) {
+    if (rgba == nullptr || width <= 0 || height <= 0) {
+        if (error) *error = "PresentRgba: no pixels";
+        return false;
+    }
+    Source source;
+    source.pixels = rgba;
+    source.width = width;
+    source.height = height;
+    return PresentImpl(source, dst, linear, capture, error);
+}
+
+bool SwapchainPresenter::EnsureUpload(Frame &f, int width, int height, std::string *error) {
+    if (upload_image_.width != width || upload_image_.height != height) {
+        vkDeviceWaitIdle(ctx_->device());
+        DestroyImage(*ctx_, &upload_image_);
+        upload_initialised_ = false;
+        if (!CreateImage2D(*ctx_, width, height, VK_FORMAT_R8G8B8A8_UNORM,
+                           // SAMPLED only for the view CreateImage2D makes.
+                           VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                               VK_IMAGE_USAGE_SAMPLED_BIT,
+                           VK_IMAGE_ASPECT_COLOR_BIT, "present upload", &upload_image_, error)) {
+            return false;
+        }
+    }
+    const auto bytes = static_cast<VkDeviceSize>(width) * static_cast<VkDeviceSize>(height) * 4;
+    if (f.upload.size < bytes) {
+        DestroyBuffer(*ctx_, &f.upload);
+        if (!CreateBuffer(*ctx_, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, HostAccess::kSequential,
+                          "present upload", &f.upload, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool SwapchainPresenter::PresentImpl(const Source &source, const PresentRect &dst, bool linear,
+                                     std::vector<std::uint8_t> *capture, std::string *error) {
     VkDevice dev = ctx_->device();
     if (needs_recreate_) {
         vkDeviceWaitIdle(dev);
@@ -250,6 +299,17 @@ bool SwapchainPresenter::Present(VkImage src, int src_w, int src_h, const Presen
         return false;
     }
     const VkImage image = images_[index];
+    const bool upload = source.pixels != nullptr;
+    if (upload) {
+        if (!EnsureUpload(f, source.width, source.height, error)) return false;
+        std::memcpy(f.upload.mapped, source.pixels,
+                    static_cast<std::size_t>(source.width) *
+                        static_cast<std::size_t>(source.height) * 4);
+        FlushBuffer(*ctx_, f.upload, 0, VK_WHOLE_SIZE);
+    }
+    const VkImage src = upload ? upload_image_.image : source.image;
+    const int src_w = source.width;
+    const int src_h = source.height;
     const bool do_capture = capture != nullptr && can_capture_;
     const VkDeviceSize capture_bytes =
         static_cast<VkDeviceSize>(extent_.width) * extent_.height * 4;
@@ -268,11 +328,31 @@ bool SwapchainPresenter::Present(VkImage src, int src_w, int src_h, const Presen
     VkCommandBuffer cmd = f.cmd;
     vkBeginCommandBuffer(cmd, &bi);
     ctx_->BeginLabel(cmd, "present");
-    ImageBarrier(cmd, src, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                 VK_ACCESS_TRANSFER_READ_BIT);
+    if (upload) {
+        // The upload image: after the blit of the previous present.
+        ImageBarrier(cmd, src, VK_IMAGE_ASPECT_COLOR_BIT,
+                     upload_initialised_ ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                                         : VK_IMAGE_LAYOUT_UNDEFINED,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        VkBufferImageCopy copy{};
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.imageExtent = {static_cast<std::uint32_t>(src_w), static_cast<std::uint32_t>(src_h),
+                            1};
+        vkCmdCopyBufferToImage(cmd, f.upload.buffer, src, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                               &copy);
+        ImageBarrier(cmd, src, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_ACCESS_TRANSFER_READ_BIT);
+        upload_initialised_ = true;
+    } else {
+        ImageBarrier(cmd, src, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_ACCESS_TRANSFER_READ_BIT);
+    }
     ImageBarrier(cmd, image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -325,10 +405,12 @@ bool SwapchainPresenter::Present(VkImage src, int src_w, int src_h, const Presen
                      VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_TRANSFER_BIT,
                      VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0);
     }
-    ImageBarrier(cmd, src, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                 VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    if (!upload) {
+        ImageBarrier(cmd, src, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    }
     ctx_->EndLabel(cmd);
     vkEndCommandBuffer(cmd);
 

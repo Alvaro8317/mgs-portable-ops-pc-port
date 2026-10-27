@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b → F15b → F16b → F17b → F18b → F19 → F20b → F21 → F22 | en serie |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F15b → F16b → F17b → F18b → F19 → F20b → F21 → F22 | en serie |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -102,7 +102,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F12 | GE por software: completo | M2 | ✅ hecha (ola 2) |
 | F13 | Overlays de etapa en runtime | M2 | ✅ hecha |
 | F14a | Renderer Vulkan: base sobre los dumps | M3 | ✅ hecha (ola 3) |
-| F14b | Renderer Vulkan en el juego | M3 | ⬜ pendiente |
+| F14b | Renderer Vulkan en el juego | M3 | ✅ hecha (Windows: pendiente del usuario) |
 | F15a | Renderer Vulkan: blending por shader y efectos (autónomo) | M3 | ✅ hecha (ola 4) |
 | F15b | Renderer Vulkan: framebuffers en el juego | M3 | ⬜ pendiente |
 | F16a | Audio autónomo: SAS, ATRAC3 y salida SDL3 | M4 | ✅ hecha (ola 1) |
@@ -833,6 +833,22 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   para cerrar F14b; la primera etapa 3D en Vulkan se comprueba cuando se pueda entrar. Con
   `build_overlays.py --stages init,r_main01,title` las etapas corren recompiladas
   (`--interpreter 0`).
+- **Notas (F14b)**: hecha en Linux, ver `docs/sessions/F14b.md`.
+  - `mpo_boot --renderer vulkan`: `GeRenderer` es el backend del GE del juego.
+    - Después de cada `ge::Ge::Run` (`GeManager::set_after_run`), `EndFrame(true)` escribe en la
+      VRAM lo dibujado.
+    - En el primer uso de un target en cada frame, las filas de la VRAM que cambiaron (la CPU, el
+      video) se vuelven a subir. Se detectan con una sombra por target.
+  - Con `--window 1`, la ventana es una swapchain de Vulkan. Un flip presenta el target del GE si
+    coincide con la VRAM, o sube el framebuffer (`PresentRgba`) si no.
+    `MPO_VK_PRESENT_UPLOAD=1` fuerza la subida, y `--capture-window 1` captura la swapchain.
+  - **Hasta "Input your name" (70 s), sobre lavapipe y con validación más sincronización**:
+    - 0 errores;
+    - la traza HLE es **idéntica byte a byte** a la de `soft` (295 065 líneas);
+    - las 69 capturas son idénticas;
+    - la ventana muestra en RGB lo mismo que la VRAM, por los dos caminos de presentación;
+    - va en tiempo real con la ventana.
+  - **Pendiente del usuario**: la misma prueba en Windows con la GPU (procedimiento en la nota).
 
 ### F15a — Renderer Vulkan: blending por shader y efectos, autónomo (ola 4)
 
@@ -919,6 +935,21 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Notas (ola 3)**: todas las diferencias que midió F14a son de blending, con un escalón de 5 bits
   en hasta el 35 % de los píxeles de las cinemáticas. La prioridad es el blending por shader con el
   dither después. Las líneas ya salen idénticas (DDA en la CPU), así que se quitan de esta fase.
+- **Notas (F14b)**: ver "Pendiente" y "Para la próxima sesión" en `docs/sessions/F14b.md`.
+  - **Ya está**: subir desde la VRAM los framebuffers que no dibuja el GE (`PresentRgba`) y la
+    resincronización de los targets cuando la CPU escribe en la VRAM (por filas, contra una
+    sombra).
+  - **Falta el seguimiento fino**:
+    - hoy hay un readback y una espera a la GPU después de **cada** ejecución de lista: hay que
+      medirlo en una misión y saltárselo cuando nadie lea;
+    - el render-to-texture y la textura desde el target dentro de un mismo frame;
+    - las transferencias de bloque desde un target, que hoy leen la VRAM sin pasar por el
+      renderer.
+  - En el título aparecen dos aproximaciones, una vez cada una en 70 s y sin efecto en las
+    capturas: "framebuffer reused with another format or stride" (el video 8888 y el juego 5551
+    en `0x04000000`) y "texture from a render target" (**[?]** de qué draw es).
+  - Para comparar en el juego: `analysis/f14b/run.sh` (`soft` y `vulkan`), las capturas por hash y
+    `cmp` de las trazas.
 
 ---
 

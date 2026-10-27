@@ -363,6 +363,7 @@ void GeManager::process_queue() {
         list.interrupted = false;
 
         const ge::RunResult result = ge_.Run(list.dl);
+        if (after_run_) after_run_();
         ++stats_.runs;
         stats_.commands += result.commands;
         cycles_executed_ += result.cycles;

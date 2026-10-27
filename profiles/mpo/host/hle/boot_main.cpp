@@ -11,7 +11,7 @@
 //            [--fiber-stack-mib N] [--preempt-interval N] [--us-per-preempt N]
 //            [--press <buttons>@<ms>[+<ms>]]... [--capture <dir>] [--capture-every N]
 //            [--window 0|1] [--scale N] [--input-map <input.toml>]
-//            [--overlays <dir>|none]
+//            [--overlays <dir>|none] [--renderer soft|vulkan] [--capture-window 0|1]
 //
 // It measures the start-up (registering the dispatch table: time and memory),
 // runs PSP threads until --until-us of virtual time (default 5 s), a runtime
@@ -39,6 +39,18 @@
 //                             --realtime 0). The mapping is --input-map, or
 //                             <config dir>/input.toml when it exists, or the
 //                             defaults (profiles/mpo/config/input.toml).
+//
+// F14b: --renderer vulkan draws the GE on the GPU (mpo::vk::GeRenderer)
+// instead of softgpu. After every run of a display list the renderer writes
+// what it drew back to VRAM, and before a target's first draw of a run it
+// uploads again what the CPU wrote there, so the game (and --capture) sees
+// VRAM as softgpu would leave it. With --window 1 the window is a Vulkan
+// swapchain: a flip shows the GE's target when it matches VRAM, or uploads
+// the framebuffer from VRAM (the video frames the CPU writes);
+// MPO_VK_PRESENT_UPLOAD=1 always uploads (A/B). --capture-window 1 captures
+// the swapchain image (what the window shows) instead of VRAM. The report
+// adds the renderer's counters and the validation messages; a validation
+// error fails the run (MPO_VK_VALIDATION=1 turns the layers on in Release).
 
 #include <algorithm>
 #include <chrono>
@@ -77,6 +89,16 @@
 #include "input_config.h"
 #include "sdl_input.h"
 #include "sdl_presenter.h"
+#endif
+
+#if MPO_BOOT_VULKAN
+#include "context.hpp"
+#include "env.hpp"
+#include "ge_renderer.hpp"
+#if MPO_BOOT_SDL
+#include "sdl_window.hpp"
+#include "swapchain.hpp"
+#endif
 #endif
 
 namespace psprecomp {
@@ -290,6 +312,8 @@ int main(int argc, char **argv) {
     int window_scale = 2;
     std::string input_map;
     std::string overlays_dir = MPO_DEFAULT_OVERLAYS;
+    bool vulkan = false;
+    bool capture_window = false;
     for (int i = 1; i + 1 < argc; i += 2) {
         const std::string option = argv[i];
         const std::string value = argv[i + 1];
@@ -347,6 +371,12 @@ int main(int argc, char **argv) {
             input_map = value;
         } else if (option == "--overlays") {
             overlays_dir = value == "none" ? std::string() : value;
+        } else if (option == "--renderer") {
+            if (value != "soft" && value != "vulkan")
+                return fail("--renderer takes soft or vulkan");
+            vulkan = value == "vulkan";
+        } else if (option == "--capture-window") {
+            capture_window = value != "0";
         } else {
             return fail("unknown option " + option);
         }
@@ -357,6 +387,12 @@ int main(int argc, char **argv) {
 #if !MPO_BOOT_SDL
     if (window) return fail("--window needs a build with the SDL frontend (mpo_frontend_sdl)");
 #endif
+#if !MPO_BOOT_VULKAN
+    if (vulkan)
+        return fail("--renderer vulkan needs a build with the Vulkan renderer (mpo_vulkan)");
+#endif
+    if (capture_window && (!vulkan || !window || capture_dir.empty()))
+        return fail("--capture-window 1 needs --renderer vulkan, --window 1 and --capture");
     // A window plays at the PSP's speed unless asked otherwise.
     if (window && !realtime_given) config.realtime = true;
 
@@ -423,6 +459,10 @@ int main(int argc, char **argv) {
 #if MPO_BOOT_SDL
         std::unique_ptr<mpo::frontend::SdlPresenter> presenter;
         std::unique_ptr<mpo::frontend::SdlInput> input;
+#if MPO_BOOT_VULKAN
+        // Declared before the context: the surface goes before the window.
+        std::unique_ptr<mpo::vk::SdlVulkanWindow> vk_window;
+#endif
         if (window) {
             mpo::frontend::InputMapping mapping = mpo::frontend::InputMapping::Default();
             std::filesystem::path mapping_path = input_map;
@@ -447,17 +487,92 @@ int main(int argc, char **argv) {
             SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
             mpo::frontend::PresenterConfig presenter_config;
             presenter_config.scale = window_scale;
-            presenter = mpo::frontend::SdlPresenter::Create(presenter_config, &error);
-            if (!presenter) return fail(error);
+#if MPO_BOOT_VULKAN
+            if (vulkan) {
+                vk_window = mpo::vk::SdlVulkanWindow::Create(presenter_config, &error);
+                if (!vk_window) return fail(error);
+            }
+#endif
+            if (!vulkan) {
+                presenter = mpo::frontend::SdlPresenter::Create(presenter_config, &error);
+                if (!presenter) return fail(error);
+            }
             input = std::make_unique<mpo::frontend::SdlInput>(&translator);
             if (!input->ok())
                 std::fprintf(stderr, "mpo_boot: input: %s (keyboard only)\n",
                              input->error().c_str());
-            std::printf("window: video driver %s, renderer %s\n",
-                        mpo::frontend::SdlPresenter::video_driver().c_str(),
-                        presenter->render_driver().c_str());
+            if (presenter)
+                std::printf("window: video driver %s, renderer %s\n",
+                            mpo::frontend::SdlPresenter::video_driver().c_str(),
+                            presenter->render_driver().c_str());
         }
 #endif
+
+        // ---- F14b: the GE on Vulkan ----
+#if MPO_BOOT_VULKAN
+        std::unique_ptr<mpo::vk::VulkanContext> vk_context;
+        std::unique_ptr<mpo::vk::GeRenderer> gpu;
+#if MPO_BOOT_SDL
+        std::unique_ptr<mpo::vk::SwapchainPresenter> swapchain;
+#endif
+        std::string gpu_error;
+        if (vulkan) {
+            mpo::vk::ContextOptions vk_options;
+            vk_options.app_name = "mpo_boot";
+            vk_options.validation = mpo::vk::DefaultValidation();
+#if MPO_BOOT_SDL
+            if (vk_window) vk_window->FillContextOptions(&vk_options);
+#endif
+            mpo::vk::VulkanContext::Status status;
+            vk_context = mpo::vk::VulkanContext::Create(vk_options, &status, &error);
+            if (!vk_context) return fail("vulkan: " + error);
+            gpu = mpo::vk::GeRenderer::Create(vk_context.get(), system.ge().ge().memory(), &error);
+            if (!gpu) return fail("vulkan renderer: " + error);
+            const mpo::vk::DeviceCaps &caps = vk_context->caps();
+            std::printf("renderer: vulkan on %s (%s), API %s, %s, destination reads by %s, "
+                        "blending %s, validation %s%s\n",
+                        caps.device_name.c_str(), caps.driver_name.c_str(),
+                        mpo::vk::VersionString(caps.api_version).c_str(),
+                        caps.dynamic_rendering ? "dynamic rendering" : "render passes",
+                        mpo::vk::DstReadName(gpu->dst_read()),
+                        mpo::vk::BlendPathName(gpu->options().blend),
+                        caps.validation_active ? "on" : "off",
+                        caps.sync_validation_active ? " (+synchronization)" : "");
+            gpu->stats().log = [](std::string_view line) {
+                std::fprintf(stderr, "mpo_boot: vulkan: %.*s\n", static_cast<int>(line.size()),
+                             line.data());
+            };
+            system.ge().ge().SetDrawBackend(gpu.get());
+            // VRAM as softgpu would leave it before any guest code runs again.
+            system.ge().set_after_run([&] {
+                if (!gpu_error.empty()) return;
+                if (!gpu->EndFrame(true, &gpu_error)) {
+                    std::fprintf(stderr, "mpo_boot: vulkan renderer: %s\n", gpu_error.c_str());
+                    system.kernel().request_stop();
+                }
+            });
+#if MPO_BOOT_SDL
+            if (vk_window) {
+                int w = 0;
+                int h = 0;
+                vk_window->DrawableSize(&w, &h);
+                swapchain = mpo::vk::SwapchainPresenter::Create(vk_context.get(), w, h,
+                                                                /*vsync=*/false, &error);
+                if (!swapchain) return fail("swapchain: " + error);
+                std::printf("window: video driver %s, vulkan swapchain %dx%d, present mode %d\n",
+                            mpo::vk::SdlVulkanWindow::video_driver().c_str(), swapchain->width(),
+                            swapchain->height(), static_cast<int>(swapchain->present_mode()));
+            }
+#endif
+        } else {
+            std::printf("renderer: soft\n");
+        }
+        [[maybe_unused]] const bool force_upload = mpo::vk::GetEnv("MPO_VK_PRESENT_UPLOAD") == "1";
+#else
+        std::printf("renderer: soft\n");
+#endif
+        [[maybe_unused]] std::uint64_t presented_targets = 0;
+        [[maybe_unused]] std::uint64_t presented_uploads = 0;
         system.ctrl().set_sampler([&translator, &presses](std::uint64_t now) {
             mpo::frontend::SceCtrlData data = translator.Sample();
             for (const Press &press : presses)
@@ -493,7 +608,62 @@ int main(int argc, char **argv) {
             const mpo::frontend::FramebufferDesc desc = framebuffer_desc(framebuffer);
             (void)mpo::frontend::ConvertFramebuffer(shown_memory, desc, shown);
             if (any_pixel_lit(shown)) ++lit_flips;
-            if (capture && flip_count % capture_every == 0u) {
+            const bool capture_now = capture && flip_count % capture_every == 0u;
+#if MPO_BOOT_VULKAN && MPO_BOOT_SDL
+            if (swapchain) {
+                SDL_Event event;
+                while (SDL_PollEvent(&event)) {
+                    if (input->HandleEvent(event)) continue;
+                    if (event.type == SDL_EVENT_QUIT ||
+                        event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
+                        system.kernel().request_stop();
+                    if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
+                        swapchain->Resize(event.window.data1, event.window.data2);
+                }
+                const int sw = mpo::frontend::kPspScreenWidth;
+                const int sh = mpo::frontend::kPspScreenHeight;
+                const mpo::vk::PresentRect where = vk_window->Destination(sw, sh);
+                std::vector<std::uint8_t> window_pixels;
+                std::vector<std::uint8_t> *window_capture =
+                    capture_now && capture_window ? &window_pixels : nullptr;
+                mpo::vk::GeRenderer::TargetInfo target;
+                const auto format = static_cast<mpo::ge::BufferFormat>(framebuffer.format & 3u);
+                const bool from_target =
+                    !force_upload && gpu_error.empty() &&
+                    gpu->TargetMatchesVram(framebuffer.top_address,
+                                           static_cast<int>(framebuffer.stride), format, sw, sh) &&
+                    gpu->FindTarget(framebuffer.top_address, &target);
+                std::string present_error;
+                const bool ok =
+                    from_target
+                        ? swapchain->Present(target.image, sw, sh, where, /*linear=*/false,
+                                             window_capture, &present_error)
+                        : swapchain->PresentRgba(shown.data(), sw, sh, where, /*linear=*/false,
+                                                 window_capture, &present_error);
+                ++(from_target ? presented_targets : presented_uploads);
+                if (!ok && gpu_error.empty()) {
+                    gpu_error = "present: " + present_error;
+                    std::fprintf(stderr, "mpo_boot: vulkan %s\n", gpu_error.c_str());
+                    system.kernel().request_stop();
+                }
+                if (window_capture != nullptr) {
+                    char name[64];
+                    std::snprintf(name, sizeof(name), "window-%06llu-%08X.png",
+                                  static_cast<unsigned long long>(flip_count),
+                                  framebuffer.top_address);
+                    mpo::ge::replay::Image image;
+                    image.width = swapchain->width();
+                    image.height = swapchain->height();
+                    image.rgba = std::move(window_pixels);
+                    for (std::size_t i = 3; i < image.rgba.size(); i += 4) image.rgba[i] = 255;
+                    if (!image.rgba.empty() &&
+                        mpo::ge::replay::WritePng(std::filesystem::path(capture_dir) / name, image)
+                            .empty())
+                        ++captures;
+                }
+            }
+#endif
+            if (capture_now && !capture_window) {
                 char name[64];
                 std::snprintf(name, sizeof(name), "flip-%06llu-%08X.png",
                               static_cast<unsigned long long>(flip_count), framebuffer.top_address);
@@ -560,6 +730,53 @@ int main(int argc, char **argv) {
                     static_cast<unsigned long long>(ge.handlers),
                     static_cast<unsigned long long>(ge.errors),
                     static_cast<unsigned long long>(system.mpeg().frames()));
+#if MPO_BOOT_VULKAN
+        bool validation_failed = false;
+        if (gpu) {
+            // Whatever the last run left unsubmitted (nothing, normally).
+            if (gpu_error.empty() && !gpu->EndFrame(true, &gpu_error))
+                std::fprintf(stderr, "mpo_boot: vulkan renderer: %s\n", gpu_error.c_str());
+            vkDeviceWaitIdle(vk_context->device());
+            const mpo::vk::RendererStats &vs = gpu->stats();
+            std::printf("vulkan: %llu frames, %llu draws in %llu batches (%llu triangles, %llu "
+                        "rectangles, %llu lines, %llu points), %zu pipelines, %zu textures (%llu "
+                        "uploads, %llu hits)\n",
+                        static_cast<unsigned long long>(vs.frames),
+                        static_cast<unsigned long long>(vs.draws),
+                        static_cast<unsigned long long>(vs.batches),
+                        static_cast<unsigned long long>(vs.triangles),
+                        static_cast<unsigned long long>(vs.rectangles),
+                        static_cast<unsigned long long>(vs.lines),
+                        static_cast<unsigned long long>(vs.points), gpu->pipeline_count(),
+                        gpu->texture_count(), static_cast<unsigned long long>(vs.texture_uploads),
+                        static_cast<unsigned long long>(vs.texture_hits));
+            std::printf("vulkan: targets: %llu created, %llu synchronised again from VRAM (%llu "
+                        "rows), %llu readbacks; destination reads: %llu batches, %llu barriers, "
+                        "%llu copies; fixed blending: %llu batches\n",
+                        static_cast<unsigned long long>(vs.target_uploads),
+                        static_cast<unsigned long long>(vs.target_resyncs),
+                        static_cast<unsigned long long>(vs.target_resync_rows),
+                        static_cast<unsigned long long>(vs.readbacks),
+                        static_cast<unsigned long long>(vs.dst_batches),
+                        static_cast<unsigned long long>(vs.dst_barriers),
+                        static_cast<unsigned long long>(vs.dst_copies),
+                        static_cast<unsigned long long>(vs.fixed_blend_batches));
+            std::printf("vulkan: presented %llu flips from the GE's target, %llu uploaded from "
+                        "VRAM\n",
+                        static_cast<unsigned long long>(presented_targets),
+                        static_cast<unsigned long long>(presented_uploads));
+            for (const auto &[what, draws] : vs.approximations)
+                std::printf("vulkan: approximated: %s (%llu draws)\n", what.c_str(),
+                            static_cast<unsigned long long>(draws));
+            const mpo::vk::ValidationLog &log = vk_context->validation();
+            std::printf("vulkan: validation %s: %d errors, %d warnings\n",
+                        vk_context->caps().validation_active ? "on" : "off", log.errors.load(),
+                        log.warnings.load());
+            for (const std::string &message : log.Messages())
+                std::printf("  %s\n", message.c_str());
+            validation_failed = log.errors.load() != 0 || !gpu_error.empty();
+        }
+#endif
         print_memory("after the run", memory_use());
 
         std::printf("\nmodules:\n");
@@ -637,6 +854,11 @@ int main(int argc, char **argv) {
             runtime.stop_reason().find("unimplemented HLE import") == std::string::npos &&
             runtime.stop_reason().find("sceKernelExitGame") == std::string::npos;
         exit_code = faulted ? 1 : 0;
+#if MPO_BOOT_VULKAN
+        if (validation_failed) exit_code = 1;
+        system.ge().set_after_run(nullptr);
+        system.ge().ge().SetDrawBackend(nullptr);
+#endif
     }
     if (trace != nullptr) std::fclose(trace);
     print_memory("at exit", memory_use());
