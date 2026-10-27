@@ -829,6 +829,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     activa con capas ≥ 1.3.276 [?, el corte no está verificado].
   - **Pendiente del usuario**: la prueba en Windows con la GPU y un Vulkan SDK ≥ 1.3.276
     (procedimiento en la nota).
+  - **CI** (run `40446734964`, los 9 jobs en verde): `mpo_vulkan_renderer_test` tarda 182 s en
+    `gcc asan-ubsan` y 143 s en `clang asan-ubsan`, con un límite de 300 s por test. Si una fase
+    añade escenas y se acerca, se recorta como dice `docs/sessions/F15a.md` (la pasada
+    `blend shader` o los métodos extra solo en 5551).
 
 ### F15b — Renderer Vulkan: framebuffers en el juego
 
