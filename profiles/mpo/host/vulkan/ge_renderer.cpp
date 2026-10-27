@@ -6,6 +6,7 @@
 #include "ge_renderer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -176,6 +177,123 @@ void LineTextureCoordinates(const ge::VertexData &v0, const ge::VertexData &v1, 
     *t = (v0.t * wq0 + v1.t * wq1) * q_recip;
 }
 
+// Bits per channel (r, g, b, a) of a GE framebuffer format.
+std::array<int, 4> FormatBits(ge::BufferFormat f) {
+    switch (f) {
+    case ge::BufferFormat::k565:
+        return {5, 6, 5, 0};
+    case ge::BufferFormat::k5551:
+        return {5, 5, 5, 1};
+    case ge::BufferFormat::k4444:
+        return {4, 4, 4, 4};
+    case ge::BufferFormat::k8888:
+        return {8, 8, 8, 8};
+    }
+    return {8, 8, 8, 8};
+}
+
+enum class MaskKind : std::uint8_t { kWritten, kKept, kPartial };
+
+// What the GE colour mask (8888 bits that keep the old value) does to one
+// channel once converted to the framebuffer format (pixel.cpp
+// ConvertWriteMask): fixed function can keep or write a whole channel only.
+MaskKind ChannelMask(std::uint32_t mask8888, int channel, ge::BufferFormat f) {
+    const int bits = FormatBits(f)[static_cast<std::size_t>(channel)];
+    if (bits == 0) return MaskKind::kKept;
+    const std::uint32_t m = ((mask8888 >> (8 * channel)) & 0xFF) >> (8 - bits);
+    if (m == 0) return MaskKind::kWritten;
+    if (m == (1u << bits) - 1) return MaskKind::kKept;
+    return MaskKind::kPartial;
+}
+
+// Fixed-function blending gives softgpu's bits only when no product rounds:
+// MIN and MAX, or ADD/SUBTRACT/REVERSE_SUBTRACT with factors 0 and 1 (softgpu's
+// ((2c+1)(2f+1)) >> 10 is exactly c for f = 255 and 0 for f = 0). A result
+// that is the source, the destination or 0 is then exact with the source
+// quantized in the shader; a sum or difference of both only in 8888, where
+// nothing is truncated afterwards. The dither (after the blend in the GE)
+// always needs the shader.
+bool FixedBlendIsExact(const ge::PixelState &ps) {
+    if (ps.dithering) return false;
+    switch (ps.blend_eq) {
+    case ge::BlendMode::kMin:
+    case ge::BlendMode::kMax:
+        return true;
+    case ge::BlendMode::kAbsDiff:
+        return false;
+    case ge::BlendMode::kAdd:
+    case ge::BlendMode::kSubtract:
+    case ge::BlendMode::kReverseSubtract:
+        break;
+    }
+    auto unit = [](ge::PixelBlendFactor f) {
+        return f == ge::PixelBlendFactor::kZero || f == ge::PixelBlendFactor::kOne;
+    };
+    if (!unit(ps.blend_src) || !unit(ps.blend_dst)) return false;
+    if (ps.blend_src == ge::PixelBlendFactor::kZero || ps.blend_dst == ge::PixelBlendFactor::kZero)
+        return true;
+    return ps.fb_format == ge::BufferFormat::k8888;
+}
+
+// Most primitives a destination-reading batch holds before it is split anyway
+// (the overlap test is linear in it).
+constexpr std::size_t kMaxGroupPrimitives = 512;
+constexpr std::size_t kMaxGroupPixels = 16384;
+
+std::uint32_t PixelKey(int x, int y) {
+    return (static_cast<std::uint32_t>(y & 0xFFFF) << 16) | static_cast<std::uint32_t>(x & 0xFFFF);
+}
+
+int FloorDiv16(int v) {
+    return v >= 0 ? v / kScreenScale : -((-v + kScreenScale - 1) / kScreenScale);
+}
+
+// The pixels a primitive spanning [min, max] (12.4 screen units) can cover:
+// softgpu samples pixel p at 16p + 7 (triangles) and a rectangle covers the
+// samples in [min - 1, max - 1]; `range` is already scissored.
+int FirstPixel(int min, int range_min) {
+    return std::max(range_min / kScreenScale, FloorDiv16(min - 8 + kScreenScale - 1));
+}
+int LastPixel(int max, int range_max) {
+    return std::min(range_max / kScreenScale, FloorDiv16(max - 7));
+}
+
+std::int64_t EdgeFunction(int ax, int ay, int bx, int by, int px, int py) {
+    return (static_cast<std::int64_t>(bx) - ax) * (static_cast<std::int64_t>(py) - ay) -
+           (static_cast<std::int64_t>(by) - ay) * (static_cast<std::int64_t>(px) - ax);
+}
+
+// Whether one of a's edges separates b from a: no vertex of b strictly on
+// a's side of it. Touching is allowed: with a fill rule like the GPUs' and
+// softgpu's top-left rule (a sample on an edge belongs to the triangle that
+// holds the sample nudged right and down), triangles whose interiors do not
+// meet never cover the same sample.
+template <typename Prim>
+bool SeparatedByEdgeOf(const Prim &a, const Prim &b) {
+    const std::int64_t area = EdgeFunction(a.x[0], a.y[0], a.x[1], a.y[1], a.x[2], a.y[2]);
+    if (area == 0) return false;
+    for (int i = 0; i < 3; ++i) {
+        const auto ui = static_cast<std::size_t>(i);
+        const auto uj = static_cast<std::size_t>((i + 1) % 3);
+        bool inside = false;
+        for (std::size_t v = 0; v < 3 && !inside; ++v) {
+            std::int64_t e = EdgeFunction(a.x[ui], a.y[ui], a.x[uj], a.y[uj], b.x[v], b.y[v]);
+            if (area < 0) e = -e;
+            inside = e > 0;
+        }
+        if (!inside) return true;
+    }
+    return false;
+}
+
+// Whether two primitives of a group may write a common pixel.
+template <typename Prim>
+bool MayOverlap(const Prim &a, const Prim &b) {
+    if (!a.r.Overlaps(b.r)) return false;
+    if (a.triangle && b.triangle) return !SeparatedByEdgeOf(a, b) && !SeparatedByEdgeOf(b, a);
+    return true;
+}
+
 GpuVertex MakeVertex(const ge::VertexData &v, int bias, float w, std::uint32_t color0,
                      std::uint32_t color1) {
     GpuVertex g;
@@ -193,6 +311,54 @@ GpuVertex MakeVertex(const ge::VertexData &v, int bias, float w, std::uint32_t c
 }
 
 } // namespace
+
+const char *BlendPathName(BlendPath path) {
+    switch (path) {
+    case BlendPath::kAuto:
+        return "auto";
+    case BlendPath::kShader:
+        return "shader";
+    case BlendPath::kFixed:
+        return "fixed";
+    }
+    return "?";
+}
+
+RendererOptions RendererOptions::FromEnv() {
+    RendererOptions o;
+    const std::string blend = GetEnv("MPO_VK_BLEND");
+    if (blend == "shader") {
+        o.blend = BlendPath::kShader;
+    } else if (blend == "fixed") {
+        o.blend = BlendPath::kFixed;
+    }
+    const std::string dst = GetEnv("MPO_VK_DST_READ");
+    if (dst == "raster") {
+        o.dst_read = DstRead::kRasterOrder;
+    } else if (dst == "barrier") {
+        o.dst_read = DstRead::kBarrier;
+    } else if (dst == "copy") {
+        o.dst_read = DstRead::kCopy;
+    }
+    o.batching = GetEnv("MPO_VK_NO_BATCH") != "1";
+    o.texture_cache = GetEnv("MPO_VK_NO_TEX_CACHE") != "1";
+    return o;
+}
+
+bool GeRenderer::Supports(const VulkanContext &ctx, DstRead mode) {
+    // Input attachments need a render pass (1.2 path) or local read (1.3).
+    const bool input = !ctx.caps().dynamic_rendering || ctx.caps().local_read;
+    switch (mode) {
+    case DstRead::kAuto:
+    case DstRead::kCopy:
+        return true;
+    case DstRead::kBarrier:
+        return input;
+    case DstRead::kRasterOrder:
+        return input && ctx.caps().raster_order;
+    }
+    return false;
+}
 
 void RendererStats::Approximate(std::string_view what) {
     auto it = approximations.find(what);
@@ -230,13 +396,31 @@ bool GeRenderer::DrawState::SameAs(const DrawState &o) const {
 
 std::unique_ptr<GeRenderer> GeRenderer::Create(VulkanContext *ctx, const ge::MemoryView &mem,
                                                std::string *error) {
-    std::unique_ptr<GeRenderer> r(new GeRenderer(ctx, mem));
+    return Create(ctx, mem, RendererOptions::FromEnv(), error);
+}
+
+std::unique_ptr<GeRenderer> GeRenderer::Create(VulkanContext *ctx, const ge::MemoryView &mem,
+                                               const RendererOptions &options, std::string *error) {
+    std::unique_ptr<GeRenderer> r(new GeRenderer(ctx, mem, options));
     if (!r->Init(error)) return nullptr;
     return r;
 }
 
 bool GeRenderer::Init(std::string *error) {
     trace_draws_ = GetEnv("MPO_VK_TRACE_DRAWS") == "1";
+    if (options_.dst_read == DstRead::kAuto) {
+        dst_read_ = Supports(*ctx_, DstRead::kRasterOrder) ? DstRead::kRasterOrder
+                    : Supports(*ctx_, DstRead::kBarrier)   ? DstRead::kBarrier
+                                                           : DstRead::kCopy;
+    } else if (!Supports(*ctx_, options_.dst_read)) {
+        if (error) {
+            *error = std::string("destination reads by ") + DstReadName(options_.dst_read) +
+                     " are not supported on this device/path";
+        }
+        return false;
+    } else {
+        dst_read_ = options_.dst_read;
+    }
     // 8192 covers [-2048, 6144); the spec minimum (4096) still covers the
     // framebuffer and its surroundings.
     viewport_size_ =
@@ -248,7 +432,9 @@ bool GeRenderer::Init(std::string *error) {
     if (const std::string max = GetEnv("MPO_VK_MAX_DRAWS"); !max.empty()) {
         max_draws_ = std::strtoull(max.c_str(), nullptr, 10);
     }
-    if (!pipelines_.Init(ctx_, error)) return false;
+    if (!pipelines_.Init(ctx_, dst_read_, options_.pipeline_cache_data, error)) return false;
+    options_.pipeline_cache_data.clear();
+    options_.pipeline_cache_data.shrink_to_fit();
     VkDevice dev = ctx_->device();
 
     VkSamplerCreateInfo sci{};
@@ -333,7 +519,9 @@ GeRenderer::~GeRenderer() {
     }
     for (auto &[key, fb] : framebuffers_) vkDestroyFramebuffer(dev, fb, nullptr);
     for (auto &[key, tex] : textures_) DestroyImage(*ctx_, &tex.image);
+    for (VkDescriptorPool p : dst_pools_) vkDestroyDescriptorPool(dev, p, nullptr);
     for (ColorTarget &t : color_targets_) {
+        DestroyImage(*ctx_, &t.copy);
         DestroyImage(*ctx_, &t.image);
         DestroyBuffer(*ctx_, &t.readback);
     }
@@ -462,10 +650,13 @@ int GeRenderer::GetColorTarget(std::uint32_t offset, int stride, ge::BufferForma
     std::string err;
     char name[64];
     std::snprintf(name, sizeof(name), "ge fb 0x%06X", static_cast<unsigned>(offset));
-    if (!CreateImage2D(*ctx_, w, h, PipelineCache::kColorFormat,
-                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                       VK_IMAGE_ASPECT_COLOR_BIT, name, &t.image, &err) ||
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                              VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                              VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (dst_read_ != DstRead::kCopy)
+        usage |= static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
+    if (!CreateImage2D(*ctx_, w, h, PipelineCache::kColorFormat, usage, VK_IMAGE_ASPECT_COLOR_BIT,
+                       name, &t.image, &err) ||
         !CreateBuffer(*ctx_, static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                       HostAccess::kRandom, name, &t.readback, &err)) {
         Fail(err);
@@ -583,6 +774,14 @@ bool GeRenderer::ResolveTexture(const ge::SamplerState &st, VkImageView *rgba, V
     }
 
     auto it = textures_.find(key);
+    if (it != textures_.end() && !options_.texture_cache) {
+        // MPO_VK_NO_TEX_CACHE: upload again. The old image may still be used
+        // by this frame's earlier draws, so it dies with the frame.
+        frame().dead_images.push_back(std::move(it->second.image));
+        it->second.image = Image{};
+        textures_.erase(it);
+        it = textures_.end();
+    }
     if (it == textures_.end()) {
         if (!have_decoded) DecodeTexture(mem_, st, &decoded);
         if (decoded.width <= 0 || decoded.height <= 0) return false;
@@ -741,6 +940,8 @@ VkDescriptorSet GeRenderer::GetDescriptorSet(VkImageView rgba, VkImageView index
 
 void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs) {
     if (!EnsureFrame()) return;
+    // MPO_VK_NO_BATCH: every GE draw is its own vkCmdDraw.
+    if (!options_.batching) FlushBatch();
     ++stats_.draws;
     if (stats_.draws > max_draws_) {
         pending_.skip = true;
@@ -786,19 +987,50 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
     VkImageView index_view = dummy_index_.view;
     VkBuffer clut_buffer = dummy_ubo_.buffer;
 
+    // The GE colour mask: 8888 bits that keep the old value; the alpha byte
+    // (stencil) is kept unless a stencil write (or a clear of it) happens.
+    const std::uint32_t write_mask =
+        ps.apply_color_write_mask ? (gs.ColorMask() | (ps.stencil_test ? 0u : 0xFF000000u)) : 0u;
+    bool partial_mask = false;
+    // Removes from `mask` the channels the GE mask keeps whole; notes the ones
+    // only the shader can mask (some bits kept, others written).
+    auto apply_mask = [&](std::uint8_t mask) {
+        const std::uint8_t bits[4] = {VK_COLOR_COMPONENT_R_BIT, VK_COLOR_COMPONENT_G_BIT,
+                                      VK_COLOR_COMPONENT_B_BIT, VK_COLOR_COMPONENT_A_BIT};
+        if (!ps.apply_color_write_mask) return mask;
+        for (int i = 0; i < 4; ++i) {
+            if ((mask & bits[i]) == 0) continue;
+            switch (ChannelMask(write_mask, i, ps.fb_format)) {
+            case MaskKind::kWritten:
+                break;
+            case MaskKind::kKept:
+                mask = static_cast<std::uint8_t>(mask & ~bits[i]);
+                break;
+            case MaskKind::kPartial:
+                partial_mask = true;
+                break;
+            }
+        }
+        return mask;
+    };
+
     if (ps.clear_mode) {
         k.clear = 1;
         k.quantize = 1;
         k.dither = ps.dithering ? 1 : 0;
-        k.color_write_mask = static_cast<std::uint8_t>(
+        k.color_write_mask = apply_mask(static_cast<std::uint8_t>(
             (ps.color_test
                  ? (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT)
                  : 0) |
-            (ps.stencil_test ? VK_COLOR_COMPONENT_A_BIT : 0));
+            (ps.stencil_test ? VK_COLOR_COMPONENT_A_BIT : 0)));
         k.depth_test = ps.depth_write ? 1 : 0;
         k.depth_compare = static_cast<std::uint8_t>(VK_COMPARE_OP_ALWAYS);
         k.depth_write = ps.depth_write ? 1 : 0;
-        if (ps.apply_color_write_mask) stats_.Approximate("colour write mask in clear mode (F15)");
+        if (partial_mask) {
+            k.read_dst = 1;
+            k.write_mask = 1;
+            pc.write_mask = write_mask;
+        }
     } else {
         k.secondary = 1;
         if (rs.enable_textures) {
@@ -876,26 +1108,19 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
 
         // The alpha channel is the GE stencil: kept unless a stencil op writes
         // it (stencil is F15).
-        std::uint8_t mask =
-            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
         if (ps.stencil_test) stats_.Approximate("stencil test and stencil ops (F15)");
-        if (ps.apply_logic_op) stats_.Approximate("logic op (F15)");
-        if (ps.apply_color_write_mask) {
-            const std::uint32_t raw = gs.ColorMask();
-            const std::uint32_t bytes[3] = {raw & 0xFF, (raw >> 8) & 0xFF, (raw >> 16) & 0xFF};
-            const std::uint8_t bits[3] = {VK_COLOR_COMPONENT_R_BIT, VK_COLOR_COMPONENT_G_BIT,
-                                          VK_COLOR_COMPONENT_B_BIT};
-            for (int i = 0; i < 3; ++i) {
-                if (bytes[i] == 0xFF) {
-                    mask = static_cast<std::uint8_t>(mask & ~bits[i]);
-                } else if (bytes[i] != 0) {
-                    stats_.Approximate("per-bit colour write mask (F15)");
-                }
-            }
-        }
-        k.color_write_mask = mask;
+        k.color_write_mask = apply_mask(static_cast<std::uint8_t>(
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT));
 
-        if (ps.alpha_blend) {
+        // Blending, logic op and per-bit mask in the shader whenever fixed
+        // function would not give softgpu's bits (F15a); fixed function only
+        // where it is exact, or everywhere it fits with MPO_VK_BLEND=fixed.
+        const bool logic = ps.apply_logic_op;
+        const bool exact = ps.alpha_blend && FixedBlendIsExact(ps);
+        const bool fixed_blend =
+            ps.alpha_blend && !logic && !partial_mask &&
+            (options_.blend == BlendPath::kFixed || (options_.blend == BlendPath::kAuto && exact));
+        if (fixed_blend) {
             k.blend = 1;
             std::uint32_t fix = 0;
             bool have_fix = false;
@@ -915,16 +1140,16 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
                 case ge::PixelBlendFactor::kInvDstAlpha:
                     return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
                 case ge::PixelBlendFactor::kDoubleSrcAlpha:
-                    stats_.Approximate("doubled blend factors (F15)");
+                    stats_.Approximate("fixed blending: doubled blend factors");
                     return VK_BLEND_FACTOR_SRC_ALPHA;
                 case ge::PixelBlendFactor::kDoubleInvSrcAlpha:
-                    stats_.Approximate("doubled blend factors (F15)");
+                    stats_.Approximate("fixed blending: doubled blend factors");
                     return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
                 case ge::PixelBlendFactor::kDoubleDstAlpha:
-                    stats_.Approximate("doubled blend factors (F15)");
+                    stats_.Approximate("fixed blending: doubled blend factors");
                     return VK_BLEND_FACTOR_DST_ALPHA;
                 case ge::PixelBlendFactor::kDoubleInvDstAlpha:
-                    stats_.Approximate("doubled blend factors (F15)");
+                    stats_.Approximate("fixed blending: doubled blend factors");
                     return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
                 case ge::PixelBlendFactor::kZero:
                     return VK_BLEND_FACTOR_ZERO;
@@ -933,7 +1158,7 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
                 case ge::PixelBlendFactor::kFix: {
                     const std::uint32_t c = is_src ? ps.blend_fix_src : ps.blend_fix_dst;
                     if (have_fix && c != fix) {
-                        stats_.Approximate("two different fixed blend colours (F15)");
+                        stats_.Approximate("fixed blending: two different fixed blend colours");
                     }
                     fix = c;
                     have_fix = true;
@@ -962,16 +1187,38 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
                 k.blend_op = VK_BLEND_OP_MAX;
                 break;
             case ge::BlendMode::kAbsDiff:
-                stats_.Approximate("blend ABS_DIFF (F15)");
+                stats_.Approximate("fixed blending: ABS_DIFF as MAX");
                 k.blend_op = VK_BLEND_OP_MAX;
                 break;
             }
-            // Fixed-function blending works on floats and the result is
-            // truncated to the target format on readback: softgpu's integer
-            // blend ((2c+1)(2f+1) >> 10) and the dither after the blend need
-            // shader blending (F15).
-            stats_.Approximate("blending in fixed function (GE integer rounding, F15)");
-            if (ps.dithering) stats_.Approximate("dither on blended draws (F15)");
+            if (exact) {
+                // The source must be what the framebuffer would hold (MIN,
+                // MAX and factors 0/1 then commute with the truncation).
+                k.quantize = 1;
+            } else {
+                // Fixed-function blending works on floats and the result is
+                // truncated to the target format on readback: softgpu's
+                // integer blend ((2c+1)(2f+1) >> 10) and the dither after the
+                // blend need the shader (MPO_VK_BLEND=auto or shader).
+                stats_.Approximate("fixed blending: float rounding instead of the GE's integer");
+                if (ps.dithering) stats_.Approximate("fixed blending: no dither after the blend");
+            }
+        } else if (ps.alpha_blend || logic || partial_mask) {
+            k.read_dst = 1;
+            k.dither = ps.dithering ? 1 : 0;
+            if (ps.alpha_blend) {
+                k.shader_blend = 1;
+                k.blend_eq = static_cast<std::uint8_t>(ps.blend_eq);
+                k.blend_src = static_cast<std::uint8_t>(ps.blend_src);
+                k.blend_dst = static_cast<std::uint8_t>(ps.blend_dst);
+                pc.blend_fix_src = ps.blend_fix_src & 0x00FFFFFF;
+                pc.blend_fix_dst = ps.blend_fix_dst & 0x00FFFFFF;
+            }
+            if (logic) k.logic_op = static_cast<std::uint8_t>(ps.logic_op);
+            if (partial_mask) {
+                k.write_mask = 1;
+                pc.write_mask = write_mask;
+            }
         } else {
             k.quantize = 1;
             k.dither = ps.dithering ? 1 : 0;
@@ -987,15 +1234,16 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
             "draw %llu: fb 0x%06X fmt %d clear %d tex %d (fmt %d clut %d func %d a %d x2 %d "
             "lin %d/%d clamp %d/%d %dx%d through %d) alpha %d/%08X color %d fog %d "
             "blend %d op %d %d/%d fix %06X depth %d/%d/%d range %d mask %X dither %d "
-            "quant %d scissor %d,%d %ux%u",
+            "quant %d dst %d (blend %d eq %d %d/%d logic %d wmask %d) scissor %d,%d %ux%u",
             static_cast<unsigned long long>(stats_.draws), ps.fb_offset & 0x1FFFFF, k.fb_format,
             k.clear, k.tex_mode, static_cast<int>(rs.sampler.texfmt), k.clut_format, k.tex_func,
             k.tex_alpha, k.doubling, k.mag_linear, k.min_linear, k.clamp_s, k.clamp_t,
             rs.sampler.sizes[0].w, rs.sampler.sizes[0].h, rs.through_mode ? 1 : 0, k.alpha_func,
             pc.alpha_test, k.color_func, k.fog, k.blend, k.blend_op, k.src_factor, k.dst_factor,
             ds.blend_constant, k.depth_test, k.depth_compare, k.depth_write, k.depth_range,
-            k.color_write_mask, k.dither, k.quantize, ds.scissor.offset.x, ds.scissor.offset.y,
-            ds.scissor.extent.width, ds.scissor.extent.height);
+            k.color_write_mask, k.dither, k.quantize, k.read_dst, k.shader_blend, k.blend_eq,
+            k.blend_src, k.blend_dst, k.logic_op, k.write_mask, ds.scissor.offset.x,
+            ds.scissor.offset.y, ds.scissor.extent.width, ds.scissor.extent.height);
         ctx_->Log(line);
     }
     pending_ = ds;
@@ -1037,6 +1285,7 @@ void GeRenderer::DrawTriangle(const ge::VertexData &v0, const ge::VertexData &v1
                               const ge::RasterizerState &state) {
     if (failed_ || pending_.skip) return;
     SetTopology(Topology::kTriangles);
+    AddTriangle(range, v0, v1, v2);
     // Perspective-correct texture coordinates use the clip w; through mode
     // and degenerate w (a vertex behind the camera that the -Z clipper kept)
     // interpolate linearly, as on screen.
@@ -1108,6 +1357,7 @@ void GeRenderer::DrawRectangle(const ge::VertexData &v0, const ge::VertexData &v
                                const ge::BinCoords &range, const ge::RasterizerState &state) {
     if (failed_ || pending_.skip) return;
     SetTopology(Topology::kTriangles);
+    AddRectangle(range, v0, v1);
     EmitQuad(v0, v1, state);
     MarkDirty(range);
     ++stats_.rectangles;
@@ -1138,6 +1388,7 @@ void GeRenderer::DrawSprite(const ge::VertexData &v0, const ge::VertexData &v1,
         }
     }
     UseState(want);
+    AddRectangle(range, v0, v1);
     EmitQuad(v0, v1, state);
     MarkDirty(range);
     ++stats_.rectangles;
@@ -1168,11 +1419,15 @@ void GeRenderer::EmitPointPixel(int x, int y, int z, std::uint32_t color0, std::
 
 void GeRenderer::DrawPoint(const ge::VertexData &v0, const ge::BinCoords &range,
                            const ge::RasterizerState &state) {
-    (void)range;
     (void)state;
     if (failed_ || pending_.skip) return;
-    EmitPointPixel(ScreenToDrawing(v0.screenpos.x), ScreenToDrawing(v0.screenpos.y), v0.screenpos.z,
-                   v0.color0, v0.color1, v0.fogdepth, v0.s, v0.t, v0.q);
+    (void)range;
+    SetTopology(Topology::kPoints);
+    const int px = ScreenToDrawing(v0.screenpos.x);
+    const int py = ScreenToDrawing(v0.screenpos.y);
+    line_pixels_.assign(1, PixelKey(px, py));
+    AddPixels(line_pixels_);
+    EmitPointPixel(px, py, v0.screenpos.z, v0.color0, v0.color1, v0.fogdepth, v0.s, v0.t, v0.q);
     ++stats_.points;
 }
 
@@ -1204,6 +1459,23 @@ void GeRenderer::DrawLine(const ge::VertexData &v0, const ge::VertexData &v1,
     const double xinc = static_cast<double>(dx) / steps;
     const double yinc = static_cast<double>(dy) / steps;
     const double zinc = static_cast<double>(dz) / steps;
+    SetTopology(Topology::kPoints);
+    if (state_.key.read_dst) {
+        // The pixels the DDA below will draw, for the overlap test (a line
+        // never repeats a pixel, but a strip's next line may).
+        line_pixels_.clear();
+        double x = ax > bx ? ax - 1 : ax;
+        double y = ay > by ? ay - 1 : ay;
+        for (int i = 0; i < steps; ++i) {
+            if (x >= range.x1 && y >= range.y1 && x <= range.x2 && y <= range.y2) {
+                line_pixels_.push_back(PixelKey(ScreenToDrawing(TruncDoubleToInt(x)),
+                                                ScreenToDrawing(TruncDoubleToInt(y))));
+            }
+            x += xinc;
+            y += yinc;
+        }
+        AddPixels(line_pixels_);
+    }
 
     const bool interpolate_color =
         state.shade_gouraud && !(v0.color0 == v1.color0 && v0.color1 == v1.color1);
@@ -1262,12 +1534,36 @@ void GeRenderer::DrawLine(const ge::VertexData &v0, const ge::VertexData &v1,
     }
 }
 
+// Inside a render pass, the colour target of the input attachment methods is
+// in GENERAL (colour and input attachment at once); between passes it is in
+// COLOR_ATTACHMENT_OPTIMAL, as the rest of the renderer and the presenter
+// expect.
+namespace {
+constexpr VkPipelineStageFlags kColorStages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                              VK_PIPELINE_STAGE_TRANSFER_BIT;
+constexpr VkAccessFlags kColorAccess = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                       VK_ACCESS_INPUT_ATTACHMENT_READ_BIT |
+                                       VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+constexpr VkAccessFlags kColorWrites =
+    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+} // namespace
+
 void GeRenderer::BeginPass(int color, int depth) {
     if (in_pass_ && pass_color_ == color && pass_depth_ == depth) return;
     EndPass();
     Frame &f = frame();
     const ColorTarget &ct = color_targets_[static_cast<std::size_t>(color)];
     const DepthTarget &dt = depth_targets_[static_cast<std::size_t>(depth)];
+    const bool input = dst_read_ != DstRead::kCopy;
+    const VkImageLayout color_layout =
+        input ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    if (input) {
+        ImageBarrier(f.draw_cmd, ct.image.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                     kColorStages, kColorWrites, kColorStages, kColorAccess);
+    }
     const auto w = static_cast<std::uint32_t>(std::min(ct.image.width, dt.image.width));
     const auto h = static_cast<std::uint32_t>(std::min(ct.image.height, dt.image.height));
     const VkRect2D area{{0, 0}, {w, h}};
@@ -1275,7 +1571,7 @@ void GeRenderer::BeginPass(int color, int depth) {
         VkRenderingAttachmentInfo ca{};
         ca.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         ca.imageView = ct.image.view;
-        ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ca.imageLayout = color_layout;
         ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
         ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         VkRenderingAttachmentInfo da = ca;
@@ -1326,24 +1622,291 @@ void GeRenderer::BeginPass(int color, int depth) {
     in_pass_ = true;
     pass_color_ = color;
     pass_depth_ = depth;
+    pass_written_ = false;
+    pass_read_ = false;
     bound_pipeline_ = VK_NULL_HANDLE;
 }
 
 void GeRenderer::EndPass() {
     if (!in_pass_) return;
+    VkCommandBuffer cmd = frame().draw_cmd;
     if (ctx_->caps().dynamic_rendering) {
-        vkCmdEndRendering(frame().draw_cmd);
+        vkCmdEndRendering(cmd);
     } else {
-        vkCmdEndRenderPass(frame().draw_cmd);
+        vkCmdEndRenderPass(cmd);
+    }
+    if (dst_read_ != DstRead::kCopy) {
+        const ColorTarget &ct = color_targets_[static_cast<std::size_t>(pass_color_)];
+        ImageBarrier(cmd, ct.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, kColorStages, kColorWrites,
+                     kColorStages, kColorAccess);
     }
     in_pass_ = false;
 }
 
+// kBarrier: a framebuffer-local barrier between the colour writes of the
+// draws so far and the destination reads (and writes) of the next one. It
+// is the render pass's self-dependency (pipelines.cpp); on the 1.3 path,
+// VK_KHR_dynamic_rendering_local_read allows it inside dynamic rendering.
+void GeRenderer::PassBarrier() {
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    const VkPipelineStageFlags stages =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    vkCmdPipelineBarrier(frame().draw_cmd, stages, stages, VK_DEPENDENCY_BY_REGION_BIT, 1, &mb, 0,
+                         nullptr, 0, nullptr);
+    ++stats_.dst_barriers;
+    pass_written_ = false;
+    pass_read_ = false;
+}
+
+void GeRenderer::AddPrimitive(const ge::BinCoords &range) {
+    if (!state_.key.read_dst) return;
+    GroupPrimitive p;
+    p.r = PixelRect{range.x1 / kScreenScale, range.y1 / kScreenScale, range.x2 / kScreenScale,
+                    range.y2 / kScreenScale};
+    AddPrimitive(p);
+}
+
+void GeRenderer::AddTriangle(const ge::BinCoords &range, const ge::VertexData &v0,
+                             const ge::VertexData &v1, const ge::VertexData &v2) {
+    if (!state_.key.read_dst) return;
+    GroupPrimitive p;
+    p.triangle = true;
+    p.x = {v0.screenpos.x, v1.screenpos.x, v2.screenpos.x};
+    p.y = {v0.screenpos.y, v1.screenpos.y, v2.screenpos.y};
+    p.r.x1 = FirstPixel(std::min({p.x[0], p.x[1], p.x[2]}), range.x1);
+    p.r.y1 = FirstPixel(std::min({p.y[0], p.y[1], p.y[2]}), range.y1);
+    p.r.x2 = LastPixel(std::max({p.x[0], p.x[1], p.x[2]}), range.x2);
+    p.r.y2 = LastPixel(std::max({p.y[0], p.y[1], p.y[2]}), range.y2);
+    AddPrimitive(p);
+}
+
+void GeRenderer::AddRectangle(const ge::BinCoords &range, const ge::VertexData &v0,
+                              const ge::VertexData &v1) {
+    if (!state_.key.read_dst) return;
+    GroupPrimitive p;
+    p.r.x1 = FirstPixel(std::min(v0.screenpos.x, v1.screenpos.x), range.x1);
+    p.r.y1 = FirstPixel(std::min(v0.screenpos.y, v1.screenpos.y), range.y1);
+    p.r.x2 = LastPixel(std::max(v0.screenpos.x, v1.screenpos.x), range.x2);
+    p.r.y2 = LastPixel(std::max(v0.screenpos.y, v1.screenpos.y), range.y2);
+    AddPrimitive(p);
+}
+
+void GeRenderer::AddPixels(const std::vector<std::uint32_t> &keys) {
+    if (!state_.key.read_dst || keys.empty()) return;
+    PixelRect r{1 << 30, 1 << 30, -(1 << 30), -(1 << 30)};
+    for (std::uint32_t k : keys) {
+        const int x = static_cast<int>(k & 0xFFFF);
+        const int y = static_cast<int>(k >> 16);
+        r.x1 = std::min(r.x1, x);
+        r.y1 = std::min(r.y1, y);
+        r.x2 = std::max(r.x2, x);
+        r.y2 = std::max(r.y2, y);
+    }
+    if (dst_read_ != DstRead::kRasterOrder) {
+        bool split = batch_pixels_.size() + keys.size() > kMaxGroupPixels;
+        for (std::size_t i = 0; i < keys.size() && !split; ++i)
+            split = batch_pixels_.count(keys[i]) != 0;
+        for (std::size_t i = 0; i < batch_prims_.size() && !split; ++i) {
+            const PixelRect &pr = batch_prims_[i].r;
+            if (!pr.Overlaps(r)) continue;
+            for (std::uint32_t k : keys) {
+                const PixelRect one{static_cast<int>(k & 0xFFFF), static_cast<int>(k >> 16),
+                                    static_cast<int>(k & 0xFFFF), static_cast<int>(k >> 16)};
+                if (pr.Overlaps(one)) {
+                    split = true;
+                    break;
+                }
+            }
+        }
+        if (split) FlushBatch();
+        batch_pixels_.insert(keys.begin(), keys.end());
+        if (batch_pixel_bounds_.x2 < batch_pixel_bounds_.x1) {
+            batch_pixel_bounds_ = r;
+        } else {
+            batch_pixel_bounds_.x1 = std::min(batch_pixel_bounds_.x1, r.x1);
+            batch_pixel_bounds_.y1 = std::min(batch_pixel_bounds_.y1, r.y1);
+            batch_pixel_bounds_.x2 = std::max(batch_pixel_bounds_.x2, r.x2);
+            batch_pixel_bounds_.y2 = std::max(batch_pixel_bounds_.y2, r.y2);
+        }
+    }
+    if (batch_bounds_.x2 < batch_bounds_.x1) {
+        batch_bounds_ = r;
+    } else {
+        batch_bounds_.x1 = std::min(batch_bounds_.x1, r.x1);
+        batch_bounds_.y1 = std::min(batch_bounds_.y1, r.y1);
+        batch_bounds_.x2 = std::max(batch_bounds_.x2, r.x2);
+        batch_bounds_.y2 = std::max(batch_bounds_.y2, r.y2);
+    }
+}
+
+void GeRenderer::AddPrimitive(const GroupPrimitive &p) {
+    if (!state_.key.read_dst) return;
+    const PixelRect &r = p.r;
+    if (dst_read_ != DstRead::kRasterOrder) {
+        bool split = batch_prims_.size() >= kMaxGroupPrimitives;
+        for (std::size_t i = 0; i < batch_prims_.size() && !split; ++i)
+            split = MayOverlap(batch_prims_[i], p);
+        if (!split && r.Overlaps(batch_pixel_bounds_)) {
+            for (std::uint32_t k : batch_pixels_) {
+                const PixelRect one{static_cast<int>(k & 0xFFFF), static_cast<int>(k >> 16),
+                                    static_cast<int>(k & 0xFFFF), static_cast<int>(k >> 16)};
+                if (r.Overlaps(one)) {
+                    split = true;
+                    break;
+                }
+            }
+        }
+        if (split) FlushBatch();
+        batch_prims_.push_back(p);
+    }
+    if (r.x2 < r.x1 || r.y2 < r.y1) return; // covers no pixel
+    if (batch_bounds_.x2 < batch_bounds_.x1) {
+        batch_bounds_ = r;
+    } else {
+        batch_bounds_.x1 = std::min(batch_bounds_.x1, r.x1);
+        batch_bounds_.y1 = std::min(batch_bounds_.y1, r.y1);
+        batch_bounds_.x2 = std::max(batch_bounds_.x2, r.x2);
+        batch_bounds_.y2 = std::max(batch_bounds_.y2, r.y2);
+    }
+}
+
+// The set 1 descriptor of a target: the target itself as an input
+// attachment, or its copy (created here) as a sampled image.
+bool GeRenderer::PrepareDstSet(int color) {
+    ColorTarget &t = color_targets_[static_cast<std::size_t>(color)];
+    if (t.dst_set != VK_NULL_HANDLE) return true;
+    VkDevice dev = ctx_->device();
+    std::string err;
+    const bool input = dst_read_ != DstRead::kCopy;
+    if (!input) {
+        char name[64];
+        std::snprintf(name, sizeof(name), "ge fb copy 0x%06X", static_cast<unsigned>(t.offset));
+        if (!CreateImage2D(*ctx_, t.image.width, t.image.height, PipelineCache::kColorFormat,
+                           VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                           VK_IMAGE_ASPECT_COLOR_BIT, name, &t.copy, &err)) {
+            Fail(err);
+            return false;
+        }
+        t.copy_written = false;
+    }
+    VkDescriptorSetLayout layout = pipelines_.dst_set_layout();
+    const VkDescriptorType type =
+        input ? VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    for (int attempt = 0; attempt < 2 && t.dst_set == VK_NULL_HANDLE; ++attempt) {
+        if (attempt == 1 || dst_pools_.empty()) {
+            const VkDescriptorPoolSize size{type, 32};
+            VkDescriptorPoolCreateInfo pci{};
+            pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            pci.maxSets = 32;
+            pci.poolSizeCount = 1;
+            pci.pPoolSizes = &size;
+            VkDescriptorPool pool = VK_NULL_HANDLE;
+            const VkResult r = vkCreateDescriptorPool(dev, &pci, nullptr, &pool);
+            if (r != VK_SUCCESS) {
+                Fail(ResultError("vkCreateDescriptorPool", r));
+                return false;
+            }
+            dst_pools_.push_back(pool);
+        }
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = dst_pools_.back();
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &layout;
+        const VkResult r = vkAllocateDescriptorSets(dev, &ai, &t.dst_set);
+        if (r != VK_SUCCESS) {
+            t.dst_set = VK_NULL_HANDLE;
+            if (attempt == 1 ||
+                (r != VK_ERROR_OUT_OF_POOL_MEMORY && r != VK_ERROR_FRAGMENTED_POOL)) {
+                Fail(ResultError("vkAllocateDescriptorSets", r));
+                return false;
+            }
+        }
+    }
+    VkDescriptorImageInfo info{};
+    if (input) {
+        info.imageView = t.image.view;
+        info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    } else {
+        info.sampler = sampler_;
+        info.imageView = t.copy.view;
+        info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+    VkWriteDescriptorSet w{};
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = t.dst_set;
+    w.dstBinding = 0;
+    w.descriptorCount = 1;
+    w.descriptorType = type;
+    w.pImageInfo = &info;
+    vkUpdateDescriptorSets(dev, 1, &w, 0, nullptr);
+    return true;
+}
+
+// kCopy: copies the pixels a group of primitives covers (plus a one-pixel
+// margin) into the target's copy, which the group's shader samples. Outside
+// a render pass.
+void GeRenderer::CopyForDstRead(ColorTarget &t, const PixelRect &r) {
+    const int x1 = std::clamp(r.x1 - 1, 0, t.image.width - 1);
+    const int y1 = std::clamp(r.y1 - 1, 0, t.image.height - 1);
+    const int x2 = std::clamp(r.x2 + 1, 0, t.image.width - 1);
+    const int y2 = std::clamp(r.y2 + 1, 0, t.image.height - 1);
+    if (x2 < x1 || y2 < y1) return;
+    VkCommandBuffer cmd = frame().draw_cmd;
+    ImageBarrier(cmd, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    ImageBarrier(cmd, t.copy.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                 t.copy_written ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                : VK_IMAGE_LAYOUT_UNDEFINED,
+                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkImageCopy region{};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstSubresource = region.srcSubresource;
+    region.srcOffset = {x1, y1, 0};
+    region.dstOffset = region.srcOffset;
+    region.extent = {static_cast<std::uint32_t>(x2 - x1 + 1),
+                     static_cast<std::uint32_t>(y2 - y1 + 1), 1};
+    vkCmdCopyImage(cmd, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.copy.image,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    ImageBarrier(cmd, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                 VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    ImageBarrier(cmd, t.copy.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                 VK_ACCESS_SHADER_READ_BIT);
+    t.copy_written = true;
+    ++stats_.dst_copies;
+}
+
 void GeRenderer::FlushBatch() {
+    const PixelRect bounds = batch_bounds_;
+    batch_prims_.clear();
+    batch_pixels_.clear();
+    batch_pixel_bounds_ = PixelRect{};
+    batch_bounds_ = PixelRect{};
     if (vertices_.empty()) return;
     if (failed_ || state_.skip || state_.color_target < 0 || state_.depth_target < 0) {
         vertices_.clear();
         return;
+    }
+    const bool reads = state_.key.read_dst != 0;
+    if (reads) {
+        if (!PrepareDstSet(state_.color_target)) return;
+        if (dst_read_ == DstRead::kCopy) {
+            EndPass();
+            CopyForDstRead(color_targets_[static_cast<std::size_t>(state_.color_target)], bounds);
+        }
     }
     Frame &f = frame();
     std::string err;
@@ -1366,8 +1929,20 @@ void GeRenderer::FlushBatch() {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
         bound_pipeline_ = pipeline;
     }
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_.layout(), 0, 1,
-                            &state_.set, 1, &state_.clut_offset);
+    if (dst_read_ == DstRead::kBarrier && ((reads && pass_written_) || (!reads && pass_read_))) {
+        PassBarrier();
+    }
+    if (reads) {
+        const VkDescriptorSet sets[2] = {
+            state_.set, color_targets_[static_cast<std::size_t>(state_.color_target)].dst_set};
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_.dst_layout(), 0, 2,
+                                sets, 1, &state_.clut_offset);
+        ++stats_.dst_batches;
+    } else {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_.layout(), 0, 1,
+                                &state_.set, 1, &state_.clut_offset);
+        if (state_.key.blend) ++stats_.fixed_blend_batches;
+    }
     vkCmdBindVertexBuffers(cmd, 0, 1, &a.buffer, &a.offset);
     vkCmdSetScissor(cmd, 0, 1, &state_.scissor);
     const float blend[4] = {static_cast<float>(state_.blend_constant & 0xFF) / 255.0f,
@@ -1379,6 +1954,8 @@ void GeRenderer::FlushBatch() {
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(PushConstants), &state_.push);
     vkCmdDraw(cmd, static_cast<std::uint32_t>(vertices_.size()), 1, 0, 0);
+    pass_written_ = true;
+    if (reads) pass_read_ = true;
     ++stats_.batches;
     vertices_.clear();
 }

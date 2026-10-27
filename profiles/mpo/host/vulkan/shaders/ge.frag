@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from PPSSPP GPU/Software/Sampler.cpp (SampleNearest/SampleLinear,
 // TransformClutIndex, LookupColor), GPU/Software/DrawPixel.cpp
-// (DrawSinglePixel: alpha test, fog, colour test, dither) and
+// (DrawSinglePixel: alpha test, fog, colour test, dither, AlphaBlendingResult,
+// ApplyLogicOp, SetPixelColor's write mask) and
 // GPU/Software/Rasterizer.cpp (CalculateSamplingParams, ClampFogDepth)
 // @ v1.20.4 (GPL-2.0-or-later), through the C++ port in
 // profiles/mpo/host/ge (sampler.cpp, pixel.cpp, rasterizer.cpp).
@@ -12,7 +13,14 @@
 // the driver). The arithmetic is integer, as in softgpu, so a texel, a
 // texture function, the fog or the dither give the same values as mpo_ge.
 //
-// Blending, the depth test and the depth write are fixed-function.
+// The depth test and the depth write are fixed-function. Blending is either
+// fixed-function (only where that is exact, or on request) or done here
+// (F15a): with kReadDst the shader reads the destination pixel and does
+// softgpu's integer blend, the dither after it, the logic op and the per-bit
+// write mask, then writes the final pixel. This source is compiled three
+// times (compile_shaders.py): without destination reads, with GE_DST_INPUT
+// (an input attachment: the colour target itself) and with GE_DST_COPY (a
+// sampled copy of the target).
 
 #version 450
 
@@ -40,6 +48,15 @@ layout(constant_id = 16) const bool kDither = false;
 layout(constant_id = 17) const bool kQuantize = false;
 layout(constant_id = 18) const bool kDepthRange = false;
 layout(constant_id = 19) const bool kSecondary = false;
+// Destination reads (F15a): only true in the GE_DST_INPUT and GE_DST_COPY
+// builds.
+layout(constant_id = 20) const bool kShaderBlend = false;
+layout(constant_id = 21) const int kBlendEq = 0;  // GE: add sub rsub min max absdiff
+layout(constant_id = 22) const int kBlendSrc = 2; // PixelBlendFactor (pixel.hpp)
+layout(constant_id = 23) const int kBlendDst = 3;
+layout(constant_id = 24) const int kLogicOp = 3;  // GE logic op; 3 (COPY) = none
+layout(constant_id = 25) const bool kWriteMask = false;
+layout(constant_id = 26) const bool kReadDst = false;
 
 layout(push_constant) uniform Push {
     vec2 ndc_scale;
@@ -56,6 +73,10 @@ layout(push_constant) uniform Push {
     float lod_slope;
     vec2 ndc_origin;
     uvec4 dither;      // 16 signed bytes, row-major 4x4
+    uint blend_fix_src; // 0x00BBGGRR
+    uint blend_fix_dst;
+    uint write_mask;   // 8888 bits that keep the old value (GE colour mask)
+    uint reserved;
 } pc;
 
 layout(set = 0, binding = 0) uniform sampler2D u_rgba;
@@ -71,6 +92,24 @@ layout(location = 2) in vec3 v_uvq;
 layout(location = 3) noperspective in float v_fog;
 
 layout(location = 0) out vec4 out_color;
+
+// The destination pixel as softgpu's GetPixelColor sees it: the framebuffer
+// value expanded to 8 bits (the target always holds expanded values).
+#if defined(GE_DST_INPUT)
+layout(input_attachment_index = 0, set = 1, binding = 0) uniform subpassInput u_dst;
+ivec4 LoadDst() {
+    return ivec4(roundEven(subpassLoad(u_dst) * 255.0));
+}
+#elif defined(GE_DST_COPY)
+layout(set = 1, binding = 0) uniform sampler2D u_dst;
+ivec4 LoadDst() {
+    return ivec4(roundEven(texelFetch(u_dst, ivec2(gl_FragCoord.xy), 0) * 255.0));
+}
+#else
+ivec4 LoadDst() {
+    return ivec4(0);
+}
+#endif
 
 const int kCompNever = 0;
 const int kCompAlways = 1;
@@ -288,10 +327,142 @@ int QuantizeAlpha(int a) {
     return a;
 }
 
+// Bits per channel of the framebuffer format.
+ivec4 FbBits() {
+    if (kFbFormat == 0) return ivec4(5, 6, 5, 0);
+    if (kFbFormat == 1) return ivec4(5, 5, 5, 1);
+    if (kFbFormat == 2) return ivec4(4);
+    return ivec4(8);
+}
+
+// An n-bit channel value back to 8 bits (color.hpp).
+int Expand(int v, int bits) {
+    if (bits == 8) return v;
+    if (bits == 6) return (v << 2) | (v >> 4);
+    if (bits == 5) return (v << 3) | (v >> 2);
+    if (bits == 4) return (v << 4) | v;
+    if (bits == 1) return v != 0 ? 255 : 0;
+    return 0;
+}
+
+// SetPixelColor: the value converted to the framebuffer format (truncated),
+// with the bits of the write mask taken from the old value, expanded back.
+ivec4 StorePixel(ivec4 c, ivec4 old) {
+    const ivec4 bits = FbBits();
+    ivec4 out_c;
+    for (int i = 0; i < 4; ++i) {
+        const int shift = 8 - bits[i];
+        int v = shift >= 8 ? 0 : (c[i] >> shift);
+        if (kWriteMask && shift < 8) {
+            const int m = int((pc.write_mask >> (8 * i)) & 0xFFu) >> shift;
+            v = (v & ~m) | ((old[i] >> shift) & m);
+        }
+        out_c[i] = Expand(v, bits[i]);
+    }
+    return out_c;
+}
+
+// pixel.cpp BlendFactor: one value for r, g and b.
+ivec3 BlendFactor(int factor, bool is_src, ivec4 src, ivec4 dst) {
+    const ivec4 other = is_src ? dst : src;
+    if (factor == 0) return other.rgb;
+    if (factor == 1) return 255 - other.rgb;
+    if (factor == 2) return ivec3(src.a);
+    if (factor == 3) return ivec3(255 - src.a);
+    if (factor == 4) return ivec3(dst.a);
+    if (factor == 5) return ivec3(255 - dst.a);
+    if (factor == 6) return ivec3(2 * src.a);
+    if (factor == 7) return ivec3(255 - min(2 * src.a, 255));
+    if (factor == 8) return ivec3(2 * dst.a);
+    if (factor == 9) return ivec3(255 - min(2 * dst.a, 255));
+    if (factor == 11) return ivec3(0);
+    if (factor == 12) return ivec3(255);
+    return FromRGBA(is_src ? pc.blend_fix_src : pc.blend_fix_dst).rgb;
+}
+
+// AlphaBlendingResult, x86-64 SSE semantics: products are
+// ((2c + 1) * (2f + 1)) >> 10 and subtractions saturate at zero.
+ivec3 AlphaBlend(ivec4 src, ivec4 dst) {
+    if (kBlendEq == 3) return min(src.rgb, dst.rgb);
+    if (kBlendEq == 4) return max(src.rgb, dst.rgb);
+    if (kBlendEq == 5) return abs(src.rgb - dst.rgb);
+    const ivec3 sf = BlendFactor(kBlendSrc, true, src, dst);
+    const ivec3 df = BlendFactor(kBlendDst, false, src, dst);
+    const ivec3 s = ((src.rgb * 2 + 1) * (sf * 2 + 1)) >> 10;
+    const ivec3 d = ((dst.rgb * 2 + 1) * (df * 2 + 1)) >> 10;
+    if (kBlendEq == 1) return max(s - d, 0);
+    if (kBlendEq == 2) return max(d - s, 0);
+    return s + d;
+}
+
+// pixel.cpp ApplyLogicOp, on RGBA8 words (the alpha byte is the stencil).
+uint ApplyLogicOp(uint n, uint o) {
+    const uint kRgb = 0x00FFFFFFu;
+    const uint kA = 0xFF000000u;
+    switch (kLogicOp) {
+    case 0:
+        return n & kA;
+    case 1:
+        return n & (o | kA);
+    case 2:
+        return n & (~o | kA);
+    case 3:
+        return n;
+    case 4:
+        return (~n & (o & kRgb)) | (n & kA);
+    case 5:
+        return (o & kRgb) | (n & kA);
+    case 6:
+        return n ^ (o & kRgb);
+    case 7:
+        return n | (o & kRgb);
+    case 8:
+        return (~(n | o) & kRgb) | (n & kA);
+    case 9:
+        return (~(n ^ o) & kRgb) | (n & kA);
+    case 10:
+        return (~o & kRgb) | (n & kA);
+    case 11:
+        return n | (~o & kRgb);
+    case 12:
+        return (~n & kRgb) | (n & kA);
+    case 13:
+        return ((~n | o) & kRgb) | (n & kA);
+    case 14:
+        return (~(n & o) & kRgb) | (n & kA);
+    default:
+        return n | kRgb;
+    }
+}
+
+uint PackRGBA(ivec4 c) {
+    const uvec4 u = uvec4(clamp(c, 0, 255));
+    return u.r | (u.g << 8) | (u.b << 16) | (u.a << 24);
+}
+
+// The end of DrawSinglePixel with the destination at hand: blending, the
+// dither after it, the logic op and the write to the framebuffer format.
+// The stencil (alpha) is the old one outside clear mode (no stencil ops yet).
+void WritePixel(ivec4 prim) {
+    ivec4 dst = LoadDst();
+    if (kFbFormat == 0) dst.a = 0; // GetPixelColor: 565 has no alpha
+    ivec3 rgb = prim.rgb;
+    int a = kClear ? clamp(prim.a, 0, 255) : dst.a;
+    if (kShaderBlend && !kClear) rgb = AlphaBlend(prim, dst);
+    if (kDither) rgb += DitherValue();
+    uint c = PackRGBA(ivec4(rgb, a));
+    if (kLogicOp != 3 && !kClear) c = ApplyLogicOp(c, PackRGBA(dst));
+    out_color = vec4(StorePixel(FromRGBA(c), dst)) / 255.0;
+}
+
 void main() {
     ivec4 prim = ivec4(RoundToInt(v_color0.r * 255.0), RoundToInt(v_color0.g * 255.0),
                        RoundToInt(v_color0.b * 255.0), RoundToInt(v_color0.a * 255.0));
 
+    if (kClear && kReadDst) {
+        WritePixel(prim);
+        return;
+    }
     if (kClear) {
         // Clear mode: the vertex colour, dithered (softgpu dithers clears too).
         ivec3 rgb = prim.rgb;
@@ -364,6 +535,10 @@ void main() {
         if (kColorFunc == kCompNotEqual && c == pc.color_ref) discard;
     }
 
+    if (kReadDst) {
+        WritePixel(prim);
+        return;
+    }
     ivec3 rgb = prim.rgb;
     if (kQuantize) {
         if (kDither) rgb = clamp(rgb + DitherValue(), 0, 255);

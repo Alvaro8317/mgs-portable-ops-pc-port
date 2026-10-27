@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# F14a: the GE renderer on Vulkan (CLAUDE.md §9.3).
+# F14a: the GE renderer on Vulkan (CLAUDE.md §9.3); F15a: shader blending.
 # - mpo_vulkan: context (instance, device, validation), resources, the
 #   pipeline cache over the GE ubershader (SPIR-V embedded from
 #   shaders/ge_shaders_spv.inc) and mpo::vk::GeRenderer, a mpo::ge::DrawBackend.
 #   No SDL: it renders offscreen.
 # - mpo_vulkan_sdl + mpo_vulkan_view: presentation in an SDL3 window
 #   (swapchain), when SDL3 is built with video.
+# - mpo_vulkan_compare: softgpu against Vulkan on frame dumps, failing above a
+#   threshold (F15a).
 # mpo_ppdmp_replay (ge/tools) gets --renderer=vulkan from here.
 #
 # The build needs no Vulkan SDK: the headers, volk and VMA are downloaded
@@ -48,6 +50,11 @@ mpo_target_warnings(mpo_vulkan)
 # --renderer=vulkan in the frame dump replayer.
 target_link_libraries(mpo_ppdmp_replay PRIVATE mpo_vulkan)
 target_compile_definitions(mpo_ppdmp_replay PRIVATE MPO_HAVE_VULKAN=1)
+
+# F15a: softgpu against Vulkan on frame dumps, with a threshold (no window).
+add_executable(mpo_vulkan_compare tools/vulkan_compare.cpp)
+target_link_libraries(mpo_vulkan_compare PRIVATE mpo_vulkan mpo_ge_replay)
+mpo_target_warnings(mpo_vulkan_compare)
 
 # Presentation in an SDL3 window (swapchain) and the dump viewer.
 if(TARGET mpo_frontend_sdl)
