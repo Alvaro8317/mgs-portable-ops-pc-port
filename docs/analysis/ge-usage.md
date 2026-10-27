@@ -173,8 +173,10 @@ En "Vértices", los splines cuentan sus puntos de control, no los vértices tese
     `0x088000`→`0x110000`, el primer título `0x110000`→`0x000000` y el segundo `0x000000`→`0x088000`.
   - El resto del juego usa **5551** con doble buffer.
   - La imagen del título, texto incluido, llega a la pantalla **sin pasar por el GE**.
-- **[?]** Hipótesis, muy probable pero sin confirmar con un log HLE: son videos PMF que
-  `sceMpegAvcDecode` decodifica directamente en los tres framebuffers 8888.
+- **[V]** Confirmado en F11b con el log HLE: son videos PMF que `sceMpegAvcDecode` decodifica
+  directamente en los tres framebuffers 8888 (la etapa `title`, sobre `0x04000000`, `0x04088000` y
+  `0x04110000`). La intro es `MPO_OP_LONG.pmf` y el fondo del "Press Start", `MPO_OP_LOOP.pmf`
+  (`docs/sessions/F11b.md`).
   - La etapa `title` importa `sceMpeg` (F03).
   - En el disco están `USRDIR/mpg/MPO_OP.pmf`, `MPO_OP_LONG.pmf`, `MPO_OP_LOOP.pmf` y
     `MPO_loop.pmf` (`docs/formats/disc-layout.md`). Los dos últimos son candidatos al bucle del
@@ -360,7 +362,7 @@ Ordenada por lo que hace falta para cada hito y, dentro de cada fase, por númer
 | Splines y beziers **con skinning** para el suelo ([S] [#1884](https://github.com/hrydgard/ppsspp/issues/1884), [#3343](https://github.com/hrydgard/ppsspp/issues/3343)) | **[V] Hay splines** (1 942, el 49 %). **[V] No se vieron ni splines con skinning ni beziers**: los splines usan `0x00011E`, sin pesos, y el skinning solo aparece en triangle strips. El "vtype 12000780" del issue no aparece. |
 | Clamp de profundidad y guard-band ([S] [#12348](https://github.com/hrydgard/ppsspp/issues/12348)) | **[V] Clamp**: 2 053 draws, todos los splines, con rango `0x2710-0xC350`. **[?]** El guard-band no se puede medir con un dump; se ve comparando imágenes. |
 | Render-to-texture y textura desde el target actual ([S] [#2438](https://github.com/hrydgard/ppsspp/issues/2438), [#1202](https://github.com/hrydgard/ppsspp/issues/1202)) | **[V] No se vio** en ninguna escena capturada: lo que se lee de VRAM es una caché de texturas CLUT. **[?]** Puede aparecer en otras escenas (pausa, efectos, transiciones). |
-| `sceGeEdramSetAddrTranslation` ([S] `RESEARCH.md` §4) | **[V]** El valor se quedó en `0x400` (el de por defecto) en los 11 frames. **[?]** Si el juego llama a la función (con ese valor u otro) en otro momento lo muestra el histograma HLE de F08. |
+| `sceGeEdramSetAddrTranslation` ([S] `RESEARCH.md` §4) | **[V]** El valor se quedó en `0x400` (el de por defecto) en los 11 frames. **[V]** `mgp_main` no importa la función, y en los primeros 70 s (logos, intro, título y NEW GAME) nadie la llama (histograma HLE de F11b). |
 | CLUT de 4 y 8 bits con paleta RGBA8888 y swizzle (`.txp`) ([S] Noesis) | **[V]** El 100 % de las draws texturizadas. |
 | `REPLACE` o `MODULATE` con doblado de color, y blending (flags de `.txp`) ([S] Noesis) | **[V]** `MODULATE` ×2 en 3 821 draws y `MODULATE` en 20. **[V] No se vio `REPLACE`.** Blending: 3 modos (4.2). |
 

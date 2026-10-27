@@ -37,6 +37,9 @@ struct DisplayList {
     int stack_ptr = 0;
     bool bbox_result = true;
     SignalBehavior signal = SignalBehavior::kNone;
+    // The value the sceGe interrupt handler gets in $a0 (subIntrToken): the
+    // last SIGNAL's, or the FINISH's when the list finishes.
+    std::uint32_t sub_intr_token = 0;
 };
 
 enum class RunStatus {
@@ -56,6 +59,10 @@ struct RunResult {
     std::uint32_t value = 0;
     std::uint32_t end_data = 0;
     std::uint64_t commands = 0;
+    // GE time spent, in CPU cycles (PPSSPP's cyclesExecuted): 2 per command,
+    // 60 per END, the per-vertex cost of each PRIM, 22 per bounding box
+    // vertex and 1.6 per byte of block transfer.
+    std::uint64_t cycles = 0;
 };
 
 class Ge {
@@ -86,6 +93,8 @@ public:
     [[nodiscard]] std::uint32_t vertex_addr() const { return vertex_addr_; }
     [[nodiscard]] std::uint32_t index_addr() const { return index_addr_; }
     [[nodiscard]] std::uint32_t offset_addr() const { return offset_addr_; }
+    // Each list keeps its own OFFSETADDR between runs (gstate_c.offsetAddr).
+    void SetOffsetAddr(std::uint32_t value) { offset_addr_ = value; }
 
     // sceGeEdramSetAddrTranslation. Stored for the HLE; the renderer does not
     // use it yet (F05: the game leaves it at 0x400).
@@ -99,12 +108,14 @@ private:
     // Returns false when the list must stop (status in *result).
     bool Execute(std::uint32_t op, std::uint32_t diff, DisplayList &list, RunResult *result);
     [[nodiscard]] std::uint32_t RelativeAddress(std::uint32_t data) const;
-    void ExecutePrim(std::uint32_t op);
+    void ExecutePrim(std::uint32_t op, RunResult *result);
+    // GPUCommon::EstimatePerVertexCost.
+    [[nodiscard]] int EstimatePerVertexCost() const;
     void ExecutePatch(std::uint32_t op, bool spline);
     // Counts the draw state the renderer does not reproduce exactly.
     void ReportDrawState(std::uint32_t vtype);
     void ExecuteLoadClut();
-    void ExecuteBlockTransfer();
+    void ExecuteBlockTransfer(RunResult *result);
     void ExecuteMatrixData(std::uint8_t num_cmd, std::uint8_t data_cmd, float *matrix,
                            std::uint32_t size, std::uint32_t op);
     bool ExecuteEnd(std::uint32_t op, DisplayList &list, RunResult *result);

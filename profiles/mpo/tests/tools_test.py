@@ -3,6 +3,7 @@
 """Unit tests for the profile's analysis tools, with synthetic inputs only."""
 
 import importlib.util
+import io
 import os
 import pathlib
 import struct
@@ -23,6 +24,7 @@ def _load(name):
 
 build_nid_table = _load('build_nid_table')
 prx_imports = _load('prx_imports')
+iso_lbn = _load('iso_lbn')
 
 _HLE_SOURCE = '''
 enum : u32 {
@@ -143,6 +145,60 @@ class PrxImportsTest(unittest.TestCase):
     module = prx_imports.Module(_synthetic_prx(stub_entry_length=0))
     with self.assertRaises(prx_imports.PrxError):
       list(module.imports())
+
+
+
+def _dir_record(lbn, size, is_dir, name):
+  """One ISO9660 directory record (both-endian fields), padded to even."""
+  body = bytes([0])  # Extended attribute length.
+  body += struct.pack('<I', lbn) + struct.pack('>I', lbn)
+  body += struct.pack('<I', size) + struct.pack('>I', size)
+  body += bytes(7)  # Date.
+  body += bytes([2 if is_dir else 0, 0, 0])  # Flags, unit size, gap.
+  body += struct.pack('<H', 1) + struct.pack('>H', 1)  # Volume sequence.
+  body += bytes([len(name)]) + name
+  if len(body) % 2 == 0:
+    body += b'\x00'  # The length byte makes it odd: pad to an even record.
+  return bytes([len(body) + 1]) + body
+
+
+def _synthetic_iso():
+  """Root (sector 20) with DATA.BIN (sector 30, 3 sectors) and SUB/ (21) with
+  INNER.PMF (sector 40)."""
+  sector = 2048
+  image = bytearray(50 * sector)
+  pvd = bytearray(sector)
+  pvd[0] = 1
+  pvd[1:6] = b'CD001'
+  pvd[156:156 + 34] = _dir_record(20, sector, True, b'\x00')[:34]
+  image[16 * sector:17 * sector] = pvd
+  root = (_dir_record(20, sector, True, b'\x00') +
+          _dir_record(20, sector, True, b'\x01') +
+          _dir_record(30, 3 * sector, False, b'DATA.BIN;1') +
+          _dir_record(21, sector, True, b'SUB'))
+  image[20 * sector:20 * sector + len(root)] = root
+  sub = (_dir_record(21, sector, True, b'\x00') +
+         _dir_record(20, sector, True, b'\x01') +
+         _dir_record(40, 100, False, b'INNER.PMF;1'))
+  image[21 * sector:21 * sector + len(sub)] = sub
+  return bytes(image)
+
+
+class IsoLbnTest(unittest.TestCase):
+
+  def test_names_the_file_of_each_sector(self):
+    files = iso_lbn.list_files(io.BytesIO(_synthetic_iso()))
+    self.assertEqual(files, [(30, 6144, 'DATA.BIN'), (40, 100, 'SUB/INNER.PMF')])
+    self.assertEqual(iso_lbn.lookup(files, 30), ('DATA.BIN', 0))
+    self.assertEqual(iso_lbn.lookup(files, 32), ('DATA.BIN', 4096))
+    self.assertEqual(iso_lbn.lookup(files, 40), ('SUB/INNER.PMF', 0))
+    self.assertEqual(iso_lbn.lookup(files, 33), (None, 0))
+
+  def test_rejects_images_without_a_volume(self):
+    with self.assertRaises(iso_lbn.IsoError):
+      iso_lbn.list_files(io.BytesIO(bytes(40 * 2048)))
+    with self.assertRaises(iso_lbn.IsoError):
+      iso_lbn.list_files(io.BytesIO(bytes(100)))
 
 
 if __name__ == '__main__':

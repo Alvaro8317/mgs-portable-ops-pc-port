@@ -16,12 +16,17 @@
 // module and the memory adapter; F09: the vblank and a vblank interrupt
 // handler, IO on a synthetic ISO (async on the helper thread, sync, listing)
 // and the RTC; F10b: sceCtrl (sampling at the vblank end, blocking reads,
-// peek, latch, negative reads, analog mode).
+// peek, latch, negative reads, analog mode); F11b: sceGe (a list with a block
+// transfer into VRAM, a signal and a finish with their sub-interrupt
+// handlers, ListSync and DrawSync, a stalled list), sceMpeg (PSMF header,
+// ring buffer and its read callback) and the binding of the import stubs of
+// a module loaded without recompiled code.
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <map>
 #include <string>
 #include <utility>
@@ -70,8 +75,8 @@ constexpr std::uint32_t kData = 0x08A80000u;
 constexpr std::uint32_t kStrings = 0x08A90000u;
 
 // Registers.
-constexpr int zero = 0, v0 = 2, a0 = 4, a1 = 5, a2 = 6, a3 = 7, t0 = 8, t1 = 9, s0 = 16, s1 = 17,
-              s2 = 18, s6 = 22, s7 = 23, t9 = 25, ra = 31;
+constexpr int zero = 0, v0 = 2, a0 = 4, a1 = 5, a2 = 6, a3 = 7, t0 = 8, t1 = 9, t2 = 10, s0 = 16,
+              s1 = 17, s2 = 18, s6 = 22, s7 = 23, t9 = 25, ra = 31;
 
 // ---- Import stubs ------------------------------------------------------------
 
@@ -121,6 +126,23 @@ enum Stub : std::uint32_t {
     kCtrlPeekBufferPositive,
     kCtrlReadBufferNegative,
     kCtrlReadLatch,
+    // F11b.
+    kGeEdramGetAddr,
+    kGeSetCallback,
+    kGeListEnQueue,
+    kGeListSync,
+    kGeDrawSync,
+    kGeListUpdateStallAddr,
+    kMpegInit,
+    kMpegRingbufferQueryMemSize,
+    kMpegRingbufferConstruct,
+    kMpegQueryMemSize,
+    kMpegCreate,
+    kMpegQueryStreamOffset,
+    kMpegQueryStreamSize,
+    kMpegRegistStream,
+    kMpegRingbufferAvailableSize,
+    kMpegRingbufferPut,
     kStubCount,
 };
 constexpr StubImport kStubImports[kStubCount] = {
@@ -143,7 +165,15 @@ constexpr StubImport kStubImports[kStubCount] = {
     {"UtilsForUser", 0x27CC57F0u},     {"sceRtc", 0xE7C27D1Bu},
     {"sceCtrl", 0x1F4011E6u},          {"sceCtrl", 0x1F803938u},
     {"sceCtrl", 0x3A622550u},          {"sceCtrl", 0x60B81F86u},
-    {"sceCtrl", 0x0B588501u},
+    {"sceCtrl", 0x0B588501u},          {"sceGe_user", 0xE47E40E4u},
+    {"sceGe_user", 0xA4FC06A4u},       {"sceGe_user", 0xAB49E76Au},
+    {"sceGe_user", 0x03444EB4u},       {"sceGe_user", 0xB287BD61u},
+    {"sceGe_user", 0xE0D68148u},       {"sceMpeg", 0x682A619Bu},
+    {"sceMpeg", 0xD7A29F46u},          {"sceMpeg", 0x37295ED8u},
+    {"sceMpeg", 0xC132E22Fu},          {"sceMpeg", 0xD8C5F121u},
+    {"sceMpeg", 0x21FF80E4u},          {"sceMpeg", 0x611E9E11u},
+    {"sceMpeg", 0x42560F23u},          {"sceMpeg", 0xB5F6DC87u},
+    {"sceMpeg", 0xB240A59Eu},
 };
 constexpr std::uint32_t stub(Stub s) {
     return kStubs + 8u * static_cast<std::uint32_t>(s);
@@ -192,6 +222,7 @@ public:
         emit(i(0x0Du, reg, reg, value & 0xFFFFu)); // ori
     }
     void move(int rd, int rs) { emit(r(rs, zero, rd, 0x21u)); } // addu
+    void addu(int rd, int rs, int rt) { emit(r(rs, rt, rd, 0x21u)); }
     void addiu(int rt, int rs, std::int32_t imm) {
         emit(i(0x09u, rs, rt, static_cast<std::uint32_t>(imm)));
     }
@@ -705,6 +736,11 @@ void test_module_loader() {
     const auto *missing = system.hle().find("ThreadManForUser", 0xDEADBE01u);
     CHECK(missing != nullptr && missing->kind == mh::HleKind::kUnimplemented);
     CHECK_EQ(modules.get_module_id_by_address(0x08804010u), uid);
+    // Its import stubs (jr ra; nop) have no recompiled code: the loader binds
+    // them to the HLE (F11b).
+    CHECK_EQ(module->bound_stubs.size(), 2u);
+    CHECK(rt.has_function(0x08804110u));
+    CHECK(rt.has_function(0x08804118u));
     // A second copy, started with a worse priority than its caller: the
     // caller waits for module_start.
     const std::uint32_t uid2 = modules.load(prx, "disc0:/test2.prx", 0u, false, &error);
@@ -736,13 +772,15 @@ void test_module_loader() {
     code.li(a0, 5u);
     code.call(kTestExport); // Linked: jumps into the module's export.
     code.sw(v0, 8, s7);
+    code.call(0x08804110u); // The module's own stub: sceKernelGetThreadId.
+    code.sw(v0, 16, s7);
     code.li(a0, uid);
     code.call(kUnloadModule);
     code.sw(v0, 12, s7);
     code.leave();
     rt.memory().store32(kData + 0x40u, 0xFFFFFFFFu);
     rt.memory().store32(kData + 0x44u, 0xFFFFFFFFu);
-    (void)start_thread(system, "loader", entry, 0x20u);
+    const mk::Uid loader = start_thread(system, "loader", entry, 0x20u);
     CHECK(system.run(10'000'000u) == mk::RunResult::kIdle);
     CHECK(!rt.stopped());
     CHECK_EQ(f.word(kData), uid);
@@ -751,12 +789,16 @@ void test_module_loader() {
     CHECK_EQ(f.word(kData + 0x44u), 7u);
     CHECK_EQ(f.word(kData + 8u), 105u);
     CHECK_EQ(f.word(kData + 12u), uid);
+    CHECK_EQ(f.word(kData + 16u), static_cast<std::uint32_t>(loader));
     CHECK(modules.find(static_cast<mk::Uid>(uid)) == nullptr);
+    // Unloading unbinds them.
+    CHECK(!rt.has_function(0x08804110u));
     CHECK(modules.find(static_cast<mk::Uid>(uid2)) != nullptr);
     // Its memory is free again: the next load lands there.
     const std::uint32_t uid3 = modules.load(prx, "disc0:/test3.prx", 0u, false, &error);
     const mh::Module *module3 = modules.find(static_cast<mk::Uid>(uid3));
     CHECK(module3 != nullptr && module3->base == 0x08804000u);
+    CHECK(rt.has_function(0x08804110u));
     // module_start threads delete themselves (PPSSPP's NID_MODULERETURN).
     for (const mk::Uid thread : system.kernel().thread_list()) {
         mk::ThreadInfo info;
@@ -1119,6 +1161,272 @@ void test_rtc() {
     CHECK_EQ(f.word(kData + 0x28u), 46u | (40u << 16u));  // minute, second
 }
 
+// ---- F11b: sceGe and sceMpeg ----------------------------------------------------
+
+// A display list copies 16 bytes into VRAM with a block transfer, signals
+// (handler, suspend) and finishes; ListSync returns once the finish handler
+// ran, with the token, the callback's argument and the END's pc + 4. A second
+// list starts stalled and runs when its stall address moves.
+void test_ge() {
+    Fixture f;
+    psprecomp::Runtime &rt = f.runtime;
+    (void)f.system->kernel().set_compiled_sdk_version(0x02080010u);
+
+    // Sub-interrupt handlers: counter, sum of $a0, last $a1, last $a2.
+    const auto handler = [&rt](std::uint32_t at, std::uint32_t out) {
+        Asm h(rt, at);
+        h.li(t0, out);
+        h.lw(t1, 0, t0);
+        h.addiu(t1, t1, 1);
+        h.sw(t1, 0, t0);
+        h.lw(t1, 4, t0);
+        h.addu(t1, t1, a0);
+        h.sw(t1, 4, t0);
+        h.sw(a1, 8, t0);
+        h.sw(a2, 12, t0);
+        h.ret();
+        return at;
+    };
+    const std::uint32_t finish = handler(kCode + 0x800u, kData + 0x40u);
+    const std::uint32_t signal = handler(kCode + 0x900u, kData + 0x50u);
+    // PspGeCallbackData: signal_func, signal_arg, finish_func, finish_arg.
+    rt.memory().store32(kData + 0x400u, signal);
+    rt.memory().store32(kData + 0x404u, 0x5151u);
+    rt.memory().store32(kData + 0x408u, finish);
+    rt.memory().store32(kData + 0x40Cu, 0xF1F1u);
+
+    const std::uint32_t source = kData + 0x2000u;
+    for (std::uint32_t i = 0; i < 4u; ++i) rt.memory().store32(source + 4u * i, 0xA0B0C0D0u + i);
+    const std::uint32_t list_a = kData + 0x1000u;
+    const std::uint32_t list_a_words[] = {
+        0xB2000000u | (source & 0xFFFFF0u),              // TRANSFERSRC
+        0xB3000000u | ((source >> 8u) & 0xFF0000u) | 8u, // TRANSFERSRCW, stride 8
+        0xB4000000u,                                     // TRANSFERDST 0x04000000
+        0xB5000000u | 0x040000u | 8u,                    // TRANSFERDSTW
+        0xEB000000u,                                     // TRANSFERSRCPOS
+        0xEC000000u,                                     // TRANSFERDSTPOS
+        0xEE000003u,                                     // TRANSFERSIZE 4 x 1
+        0xEA000001u,                                     // TRANSFERSTART, 32 bits
+        0x0E010042u,                                     // SIGNAL handler-suspend 0x42
+        0x0C000000u,                                     // END
+        0x0F001234u,                                     // FINISH 0x1234
+        0x0C000000u,                                     // END
+    };
+    for (std::uint32_t i = 0; i < std::size(list_a_words); ++i)
+        rt.memory().store32(list_a + 4u * i, list_a_words[i]);
+    const std::uint32_t list_b = kData + 0x1100u;
+    rt.memory().store32(list_b, 0x0F000077u); // FINISH 0x77
+    rt.memory().store32(list_b + 4u, 0x0C000000u);
+
+    Asm main(rt, kCode);
+    const std::uint32_t entry = main.here();
+    main.enter();
+    main.li(s7, kData);
+    main.call(kGeEdramGetAddr);
+    main.sw(v0, 0, s7);
+    main.li(a0, kData + 0x400u);
+    main.call(kGeSetCallback);
+    main.sw(v0, 4, s7);
+    main.move(s0, v0);
+    main.li(a0, list_a);
+    main.li(a1, 0u);
+    main.move(a2, s0);
+    main.li(a3, 0u);
+    main.call(kGeListEnQueue);
+    main.sw(v0, 8, s7);
+    main.move(a0, v0);
+    main.li(a1, 0u);
+    main.call(kGeListSync); // Waits for the finish interrupt.
+    main.sw(v0, 12, s7);
+    main.lw(t0, 0x40, s7);
+    main.sw(t0, 16, s7); // Finish handlers run by then.
+    main.li(a0, 0u);
+    main.call(kGeDrawSync);
+    main.sw(v0, 20, s7);
+    main.li(a0, list_b);
+    main.li(a1, list_b); // Stalled at its first command.
+    main.move(a2, s0);
+    main.li(a3, 0u);
+    main.call(kGeListEnQueue);
+    main.sw(v0, 24, s7);
+    main.move(s1, v0);
+    main.move(a0, s1);
+    main.li(a1, 1u);
+    main.call(kGeListSync);
+    main.sw(v0, 28, s7);
+    main.move(a0, s1);
+    main.li(a1, list_b + 8u);
+    main.call(kGeListUpdateStallAddr);
+    main.sw(v0, 32, s7);
+    main.move(a0, s1);
+    main.li(a1, 0u);
+    main.call(kGeListSync);
+    main.sw(v0, 36, s7);
+    main.li(t0, 1u);
+    main.sw(t0, 40, s7);
+    main.leave();
+
+    (void)start_thread(*f.system, "ge", entry, 0x20u);
+    CHECK(f.system->run(1'000'000u) == mk::RunResult::kIdle);
+    CHECK(!rt.stopped());
+    CHECK_EQ(f.word(kData + 40u), 1u);
+    CHECK_EQ(f.word(kData), 0x04000000u);
+    CHECK_EQ(f.word(kData + 4u), 0u);          // Callback id 0.
+    CHECK_EQ(f.word(kData + 8u), 0x35000000u); // LIST_ID_MAGIC ^ 0
+    CHECK_EQ(f.word(kData + 12u), 0u);         // PSP_GE_LIST_COMPLETED
+    CHECK_EQ(f.word(kData + 16u), 1u);
+    CHECK_EQ(f.word(kData + 20u), 0u);
+    CHECK_EQ(f.word(kData + 24u), 0x35000001u);
+    CHECK_EQ(f.word(kData + 28u), 3u); // PSP_GE_LIST_STALLING
+    CHECK_EQ(f.word(kData + 32u), 0u);
+    CHECK_EQ(f.word(kData + 36u), 0u);
+    // The block transfer wrote the runtime's VRAM.
+    for (std::uint32_t i = 0; i < 4u; ++i) CHECK_EQ(f.word(0x04000000u + 4u * i), 0xA0B0C0D0u + i);
+    // Signal: once, token 0x42, its argument, the END's pc + 4.
+    CHECK_EQ(f.word(kData + 0x50u), 1u);
+    CHECK_EQ(f.word(kData + 0x54u), 0x42u);
+    CHECK_EQ(f.word(kData + 0x58u), 0x5151u);
+    CHECK_EQ(f.word(kData + 0x5Cu), list_a + 4u * 9u + 4u);
+    // Finish: both lists, tokens 0x1234 and 0x77.
+    CHECK_EQ(f.word(kData + 0x40u), 2u);
+    CHECK_EQ(f.word(kData + 0x44u), 0x1234u + 0x77u);
+    CHECK_EQ(f.word(kData + 0x48u), 0xF1F1u);
+    CHECK_EQ(f.word(kData + 0x4Cu), list_b + 8u);
+    const mh::GeManager::Stats &stats = f.system->ge().stats();
+    CHECK_EQ(stats.lists, 2u);
+    CHECK_EQ(stats.interrupts, 3u);
+    CHECK_EQ(stats.handlers, 3u);
+    CHECK_EQ(stats.signals, 1u);
+    CHECK_EQ(stats.finishes, 2u);
+    CHECK(!f.system->kernel().in_interrupt());
+}
+
+// A PSMF header gives the stream offset and size; the ring buffer and the
+// mpeg are laid out as in PPSSPP, and sceMpegRingbufferPut calls the game's
+// read callback with the ring's free space.
+void test_mpeg() {
+    Fixture f;
+    psprecomp::Runtime &rt = f.runtime;
+    const std::uint32_t header = kData + 0x8000u;
+    const std::uint8_t fields[] = {'P', 'S', 'M',  'F',  '0', '0',  '1',  '5',
+                                   0,   0,   0x08, 0x00, 0,   0x01, 0x00, 0x00};
+    for (std::uint32_t i = 0; i < sizeof(fields); ++i) rt.memory().store8(header + i, fields[i]);
+    rt.memory().store8(header + 0x54u + 3u, 0x01u); // First timestamp 90000.
+    rt.memory().store8(header + 0x54u + 4u, 0x5Fu);
+    rt.memory().store8(header + 0x54u + 5u, 0x90u);
+    rt.memory().store8(header + 142u, 30u); // 480 x 272
+    rt.memory().store8(header + 143u, 17u);
+
+    // The read callback: records its arguments, "reads" everything.
+    Asm cb(rt, kCode + 0xA00u);
+    const std::uint32_t callback = cb.here();
+    cb.li(t0, kData + 0x80u);
+    cb.sw(a0, 0, t0);
+    cb.sw(a1, 4, t0);
+    cb.sw(a2, 8, t0);
+    cb.move(v0, a1);
+    cb.ret();
+
+    const std::uint32_t ring = kData + 0x500u;
+    const std::uint32_t mpeg = kData + 0x600u;
+    const std::uint32_t ring_data = kData + 0x10000u;
+    const std::uint32_t mpeg_data = kData + 0x20000u;
+    Asm main(rt, kCode);
+    const std::uint32_t entry = main.here();
+    main.enter();
+    main.li(s7, kData);
+    main.call(kMpegInit);
+    main.sw(v0, 0, s7);
+    main.li(a0, 8u);
+    main.call(kMpegRingbufferQueryMemSize);
+    main.sw(v0, 4, s7);
+    main.li(a0, ring);
+    main.li(a1, 8u);
+    main.li(a2, ring_data);
+    main.li(a3, 8u * 2152u);
+    main.li(t0, callback);
+    main.li(t1, 0x77u);
+    main.call(kMpegRingbufferConstruct);
+    main.sw(v0, 8, s7);
+    main.call(kMpegQueryMemSize);
+    main.sw(v0, 12, s7);
+    main.li(a0, mpeg);
+    main.li(a1, mpeg_data);
+    main.li(a2, 0x10000u);
+    main.li(a3, ring);
+    main.li(t0, 512u);
+    main.li(t1, 0u);
+    main.li(t2, 0u);
+    main.call(kMpegCreate);
+    main.sw(v0, 16, s7);
+    main.li(a0, mpeg);
+    main.li(a1, header);
+    main.li(a2, kData + 0x100u);
+    main.call(kMpegQueryStreamOffset);
+    main.sw(v0, 20, s7);
+    main.li(a0, header);
+    main.li(a1, kData + 0x104u);
+    main.call(kMpegQueryStreamSize);
+    main.sw(v0, 24, s7);
+    main.li(a0, mpeg);
+    main.li(a1, 0u); // AVC
+    main.li(a2, 0u);
+    main.call(kMpegRegistStream);
+    main.sw(v0, 28, s7);
+    main.li(a0, ring);
+    main.call(kMpegRingbufferAvailableSize);
+    main.sw(v0, 32, s7);
+    main.li(a0, ring);
+    main.li(a1, 4u);
+    main.li(a2, 8u);
+    main.call(kMpegRingbufferPut);
+    main.sw(v0, 36, s7);
+    main.li(a0, ring);
+    main.call(kMpegRingbufferAvailableSize);
+    main.sw(v0, 40, s7);
+    main.li(t0, 1u);
+    main.sw(t0, 44, s7);
+    main.leave();
+
+    (void)start_thread(*f.system, "mpeg", entry, 0x20u);
+    CHECK(f.system->run(1'000'000u) == mk::RunResult::kIdle);
+    CHECK(!rt.stopped());
+    CHECK_EQ(f.word(kData + 44u), 1u);
+    CHECK_EQ(f.word(kData), 0u);
+    CHECK_EQ(f.word(kData + 4u), 8u * (104u + 2048u));
+    CHECK_EQ(f.word(kData + 8u), 0u);
+    CHECK_EQ(f.word(kData + 12u), 0x10000u); // libmpeg 0x010A
+    CHECK_EQ(f.word(kData + 16u), 0u);
+    // SceMpegRingBuffer.
+    CHECK_EQ(f.word(ring), 8u);
+    CHECK_EQ(f.word(ring + 16u), 2048u);
+    CHECK_EQ(f.word(ring + 20u), ring_data);
+    CHECK_EQ(f.word(ring + 24u), callback);
+    CHECK_EQ(f.word(ring + 28u), 0x77u);
+    CHECK_EQ(f.word(ring + 32u), ring_data + 8u * 2048u);
+    CHECK_EQ(f.word(ring + 40u), mpeg);
+    // The handle lives in the mpeg data, with its fake struct.
+    CHECK_EQ(f.word(mpeg), mpeg_data + 0x30u);
+    CHECK_EQ(f.word(mpeg_data + 0x30u), 0x4D42494Cu); // "LIBM"
+    CHECK_EQ(f.word(mpeg_data + 0x40u), ring);
+    // The header.
+    CHECK_EQ(f.word(kData + 20u), 0u);
+    CHECK_EQ(f.word(kData + 0x100u), 0x800u);
+    CHECK_EQ(f.word(kData + 24u), 0u);
+    CHECK_EQ(f.word(kData + 0x104u), 0x10000u);
+    CHECK_EQ(f.word(kData + 28u), 1u); // The first stream id.
+    // Put: the callback reads 4 packets at the start of the ring.
+    CHECK_EQ(f.word(kData + 32u), 8u);
+    CHECK_EQ(f.word(kData + 36u), 4u);
+    CHECK_EQ(f.word(kData + 0x80u), ring_data);
+    CHECK_EQ(f.word(kData + 0x84u), 4u);
+    CHECK_EQ(f.word(kData + 0x88u), 0x77u);
+    CHECK_EQ(f.word(ring + 4u), 4u);  // packetsRead
+    CHECK_EQ(f.word(ring + 8u), 4u);  // packetsWritePos
+    CHECK_EQ(f.word(ring + 12u), 4u); // packetsAvail
+    CHECK_EQ(f.word(kData + 40u), 4u);
+}
+
 void run_test(const char *name, void (*test)()) {
     const int before = g_failures;
     std::fprintf(stderr, "%s...\n", name);
@@ -1142,6 +1450,8 @@ int main() {
     run_test("test_ctrl", &test_ctrl);
     run_test("test_io", &test_io);
     run_test("test_rtc", &test_rtc);
+    run_test("test_ge", &test_ge);
+    run_test("test_mpeg", &test_mpeg);
     std::printf("mpo_hle_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

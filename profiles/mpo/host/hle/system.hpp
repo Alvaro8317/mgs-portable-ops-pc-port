@@ -15,7 +15,9 @@
 // dispatches, that HLE calls advance by the cycles they eat, and that jumps to
 // the next event when every thread waits (game_clock.hpp). The vblank runs on
 // it from the start (Display), and IO reads the user's ISO (IoManager).
-// The controller (F10b) is sampled at the end of each vblank (Ctrl).
+// The controller (F10b) is sampled at the end of each vblank (Ctrl). The GE
+// (F11b) runs the display lists of sceGe on mpo_ge (GeManager), and sceMpeg
+// plays the videos on the media engine of F17a without showing them (Mpeg).
 
 #pragma once
 
@@ -30,9 +32,11 @@
 #include "hle/ctrl.hpp"
 #include "hle/display.hpp"
 #include "hle/game_clock.hpp"
+#include "hle/ge_manager.hpp"
 #include "hle/hle_table.hpp"
 #include "hle/io_manager.hpp"
 #include "hle/modules.hpp"
+#include "hle/mpeg.hpp"
 #include "hle/runtime_memory.hpp"
 #include "kernel/kernel.hpp"
 #include "psprecomp/runtime.hpp"
@@ -77,6 +81,8 @@ public:
     [[nodiscard]] Display &display() noexcept { return *display_; }
     [[nodiscard]] Interrupts &interrupts() noexcept { return *interrupts_; }
     [[nodiscard]] Ctrl &ctrl() noexcept { return *ctrl_; }
+    [[nodiscard]] GeManager &ge() noexcept { return *ge_; }
+    [[nodiscard]] Mpeg &mpeg() noexcept { return *mpeg_; }
     [[nodiscard]] const SystemConfig &config() const noexcept { return config_; }
 
     // Mounts the ISO and the memory stick of the config (boot() does it too).
@@ -111,12 +117,14 @@ private:
     std::unique_ptr<Interrupts> interrupts_;
     std::unique_ptr<Display> display_;
     std::unique_ptr<Ctrl> ctrl_;
+    std::unique_ptr<GeManager> ge_;
+    std::unique_ptr<Mpeg> mpeg_;
     bool mounted_ = false;
     std::map<std::uint32_t, std::uint32_t> utility_modules_;
 };
 
 // The HLE groups (hle_kernel.cpp, hle_time.cpp, hle_system.cpp; IoManager,
-// Display, Interrupts and Ctrl register their own).
+// Display, Interrupts, Ctrl, GeManager and Mpeg register their own).
 void register_kernel_hle(System &system);
 void register_module_hle(System &system);
 void register_time_hle(System &system);

@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b → F13 → F14b → F15b → F16b → F17b → F18b → F19 → F20b → F21 → F22 | en serie |
+| — | F10b ✅ → F11b ✅ → F13 → F14b → F15b → F16b → F17b → F18b → F19 → F20b → F21 → F22 | en serie |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -98,7 +98,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F10a | Ventana, presentación e input (autónomo) | M2 | ✅ hecha (ola 2) |
 | F10b | Presentación e input en el juego | M2 | ✅ hecha |
 | F11a | GE por software: reproductor de `.ppdmp` y 2D | M2 | ✅ hecha (ola 1) |
-| F11b | `sceGe*` en el juego y stub de `sceMpeg` | M2 | ⬜ pendiente |
+| F11b | `sceGe*` en el juego y stub de `sceMpeg` | M2 | ✅ hecha |
 | F12 | GE por software: completo | M2 | ✅ hecha (ola 2) |
 | F13 | Overlays de etapa en runtime | M2 | ⬜ pendiente |
 | F14a | Renderer Vulkan: base sobre los dumps | M3 | ✅ hecha (ola 3) |
@@ -641,6 +641,18 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Sin el GE, el juego da vueltas cada 13,95 s: `preseek` abre `MPO_OP_LONG.pmf`, pero nadie
     llama a `sceMpeg`. Primero hay que ver si con el GE arranca el reproductor, y después
     escribir el stub.
+- **Notas (F11b)**: hecha, ver `docs/sessions/F11b.md`. **M2 parcial.**
+  - `sceGe` es `hle` (`GeManager`, 18 NIDs): la cola de PPSSPP sobre `mpo_ge`, síncrona dentro de
+    la llamada, con el tiempo del GE en ciclos y la interrupción 25 encolada como en PPSSPP.
+  - Se ven los logos de Konami y de Kojima Productions, la intro y el TITLE MENU. El logo de KP y el
+    menú dan **0 píxeles distintos** contra la reproducción de los dumps de PPSSPP.
+  - **Cambio de plan**: el "stub" de `sceMpeg` es el HLE de PPSSPP portado sobre el
+    `MediaEngine` de F17a (23 NIDs), que escribe negro y silencio. El video avanza y termina como en
+    la PSP. A F17b le queda la salida (imagen y PCM), `scePsmf` y `sceFont`.
+  - **Cambio de plan**: los stubs de import de las etapas se ligan al HLE al cargarlas (era de
+    F13). Sin eso, cada import de una etapa devolvía basura sin llegar al HLE.
+  - **El criterio de `slot.dat` pasa a F18b**: no se abre ni en la intro ni en el título. NEW GAME
+    llega a "Input your name" y espera al OSK.
 
 ### F12 — GE por software: completo (ola 2)
 
@@ -702,6 +714,14 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   final no queda código interpretado en esa etapa. **M2 cerrado.**
 - **Notas (ola 2)**: `mpo_ge` ya evalúa `BOUNDINGBOX`/`BJUMP` (F12), pero solo con datos sintéticos,
   porque los dumps no los guardan. Hay que verificarlo con el runtime.
+- **Notas (F11b)**: ver "Para la próxima sesión" en `docs/sessions/F11b.md`.
+  - **Los stubs de import de las etapas ya se ligan** al HLE en `ModuleManager::load`
+    (`Module::bound_stubs`) y se desligan al descargarlas; un stub con código de un corpus no se
+    toca. Queda recompilar las etapas y el ciclo de carga y descarga.
+  - **[V]** No todas las etapas van en `0x08B8F900`: `init` y `r_main01` se cargan en `0x08AFB800`
+    (justo después de `mgp_main`), y `title` en `0x08B8F900`.
+  - Para llegar a la primera etapa jugable hace falta pasar el OSK del nombre (F18b): NEW GAME se
+    queda en "Input your name".
 - **Notas (ola 3)**: ver `docs/sessions/F08b.md`.
   - Los corpus de etapa con `--prefix` dependen del arreglo de los slots de import (`962e407` en
     `mpo`).
@@ -939,6 +959,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Notas (ola 3)**: `sound2` no tiene `module_start` [V]: sus hilos los arranca `mgp_main`. Lo
   primero que piden es `__sceSasInit`, `sceAudioChReserve` y el bucle `__sceSasCoreWithMix` +
   `sceAudioOutputPannedBlocking`, que son los imports pendientes más llamados (`docs/sessions/F08b.md`).
+- **Notas (F11b)**: con la política `stop`, el primer import sin HLE ya es
+  `sceSasCore::__sceSasInit`, a los 232 848 µs (`docs/sessions/F11b.md`).
 
 ### F17a — Decodificador de PMF y fuente PGF, autónomos (ola 2)
 
@@ -965,7 +987,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Objetivo**: que se reproduzca el video del título y que el texto use la fuente del juego.
 - **Requisitos**: F16b y F17a.
 - **Tareas**:
-  - `sceMpeg` y `scePsmf` sobre el decodificador de F17a, en lugar del stub de F11b.
+  - `sceMpeg` y `scePsmf` sobre el decodificador de F17a, en lugar del stub de F11b. **F11b ya portó
+    `sceMpeg`** (23 NIDs) sobre `MediaEngine`: falta escribir la imagen y el PCM, y `scePsmf`.
   - `sceFont` con las **fuentes del firmware** (`ltn*.pgf`, `jpn0.pgf`…), portando de PPSSPP la
     lista de fuentes y `FindOptimumFont` sobre `mpo::font::Pgf`. MPO no trae fuente propia (F17a).
 - **Criterios de hecho**: el video del título se reproduce con audio sincronizado y el texto del juego
@@ -983,6 +1006,14 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     - la grabación del título: `analysis/f17b/title_*.avi` (FFV1, 1440×816) y su WAV (estéreo,
       44,1 kHz, 50,6 s).
   - FFmpeg en Windows: vcpkg (`ffmpeg[avcodec,swscale]`) con `MPO_FFMPEG=system`.
+- **Notas (F11b)**: ver `docs/sessions/F11b.md`.
+  - `Mpeg::avc_decode` (`profiles/mpo/host/hle/hle_mpeg.cpp`) llama a `stepVideo(mode, true)` y
+    escribe negro; `atrac_decode` consume el audio y escribe silencio. Falta `writeVideoImage` sobre
+    la memoria de la PSP (con swizzle en VRAM) y el PCM.
+  - **[V]** La intro es `MPO_OP_LONG.pmf` y el fondo del "Press Start" es `MPO_OP_LOOP.pmf`; los dos
+    los reproduce la etapa `title` en los framebuffers 8888 `0x04000000`, `0x04088000` y
+    `0x04110000`.
+  - El texto de "Checking Memory Stick…" (después de NEW GAME) sale de `sceFont`.
 - **Notas (F05)**: el decodificador real sustituye al stub de `sceMpeg`/`scePsmf` de F11.
   - La intro y el "Press Start" se muestran en tres framebuffers 8888 en `0x04000000`, `0x04088000`
     y `0x04110000`, sin draws del GE.
@@ -1058,6 +1089,14 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     instalador; la alternativa, una opción de CMake apagada por defecto. **Decide el usuario.**
   - `ms0:/` de la IO (F09) y la raíz de `mpo_savedata` son el mismo directorio: `title` recorre
     `ms0:/PSP/SAVEDATA` con `sceIoDopen`/`Dread`.
+- **Notas (F11b)**: ver `docs/sessions/F11b.md`.
+  - **Criterio heredado de F09, F10b y F11b**: con NEW GAME y un nombre en el OSK, la traza muestra
+    al juego abriendo y leyendo `slot.dat` (LBN `0x39650`) sin errores. `iso_lbn.py --trace` nombra
+    los `sce_lbn` de una traza.
+  - **[V]** En el TITLE MENU, Circle confirma y Cross vuelve. NEW GAME comprueba la Memory Stick,
+    muestra "Input your name. You may not use lowercase letters." y espera con
+    `sceUtilityOskGetStatus` y `sceUtilityMsgDialogGetStatus` (`--press start@30000+200 --press
+    circle@40000+200`).
 - **Criterios de hecho**: se guarda y se carga entre ejecuciones, se ingresa una contraseña de
   reclutamiento y se borra un save desde el menú del juego (`LISTALLDELETE`), comprobando con
   hashes que el resto de `SAVEDATA` no cambia. Los saves de prueba se hashean antes y después.

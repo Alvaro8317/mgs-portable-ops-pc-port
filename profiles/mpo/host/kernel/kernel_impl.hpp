@@ -312,6 +312,7 @@ struct Kernel::Impl {
     bool dispatch_enabled = true;
     bool interrupts_enabled = true;
     bool in_interrupt = false;
+    std::function<void()> on_interrupts_resumed;
     bool stop_requested = false;
     int in_event_dispatch = 0;
     int ready_callbacks_count = 0;

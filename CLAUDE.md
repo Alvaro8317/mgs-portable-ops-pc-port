@@ -317,6 +317,9 @@ Son de gow-psp-recomp y valen aunque usemos PSPRecomp.
 
 - La tabla de NIDs se genera a partir de `Core/HLE/*.cpp` de PPSSPP, con el tag fijado.
 - Cada import se registra con `register_hle`.
+- Los stubs de import de un módulo sin corpus (las etapas) quedan como `jr ra; nop`, y el
+  intérprete los correría como código, devolviendo basura sin avisar. El cargador los liga al HLE
+  (`Module::bound_stubs`, F11b).
 - Un NID que no esté implementado **registra el nombre y la dirección y falla de forma visible**,
   nunca en silencio:
   - el runtime para con el nombre, el stub y el llamador;

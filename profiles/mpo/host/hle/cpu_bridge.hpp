@@ -73,11 +73,12 @@ public:
     // Runs an interrupt handler (F09) on the stack of whoever calls it (the
     // scheduler or the fiber of the interrupted thread, inside a kernel event),
     // like PPSSPP's __RunOnePendingInterrupt on the idle thread: a fresh
-    // context with $a0/$a1, `gp` and `sp`, returning to the host trap. The
+    // context with $a0..$a2, `gp` and `sp`, returning to the host trap. The
     // interrupted context is saved and restored around it. A runtime stop
     // asks the kernel to stop instead of parking (there may be no fiber).
     std::uint32_t run_interrupt(kernel::Kernel &kernel, std::uint32_t entry, std::uint32_t a0,
-                                std::uint32_t a1, std::uint32_t gp, std::uint32_t sp);
+                                std::uint32_t a1, std::uint32_t gp, std::uint32_t sp,
+                                std::uint32_t a2 = 0u);
     [[nodiscard]] std::uint64_t interrupts() const noexcept { return interrupts_; }
 
     // kernel::HostHooks

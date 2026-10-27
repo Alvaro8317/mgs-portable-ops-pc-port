@@ -7,8 +7,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <exception>
+#include <set>
+#include <string_view>
+#include <unordered_map>
 
 #include "hle/system.hpp"
 #include "psprecomp/interpreter.hpp"
@@ -106,6 +110,40 @@ bool equals_no_case(const std::string &a, const char *b) {
 
 bool valid_address(kernel::GuestMemory &memory, std::uint32_t address) {
     return address != 0u && memory.is_valid(address, 4u);
+}
+
+// The import stubs of a module without recompiled code (the stage overlays)
+// hold `jr ra; nop` until a loader binds them: PPSSPP writes a syscall there.
+// Here each one becomes a host function that calls the HLE import, like the
+// stubs of a generated corpus do. Process-global, like the runtime's hooks:
+// register_function takes a plain function pointer.
+struct StubBinding {
+    std::string_view library;
+    std::uint32_t nid{};
+};
+
+std::unordered_map<std::uint32_t, StubBinding> &stub_bindings() {
+    static std::unordered_map<std::uint32_t, StubBinding> bindings;
+    return bindings;
+}
+
+// Interned and never freed: a thread blocked inside an import keeps a view.
+std::string_view intern_library(const std::string &name) {
+    static std::set<std::string, std::less<>> names;
+    return *names.insert(name).first;
+}
+
+void invoke_bound_stub(psprecomp::Runtime &runtime, psprecomp::AllegrexContext &ctx) {
+    const auto found = stub_bindings().find(psprecomp::GuestMemory::canonical(ctx.pc));
+    if (found == stub_bindings().end()) {
+        char reason[64];
+        std::snprintf(reason, sizeof(reason), "unbound import stub %08X", ctx.pc);
+        runtime.stop(reason);
+        return;
+    }
+    // A copy: the call may block, and the module may be unloaded meanwhile.
+    const StubBinding binding = found->second;
+    runtime.invoke_import(binding.library, binding.nid, ctx);
 }
 
 } // namespace
@@ -270,6 +308,15 @@ std::uint32_t ModuleManager::load(std::span<const std::uint8_t> image, const std
         read_exports(*module, info->ent_top, info->ent_end);
         if (module->entry == 0u) module->entry = module->start_func;
         module->imports = elf.scan_imports(runtime.memory(), *info);
+        for (const psprecomp::PspImport &import : module->imports) {
+            const std::uint32_t stub = psprecomp::GuestMemory::canonical(import.stub_address);
+            if (runtime.has_function(stub)) continue;
+            stub_bindings()[stub] = StubBinding{intern_library(import.library), import.nid};
+            char nid[16];
+            std::snprintf(nid, sizeof(nid), "%08X", import.nid);
+            runtime.register_function(stub, &invoke_bound_stub, import.library + "::" + nid);
+            module->bound_stubs.push_back(stub);
+        }
         // PPSSPP loads a firmware module it replaces with HLE, but never runs it.
         module->fake = is_hle_firmware_module(module->name);
         module->uid = k.create_host_object(module->name.c_str());
@@ -533,6 +580,10 @@ std::uint32_t ModuleManager::unload_module(kernel::Uid uid) {
     Module *m = get(uid);
     if (m == nullptr) return k.delay_result(err::kUnknownModule, 150u);
     unlink(*m);
+    for (const std::uint32_t stub : m->bound_stubs) {
+        system_.runtime().unregister_functions(stub, stub + 8u);
+        stub_bindings().erase(stub);
+    }
     if (m->base != 0u) {
         if (!k.user_memory().free(m->base)) (void)k.kernel_memory().free(m->base);
     }

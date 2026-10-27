@@ -64,6 +64,8 @@ struct Module {
     ModuleStatus status{ModuleStatus::kLoaded};
     std::vector<ModuleExport> exports;
     std::vector<psprecomp::PspImport> imports;
+    // Import stubs bound to the HLE by the loader (no recompiled code there).
+    std::vector<std::uint32_t> bound_stubs;
     // Threads waiting in sceKernelStart/StopModule and where they want the
     // module function's exit status.
     struct Waiter {

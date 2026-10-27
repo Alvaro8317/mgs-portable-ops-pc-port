@@ -98,6 +98,8 @@ RunResult Ge::Run(DisplayList &list, std::uint64_t max_commands) {
         const std::uint32_t diff = op ^ state_.cmdmem[cmd];
         state_.cmdmem[cmd] = op;
         ++result.commands;
+        // Rough estimate: 2 CPU ticks per GE command (GPUCommon::UpdatePC).
+        result.cycles += 2;
         ++stats_.commands;
         const bool keep_going = Execute(op, diff, list, &result);
         list.pc += 4;
@@ -122,7 +124,7 @@ bool Ge::Execute(std::uint32_t op, std::uint32_t diff, DisplayList &list, RunRes
         offset_addr_ = list.pc;
         return true;
     case kCmdPrim:
-        ExecutePrim(op);
+        ExecutePrim(op, result);
         return true;
     case kCmdBezier:
         ExecutePatch(op, false);
@@ -137,6 +139,8 @@ bool Ge::Execute(std::uint32_t op, std::uint32_t diff, DisplayList &list, RunRes
             return true;
         }
         ++stats_.bbox_tests;
+        // Approximate, from timings of several counts on a PSP.
+        result->cycles += static_cast<std::uint64_t>(count) * 22u;
         const BoundingBoxResult bbox =
             TestBoundingBox(state_, mem_, vertex_addr_, index_addr_, count);
         if (bbox == BoundingBoxResult::kBadMemory) {
@@ -208,7 +212,7 @@ bool Ge::Execute(std::uint32_t op, std::uint32_t diff, DisplayList &list, RunRes
         ExecuteLoadClut();
         return true;
     case kCmdTransferStart:
-        ExecuteBlockTransfer();
+        ExecuteBlockTransfer(result);
         return true;
     case kCmdWorldMatrixNumber:
         state_.cmdmem[cmd] = (static_cast<std::uint32_t>(cmd) << 24) | (op & 0xF);
@@ -265,12 +269,15 @@ bool Ge::Execute(std::uint32_t op, std::uint32_t diff, DisplayList &list, RunRes
 
 bool Ge::ExecuteEnd(std::uint32_t op, DisplayList &list, RunResult *result) {
     const std::uint32_t prev = mem_.Read32(list.pc - 4);
+    // Count in a few extra cycles on END.
+    result->cycles += 60;
     switch (prev >> 24) {
     case kCmdSignal: {
         const auto behavior = static_cast<SignalBehavior>((prev >> 16) & 0xFF);
         const std::uint32_t signal = prev & 0xFFFF;
         const std::uint32_t enddata = op & 0xFFFF;
         list.signal = behavior;
+        list.sub_intr_token = signal;
         switch (behavior) {
         case SignalBehavior::kHandlerSuspend:
         case SignalBehavior::kHandlerContinue:
@@ -337,7 +344,12 @@ bool Ge::ExecuteEnd(std::uint32_t op, DisplayList &list, RunResult *result) {
             char buf[64];
             Format(buf, "signal behaviour 0x%02X", static_cast<unsigned>(behavior));
             stats_.Unsupported(buf);
-            return true;
+            // PPSSPP still raises the interrupt for it.
+            result->status = RunStatus::kSignal;
+            result->behavior = behavior;
+            result->value = signal;
+            result->end_data = enddata;
+            return false;
         }
         }
     }
@@ -353,6 +365,7 @@ bool Ge::ExecuteEnd(std::uint32_t op, DisplayList &list, RunResult *result) {
         default:
             result->status = RunStatus::kFinished;
             result->value = prev & 0xFFFF;
+            list.sub_intr_token = prev & 0xFFFF;
             return false;
         }
     default:
@@ -361,7 +374,22 @@ bool Ge::ExecuteEnd(std::uint32_t op, DisplayList &list, RunResult *result) {
     }
 }
 
-void Ge::ExecutePrim(std::uint32_t op) {
+int Ge::EstimatePerVertexCost() const {
+    // Pure guesswork in PPSSPP too: transform cost only.
+    int cost = 20;
+    if (state_.IsLightingEnabled()) {
+        cost += 10;
+        for (int i = 0; i < 4; ++i) {
+            if (state_.IsLightChanEnabled(i)) cost += 7;
+        }
+    }
+    if (state_.UVGenMode() != TexMapMode::kTextureCoords) cost += 20;
+    const int morph_count = static_cast<int>((state_.VertType() & kVtypeMorphCountMask) >> 18) + 1;
+    if (morph_count > 1) cost += 5 * morph_count;
+    return cost;
+}
+
+void Ge::ExecutePrim(std::uint32_t op, RunResult *result) {
     const int count = static_cast<int>(op & 0xFFFF);
     const auto prim = static_cast<PrimType>((op >> 16) & 7);
     if (count == 0) return;
@@ -375,6 +403,8 @@ void Ge::ExecutePrim(std::uint32_t op) {
         stats_.Unsupported("PRIM with an invalid index address");
         return;
     }
+    result->cycles +=
+        static_cast<std::uint64_t>(EstimatePerVertexCost()) * static_cast<std::uint64_t>(count);
     ReportDrawState(vtype);
     const RasterizerState rs = ComputeRasterizerState(state_, mem_, clut_.data());
     const std::uint32_t bytes_read =
@@ -453,7 +483,7 @@ void Ge::ExecuteMatrixData(std::uint8_t num_cmd, std::uint8_t data_cmd, float *m
     state_.cmdmem[data_cmd] = static_cast<std::uint32_t>(data_cmd) << 24;
 }
 
-void Ge::ExecuteBlockTransfer() {
+void Ge::ExecuteBlockTransfer(RunResult *result) {
     ++stats_.block_transfers;
     std::uint32_t src_base = state_.TransferSrcAddress();
     std::uint32_t dst_base = state_.TransferDstAddress();
@@ -494,6 +524,8 @@ void Ge::ExecuteBlockTransfer() {
             }
         }
     }
+    // PPSSPP: "correct timing appears to be 1.9", erring a bit low.
+    result->cycles += (static_cast<std::uint64_t>(height) * width * bpp * 16u) / 10u;
 }
 
 } // namespace mpo::ge

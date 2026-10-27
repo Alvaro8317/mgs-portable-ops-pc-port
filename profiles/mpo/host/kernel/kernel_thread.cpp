@@ -80,7 +80,7 @@ void Kernel::cpu_resume_intr(std::uint32_t enable) {
     CallScope call(k);
     if (enable != 0) {
         k.interrupts_enabled = true;
-        // Pending interrupts would run here (F09).
+        if (k.on_interrupts_resumed) k.on_interrupts_resumed();
         k.request_resched();
     } else {
         k.interrupts_enabled = false;
@@ -90,6 +90,10 @@ void Kernel::cpu_resume_intr(std::uint32_t enable) {
 
 bool Kernel::interrupts_enabled() const {
     return impl_->interrupts_enabled;
+}
+
+void Kernel::set_interrupts_resumed_hook(std::function<void()> hook) {
+    impl_->on_interrupts_resumed = std::move(hook);
 }
 
 void Kernel::set_in_interrupt(bool in_interrupt) {

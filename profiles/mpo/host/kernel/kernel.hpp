@@ -193,6 +193,10 @@ public:
     void cpu_resume_intr(std::uint32_t enable);
     [[nodiscard]] bool interrupts_enabled() const;
     void set_in_interrupt(bool in_interrupt);
+    // Runs the interrupts that were queued while they were disabled, when
+    // sceKernelCpuResumeIntr enables them again (PPSSPP hleRunInterrupts),
+    // before the reschedule.
+    void set_interrupts_resumed_hook(std::function<void()> hook);
     std::uint32_t suspend_dispatch_thread();
     std::uint32_t resume_dispatch_thread(std::uint32_t enabled);
     // Whether the HLE caller should get SCE_KERNEL_ERROR_CAN_NOT_WAIT /

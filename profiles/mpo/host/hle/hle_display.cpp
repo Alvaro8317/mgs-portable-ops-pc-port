@@ -52,7 +52,9 @@ bool is_vram(std::uint32_t address) {
 
 // ---- Interrupts ------------------------------------------------------------
 
-Interrupts::Interrupts(System &system) : system_(system) {}
+Interrupts::Interrupts(System &system) : system_(system) {
+    system.kernel().set_interrupts_resumed_hook([this] { run_pending(); });
+}
 
 std::uint32_t Interrupts::register_sub(std::uint32_t intr, std::uint32_t sub, std::uint32_t handler,
                                        std::uint32_t handler_arg) {
@@ -111,6 +113,37 @@ void Interrupts::trigger(std::uint32_t intr) {
         k.set_in_interrupt(false);
         if (system_.runtime().stopped()) return;
     }
+    // What was posted while these ran.
+    run_pending();
+}
+
+void Interrupts::post(std::function<void()> run) {
+    pending_.push_back(std::move(run));
+    run_pending();
+}
+
+void Interrupts::run_pending() {
+    kernel::Kernel &k = system_.kernel();
+    while (!pending_.empty() && k.interrupts_enabled() && !k.in_interrupt() &&
+           !system_.runtime().stopped()) {
+        std::function<void()> run = std::move(pending_.front());
+        pending_.pop_front();
+        k.set_in_interrupt(true);
+        run();
+        k.set_in_interrupt(false);
+    }
+}
+
+bool Interrupts::run_sub(std::uint32_t intr, std::uint32_t sub, std::uint32_t a0,
+                         std::uint32_t a2) {
+    if (intr >= kInterruptCount) return false;
+    const auto found = handlers_[intr].find(sub);
+    if (found == handlers_[intr].end() || found->second.handler == 0u) return false;
+    const Sub handler = found->second;
+    ++handled_;
+    (void)system_.cpu().run_interrupt(system_.kernel(), handler.handler, a0, handler.arg, gp_, sp_,
+                                      a2);
+    return true;
 }
 
 void Interrupts::register_hle() {

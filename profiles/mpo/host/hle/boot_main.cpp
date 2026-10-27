@@ -19,6 +19,9 @@
 // sites, and the interpreter statistics. Exit code 0 when the boot module
 // started and its threads ran without a guest fault.
 //
+// F11b: the report adds the GE (lists, commands, interrupts) and the video
+// frames sceMpeg played.
+//
 // F10b: the display and the controller.
 //   --press start@15000+200   holds Start from 15 s to 15.2 s of PSP time
 //                             (buttons joined with '|' or ','; 100 ms when
@@ -533,6 +536,17 @@ int main(int argc, char **argv) {
                     static_cast<unsigned long long>(flip_count),
                     static_cast<unsigned long long>(lit_flips),
                     static_cast<unsigned long long>(captures));
+        const mpo::hle::GeManager::Stats &ge = system.ge().stats();
+        std::printf("ge: %llu lists, %llu commands, %llu finishes, %llu signals, %llu interrupts "
+                    "(%llu with a handler), %llu errors; mpeg: %llu video frames\n",
+                    static_cast<unsigned long long>(ge.lists),
+                    static_cast<unsigned long long>(ge.commands),
+                    static_cast<unsigned long long>(ge.finishes),
+                    static_cast<unsigned long long>(ge.signals),
+                    static_cast<unsigned long long>(ge.interrupts),
+                    static_cast<unsigned long long>(ge.handlers),
+                    static_cast<unsigned long long>(ge.errors),
+                    static_cast<unsigned long long>(system.mpeg().frames()));
         print_memory("after the run", memory_use());
 
         std::printf("\nmodules:\n");

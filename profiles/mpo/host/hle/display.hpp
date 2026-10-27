@@ -16,12 +16,17 @@
 // of each interrupt and runs the enabled ones, in sub-interrupt order, inline
 // in the kernel event that raises them (CpuBridge::run_interrupt), with the
 // kernel in interrupt context. Like PPSSPP's idle-thread context they get the
-// boot module's $gp and a stack of their own.
+// boot module's $gp and a stack of their own. The vblank is only raised when
+// interrupts are enabled (PSP_INTR_ONLY_IF_ENABLED); an interrupt with a host
+// handler of its own (the GE, F11b) is posted instead: it waits in a queue
+// until interrupts are enabled and no other one runs, like PPSSPP's
+// pendingInterrupts.
 
 #pragma once
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <vector>
@@ -32,6 +37,7 @@ namespace mpo::hle {
 
 class System;
 
+inline constexpr std::uint32_t kGeInterrupt = 25;     // PSP_GE_INTR
 inline constexpr std::uint32_t kVblankInterrupt = 30; // PSP_VBLANK_INTR
 inline constexpr std::uint32_t kInterruptCount = 67;  // PSP_NUMBER_INTERRUPTS
 inline constexpr std::uint32_t kSubInterruptCount = 32;
@@ -48,6 +54,18 @@ public:
     // __TriggerInterrupt(PSP_INTR_IMMEDIATE | PSP_INTR_ONLY_IF_ENABLED, intr,
     // PSP_INTR_SUB_ALL), from a kernel event or the host.
     void trigger(std::uint32_t intr);
+    // __TriggerInterrupt(PSP_INTR_IMMEDIATE, intr, PSP_INTR_SUB_NONE) for an
+    // interrupt with a host handler (PPSSPP's IntrHandler subclasses): queues
+    // `run`, which runs in interrupt context once interrupts are enabled and
+    // no other one runs, now if possible. `run` picks the sub-interrupt and
+    // calls run_sub() itself.
+    void post(std::function<void()> run);
+    // __RunOnePendingInterrupt until the queue is empty or interrupts are off.
+    void run_pending();
+    // Runs the handler of `sub` with $a0 = a0, $a1 = its argument, $a2 = a2,
+    // from a posted handler. False when no handler is registered there
+    // (enabled or not, like IntrHandler::get).
+    bool run_sub(std::uint32_t intr, std::uint32_t sub, std::uint32_t a0, std::uint32_t a2);
     // Where the handlers run: the boot module's $gp and the top of their stack.
     void set_context(std::uint32_t gp, std::uint32_t sp) {
         gp_ = gp;
@@ -67,6 +85,7 @@ private:
 
     System &system_;
     std::array<std::map<std::uint32_t, Sub>, kInterruptCount> handlers_{};
+    std::deque<std::function<void()>> pending_;
     std::uint32_t gp_ = 0;
     std::uint32_t sp_ = 0;
     std::uint64_t handled_ = 0;

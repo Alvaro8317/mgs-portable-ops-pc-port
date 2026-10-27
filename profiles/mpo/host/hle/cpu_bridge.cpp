@@ -120,7 +120,7 @@ std::uint32_t CpuBridge::call_guest(kernel::Kernel &kernel, kernel::Uid, std::ui
 
 std::uint32_t CpuBridge::run_interrupt(kernel::Kernel &kernel, std::uint32_t entry,
                                        std::uint32_t a0, std::uint32_t a1, std::uint32_t gp,
-                                       std::uint32_t sp) {
+                                       std::uint32_t sp, std::uint32_t a2) {
     ++interrupts_;
     psprecomp::AllegrexContext &cpu = runtime_.cpu();
     // Plain copies: nothing in this frame owns memory.
@@ -130,6 +130,7 @@ std::uint32_t CpuBridge::run_interrupt(kernel::Kernel &kernel, std::uint32_t ent
     reset_thread_context(cpu);
     cpu.gpr[4] = a0;
     cpu.gpr[5] = a1;
+    cpu.gpr[6] = a2;
     cpu.gpr[28] = gp;
     cpu.gpr[29] = sp;
     cpu.gpr[31] = callback_return_;
