@@ -334,3 +334,15 @@ add_executable(mpo_hle_test hle_test.cpp synthetic_disc.cpp)
 target_link_libraries(mpo_hle_test PRIVATE psprecomp_core mpo_hle)
 mpo_target_warnings(mpo_hle_test)
 add_test(NAME mpo_hle_test COMMAND mpo_hle_test)
+
+# mpo_savedata (F18a): dialogs on a virtual clock, and the savedata files in a
+# temporary ms0:/ (never the real save folder). The store test also links
+# mpo_host to cross-check PARAM.SFO with the disc's reader.
+add_executable(mpo_savedata_dialog_test savedata_dialog_test.cpp)
+target_link_libraries(mpo_savedata_dialog_test PRIVATE mpo_savedata)
+mpo_target_warnings(mpo_savedata_dialog_test)
+add_test(NAME mpo_savedata_dialog_test COMMAND mpo_savedata_dialog_test)
+add_executable(mpo_savedata_store_test savedata_store_test.cpp)
+target_link_libraries(mpo_savedata_store_test PRIVATE mpo_savedata mpo_host)
+mpo_target_warnings(mpo_savedata_store_test)
+add_test(NAME mpo_savedata_store_test COMMAND mpo_savedata_store_test)
