@@ -118,7 +118,7 @@ híbrido hacia una decompilación parcial).
 | Build | CMake ≥ 3.22 + Ninja + ccache | Es el estándar de la escena. Los builds generados son pesados. |
 | Compiladores | Clang en Linux; MSVC 2022 o clang-cl en Windows | Hay que probar los dos, porque el código generado choca con los límites de cada compilador. |
 | Ventana, input y audio | SDL3 | Es multiplataforma y funciona con gamepads de Xbox y PlayStation. |
-| GPU | **Vulkan directo** (1.2 como mínimo, aprovechando 1.3 si está), con `volk` (loader) y VMA (memoria) | Decidido el 2026-10-24. Es un solo backend para Windows y Linux, con control total del estado que exige el GE (operaciones lógicas, clamp de profundidad, blending). Las referencias son PPSSPP (Vulkan) y Yakumo. Los shaders son un ubershader GLSL precompilado a SPIR-V (versionado) con specialization constants, sin glslang en el build (F14a). |
+| GPU | **Vulkan directo** (1.2 como mínimo, aprovechando 1.3 si está), con `volk` (loader) y VMA (memoria) | Decidido el 2026-10-24. Es un solo backend para Windows y Linux, con control total del estado que exige el GE (operaciones lógicas, clamp de profundidad, blending). Las referencias son PPSSPP (Vulkan) y Yakumo. Los shaders son un ubershader GLSL precompilado a SPIR-V (versionado) con specialization constants, sin glslang en el build (F14a). El blending, el dither, las operaciones lógicas y las máscaras van en el fragment shader leyendo el destino (input attachment con orden de rasterización o con barreras, o una copia del target); el blending fijo solo donde es exacto (F15a). |
 | Renderer de referencia | GE por software (portado del softgpu de PPSSPP) | Sirve para llegar a la pantalla de título (M2) y como "verdad" para comparar frames contra el renderer Vulkan. |
 | Video | FFmpeg mínimo (LGPL), solo con los decoders que haga falta | Para el video del título (`sceMpeg`). |
 | ATRAC3 | `at3_standalone` de PPSSPP (LGPL-2.1+) | Lo usan gow y tkdr. |
@@ -190,6 +190,10 @@ los hilos y fibras, en vez de depender de `ulimit`.
 - `sceFont`, con las **fuentes del firmware** (`flash0:/font/*.pgf`), que aporta el usuario. El
   disco no trae ninguna fuente (F17a [V]).
 - `sceUtility`: savedata (guardar, cargar y borrar) y OSK (nombres y contraseñas de reclutamiento).
+  - MPO pide savedata **cifrado en modo 5** (clave propia, SDK `0x02080010`) y borra con
+    `LISTALLDELETE` y `gameName` vacío, así que el borrado solo puede tocar el directorio elegido
+    (PPSSPP #6600) (F18a [V]);
+  - el OSK solo pide dígitos y mayúsculas (`inputtype = 9`).
 
 **Red (no hace falta para jugar):**
 - `sceNetAdhoc*`, `sceNetApctl*`, `sceHttp*`, `sceNpAuth`.
@@ -355,7 +359,9 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
 - **Repetición de input**: se graba el input (lectura por lectura) y se reproduce de forma
   determinista. Las capturas cada N frames se comparan contra referencias locales (no van al repo).
 - **Toggles A/B por variable de entorno** para cada optimización del renderer, para poder bisecar
-  cuando un frame sale mal (como los `MHP3RD_NO_*` de Yakumo).
+  cuando un frame sale mal (como los `MHP3RD_NO_*` de Yakumo). Los del renderer Vulkan son
+  `MPO_VK_NO_13`, `MPO_VK_BLEND`, `MPO_VK_DST_READ`, `MPO_VK_NO_BATCH`, `MPO_VK_NO_TEX_CACHE`,
+  `MPO_VK_NO_DEPTH_CLAMP`, `MPO_VK_NO_RASTER_ORDER` y `MPO_VK_NO_LOCAL_READ` (F14a y F15a).
 - **Tests sin el juego** (`ctest` sin datos): decoder, emisor, formatos y HLE puro. Son los únicos que
   corren en CI pública.
 - **CI**: matriz de Windows (MSVC) y Linux (Clang + GCC), con ASan y UBSan en Linux.

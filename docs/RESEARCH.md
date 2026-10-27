@@ -418,6 +418,8 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
   - **[V]** No se vieron render-to-texture, logic ops, stencil, beziers ni mipmaps.
 - **Borrado de saves**: el diálogo de borrar save podía vaciar SAVEDATA
   ([#6600](https://github.com/hrydgard/ppsspp/issues/6600)). Hay que implementar bien el modo delete.
+  **[V]** MPO borra con `LISTALLDELETE` y `gameName` vacío, justo el caso del bug
+  ([`docs/analysis/utility.md`](analysis/utility.md), F18a).
 
 ### Hardware y funciones del sistema
 

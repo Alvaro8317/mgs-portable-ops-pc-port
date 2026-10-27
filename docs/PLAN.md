@@ -66,8 +66,8 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 1 ✅ | F06, F07a, F08a, F11a, F16a | F03, F04 y F05 (cumplidos). Integrada el 2026-10-25. |
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
-| 4 🟨 | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hace F09 en serie. |
-| — | F09 → F10b → F11b → F13 → F14b → F15b → F16b → F17b → F18b → F19 → F20b → F21 → F22 | en serie |
+| 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
+| — | F10b → F11b → F13 → F14b → F15b → F16b → F17b → F18b → F19 → F20b → F21 → F22 | en serie |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -103,13 +103,13 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F13 | Overlays de etapa en runtime | M2 | ⬜ pendiente |
 | F14a | Renderer Vulkan: base sobre los dumps | M3 | ✅ hecha (ola 3) |
 | F14b | Renderer Vulkan en el juego | M3 | ⬜ pendiente |
-| F15a | Renderer Vulkan: blending por shader y efectos (autónomo) | M3 | ⬜ pendiente (ola 4) |
+| F15a | Renderer Vulkan: blending por shader y efectos (autónomo) | M3 | ✅ hecha (ola 4) |
 | F15b | Renderer Vulkan: framebuffers en el juego | M3 | ⬜ pendiente |
 | F16a | Audio autónomo: SAS, ATRAC3 y salida SDL3 | M4 | ✅ hecha (ola 1) |
 | F16b | Audio en el juego: `sceAudio`, `sceSas` y `sceAtrac` | M4 | ⬜ pendiente |
 | F17a | Decodificador de PMF y fuente PGF (autónomos) | M4 | ✅ hecha (ola 2) |
 | F17b | Video del título y fuentes en el juego | M4 | ⬜ pendiente |
-| F18a | Savedata, OSK y diálogos (autónomo) | M4 | ⬜ pendiente (ola 4) |
+| F18a | Savedata, OSK y diálogos (autónomo) | M4 | ✅ hecha (ola 4) |
 | F18b | Savedata, OSK y diálogos en el juego | M4 | ⬜ pendiente |
 | F19 | Primera misión y repetición de input | M5 | ⬜ pendiente |
 | F20a | Generador de APs virtuales (autónomo) | M6 | ✅ hecha (ola 2) |
@@ -816,6 +816,19 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   tocar `ge/`, que sea mínimo y justificado, como en F14a (ninguna otra fase de la ola toca `ge/` ni
   `vulkan/`). Los shaders cambian, así que hay que regenerar `ge_shaders_spv.inc` con
   `compile_shaders.py` (`mpo_vulkan_shaders_fresh`).
+- **Notas (integración de la ola 4)**: hecha, ver `docs/sessions/F15a.md`.
+  - Blending, dither, logic ops y máscaras por bit van en el shader. Hay tres caminos para leer el
+    destino (`MPO_VK_DST_READ=raster|barrier|copy`); el blending fijo se usa solo donde da los
+    mismos bits (`MPO_VK_BLEND=auto|shader|fixed`).
+  - En los 11 dumps, la diferencia con `soft` es 0 en 7 (menú y codecs incluidos, antes de 1 179 a
+    29 139 píxeles). En los 4 dumps 3D queda de 8 a 31 píxeles (≤ 0,024 %, delta ≤ 17), que vienen
+    de la interpolación, no del blending. 0 errores de validación en los caminos 1.3 y 1.2.
+  - `mpo_vulkan_compare` compara `soft` y `vulkan` con un umbral por defecto de 130 píxeles por
+    frame y delta 24.
+  - En la CI (lavapipe con la capa 1.3.275) el camino 1.3 prueba `copy`; `local_read` solo se
+    activa con capas ≥ 1.3.276 [?, el corte no está verificado].
+  - **Pendiente del usuario**: la prueba en Windows con la GPU y un Vulkan SDK ≥ 1.3.276
+    (procedimiento en la nota).
 
 ### F15b — Renderer Vulkan: framebuffers en el juego
 
@@ -827,8 +840,13 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Subir desde la VRAM los framebuffers que no dibuja el GE (el video 8888 de F05 §4.1) para
     presentarlos.
   - Splines y beziers en GPU, si la teselación en la CPU de F14a no alcanza.
+  - Stencil (test y operaciones) en el shader, con el destino que ya lee F15a.
+  - Interpolación exacta en el fragment shader (los pesos de aristas de softgpu), si se quieren 0
+    píxeles distintos.
+  - Medir en Windows el coste de las barreras de `barrier` (unos 550–600 grupos por frame de
+    misión) y, si pesan, probar `fragment_shader_interlock`.
 - **Criterios de hecho**: en las escenas de F05, ahora corriendo el juego, la diferencia entre los
-  dos renderers está por debajo del umbral de F15a. **M3 cerrado.**
+  dos renderers está por debajo del umbral de F15a (`mpo_vulkan_compare`). **M3 cerrado.**
 - **Notas (F05)**: **en las escenas capturadas no hubo render-to-texture.** Lo que se lee de VRAM es
   una caché de texturas CLUT en `0x0CC000` y más arriba, y hay que invalidarla cuando se escribe en
   VRAM.
@@ -984,6 +1002,18 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   y campos usa MPO, si hace falta el cifrado y cómo se dibujan los diálogos.
 - **Notas (ola 4)**: si se añade Dear ImGui u otra dependencia, va en `third_party/` con su LICENSE y
   en `THIRD_PARTY.md`.
+- **Notas (integración de la ola 4)**: hecha, ver `docs/sessions/F18a.md`. El contrato de MPO está en
+  `docs/analysis/utility.md`.
+  - El savedata lo usan las etapas `title`, `briefing`, `cyberval2` y `ending`, con la misma
+    librería, en los modos AUTOLOAD, AUTOSAVE, SAVE, LISTLOAD, LISTSAVE y **LISTALLDELETE con
+    `gameName` vacío**: es justo el caso de #6600, y hay un test que comprueba con hashes que solo
+    se borra el directorio elegido [V].
+  - Con el SDK `0x02080010`, una PSP o PPSSPP guardan **cifrado en modo 5**. El port puede guardar
+    sin cifrar; el cifrado solo hace falta para intercambiar saves.
+  - OSK: `inputtype` 9 (dígitos y mayúsculas), con un límite de 15 para el nombre y de 10 para la
+    contraseña.
+  - No hay dependencias nuevas; el dibujo de los diálogos quedó como propuesta (abajo).
+  - La carpeta por defecto de `ms0:/` ya existe: `savedata::default_ms0_root`.
 
 ### F18b — Savedata, OSK y diálogos en el juego
 
@@ -993,10 +1023,18 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Registrar los NIDs de `sceUtilitySavedata*`, `sceUtilityOsk*` y `sceUtilityMsgDialog*` sobre
     `mpo_savedata`, y completar `sceUtilityGetSystemParamInt` y `sceImposeSetLanguageMode`.
   - Conectar la raíz de `ms0:/` de F09 a la carpeta por defecto de `mpo_savedata`.
-  - Dibujar los diálogos en la ventana del juego, con el renderer elegido.
-  - Si hace falta el cifrado, conectarlo como se haya decidido en F18a.
-- **Criterios de hecho**: se guarda y se carga entre ejecuciones y se ingresa una contraseña de
-  reclutamiento. Los saves de prueba se hashean antes y después. **M4 cerrado.**
+  - Dibujar los diálogos en la ventana del juego. La propuesta de F18a es un generador de display
+    lists al estilo de PPGe, con el texto PGF de `mpo_font`, en vez de Dear ImGui (requiere F11b y
+    F14b). **Decide el usuario.**
+  - Cómo llega el cifrado (modo 5) al runtime, sin romper la regla de F02 (libkirk solo en el
+    instalador). La propuesta de F18a es un conversor `mpo --import-save/--export-save` en el
+    instalador; la alternativa, una opción de CMake apagada por defecto. **Decide el usuario.**
+  - `ms0:/` de la IO (F09) y la raíz de `mpo_savedata` son el mismo directorio: `title` recorre
+    `ms0:/PSP/SAVEDATA` con `sceIoDopen`/`Dread`.
+- **Criterios de hecho**: se guarda y se carga entre ejecuciones, se ingresa una contraseña de
+  reclutamiento y se borra un save desde el menú del juego (`LISTALLDELETE`), comprobando con
+  hashes que el resto de `SAVEDATA` no cambia. Los saves de prueba se hashean antes y después.
+  **M4 cerrado.**
 
 ---
 
