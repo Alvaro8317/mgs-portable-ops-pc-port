@@ -1177,6 +1177,21 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Flujo de instalación: el usuario elige el ISO, se valida, se descifra, se genera y se compila, o
     se usa un binario precompilado del runtime más la generación en local. **Hay que decidir el
     modelo.**
+  - **Decisión abierta (del usuario): distribuir el código del juego ya compilado o compilarlo en la
+    máquina del jugador.** Los otros ports de PSP están en `docs/RESEARCH.md` §3, "Cómo distribuyen
+    los ports":
+    - **compilar en local** es lo que pide hoy `CLAUDE.md` §1 (el código traducido no se
+      distribuye) y lo que hacen gow-psp-recomp, fuc-recomp y tkdr-recomp. El modelo más cómodo es el
+      launcher de GoW: descarga un compilador portátil (llvm-mingw, CMake y Ninja), no necesita
+      Visual Studio y compila una sola vez. Para que la espera sea aceptable, habrá que bajar el
+      coste de compilar el corpus: optimización menor del código generado (hoy
+      `PSPRECOMP_GENERATED_OPT_LEVEL` no se aplica a MSVC), clang en vez de `cl.exe`, o un emisor por
+      funciones en vez de por palabras (F07b);
+    - **distribuir binarios con el código compilado** es lo que hace Yakumo: el jugador no espera
+      nada, pero el proyecto publica una traducción del código del juego, y eso cambia su riesgo
+      legal y la regla de `CLAUDE.md` §1.
+    - Arrancar ya compilado es casi inmediato en los dos casos: registrar el dispatch tarda unos
+      60 ms (F08b).
   - Linux: AppImage o Flatpak. Windows: ZIP.
   - CI que publique solo el código y el runtime, nunca nada del juego.
   - `README.md` para el usuario, smoke test manual y aviso legal.

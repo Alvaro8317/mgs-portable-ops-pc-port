@@ -80,7 +80,7 @@ Fuentes:
 | Proyecto | Juego | Herramienta | Licencia | Sistemas | Estado |
 |---|---|---|---|---|---|
 | [TeamGDB/Yakumo](https://github.com/TeamGDB/Yakumo) | MHP3rd HD (NPJB-40001) | [PSPRecomp](https://github.com/jessicanataliagta/PSPRecomp) | MIT | Windows, Linux, macOS y Android | v0.7.5 (13/10/2026), jugable |
-| [DrummingBird1/gow-psp-recomp](https://github.com/DrummingBird1/gow-psp-recomp) | GoW CoO y GoS (UCUS98653 y 98737) | Propia (Python, Ghidra y C) | GPL-3.0+ | Windows (Linux "planeado") | Preview v1.2.1 |
+| [DrummingBird1/gow-psp-recomp](https://github.com/DrummingBird1/gow-psp-recomp) | GoW CoO y GoS (UCUS98653 y 98737) | Propia (Python, Ghidra y C) | GPL-3.0+ | Windows (Linux "planeado") | v1.3.1 (26/10/2026) |
 | [gasparegas/tkdr-recomp](https://github.com/gasparegas/tkdr-recomp) | Tekken DR (ULUS-10139) | Propia (Python y JS a WASM) | MIT | Nativo (SDL2) y Web | Arranca hasta Quick Battle |
 | [elprogramadorloco-arch/fuc-recomp](https://github.com/elprogramadorloco-arch/fuc-recomp) | Fate/unlimited codes | Fork de PSPRecomp | MIT | Windows | v0.0.5 |
 | [sal063/Ace-Combat-X-Recompilation](https://github.com/sal063/Ace-Combat-X-Recompilation) | Ace Combat X | ? | GPL-2.0 | ? | V1.5 |
@@ -90,6 +90,27 @@ Hay más proyectos que no se revisaron: Mango77x/MHForever, erreib/pure-recomp (
 tclamb/mhp2g-decomp y "PSP Web Recomp". Los trackers donde aparecen son
 [recompsoftware.com](https://recompsoftware.com/platforms/playstation-portable/) y
 [decomps.net](https://decomps.net/?platform=psp).
+
+### Cómo distribuyen los ports (revisado el 2026-10-27) [V]
+
+Se revisaron los README y la última release de cada uno. Hay dos modelos: o el proyecto publica el
+código del juego ya compilado, o el jugador lo genera y lo compila en su máquina, normalmente con un
+launcher que lo automatiza.
+
+| Proyecto | Qué publica | Quién compila el código del juego |
+|---|---|---|
+| Yakumo (v0.7.5) | Binarios para Windows (ZIP y ZIP portátil), Linux (Flatpak y `.tar.gz`), macOS (`.dmg`) y Android (APK de 193 MB) | **El proyecto.** `profiles/mhp3rd/README.md`, "Release builds": la release "contains the program with the recompiled code and all overlay libraries, but no game data". La primera vez, el programa valida el ISO del jugador y prepara los datos. También se puede compilar desde el código. |
+| gow-psp-recomp (v1.3.1) | `GoW_PSP_Launcher-v1.3.1.zip` (48 MB, PyInstaller, sin firmar) | **El jugador.** El launcher detecta los ISO o CHD por disc ID, descarga una vez un compilador portátil (llvm-mingw, CMake y Ninja: 246 MB, 550 MB descomprimido; sin Visual Studio ni permisos de administrador) y compila: "about 4 minutes for the first game". Todo queda en `GoW_PSP_data`, junto al ejecutable. |
+| fuc-recomp (v0.0.5) | Solo actualizaciones del launcher (`update.zip` y un manifiesto) | **El jugador.** `run.bat` descarga llvm-mingw (fijado y con SHA-256), valida el ISO por tamaño y hash, saca el EBOOT descifrado con un PPSSPP que aporta el usuario y escribe una "private local build". |
+| tkdr-recomp | Nada compilado | **El jugador**, en local o en el navegador: la página web traduce el EBOOT a WebAssembly en el propio navegador. Avisan de no publicar nunca `build/native` ni `build/web`, porque "contain the translated code". |
+| Ace Combat X (V1.5) | `release.rar` (7 MB) | El README dice que `generated/` no se versiona y que lo construye el usuario; no se abrió el `.rar` para ver qué trae [?]. |
+
+- La mayoría sigue la regla de `CLAUDE.md` §1: el código traducido solo existe en la máquina del
+  jugador. Yakumo, la referencia principal, es la excepción.
+- **El tiempo de compilación cambia con el emisor.** GoW emite una función de C por cada función
+  del juego y compila en unos 4 minutos. El emisor de PSPRecomp (F07b) hace de cada palabra de
+  código una entrada de un grafo global: `mgp_main` son 121 unidades (116 MB), unos 18 minutos con
+  Clang a `-j4`, y más con MSVC.
 
 ### PSPRecomp / Yakumo: lo relevante [V]
 

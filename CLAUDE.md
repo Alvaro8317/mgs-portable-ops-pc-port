@@ -438,7 +438,10 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
 
 ### Abiertas
 
-- Ninguna por ahora.
+- **Cómo se distribuye el port (F22)**: publicar el código del juego ya compilado, como Yakumo, o
+  que el jugador lo genere y compile una vez en su máquina con un launcher, como gow-psp-recomp.
+  Lo segundo es lo que pide hoy §1. Las opciones están en la ficha de F22 de `docs/PLAN.md` y en
+  `docs/RESEARCH.md` §3. La decide el usuario.
 
 ---
 
