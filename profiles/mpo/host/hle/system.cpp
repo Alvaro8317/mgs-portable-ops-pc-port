@@ -80,6 +80,7 @@ System::System(psprecomp::Runtime &runtime, const SystemConfig &config)
     io_ = std::make_unique<IoManager>(*this);
     interrupts_ = std::make_unique<Interrupts>(*this);
     display_ = std::make_unique<Display>(*this, *interrupts_);
+    ctrl_ = std::make_unique<Ctrl>(*this, *display_);
     hle_->set_unimplemented_policy(config.unimplemented);
     bridge_.set_callback_return(alloc_kernel_scratch(16u, "hle-callback-return"));
     bridge_.set_thread_return_handler(
@@ -106,6 +107,7 @@ System::System(psprecomp::Runtime &runtime, const SystemConfig &config)
 
 System::~System() {
     // The kernel abandons the fibers; nothing of the guest runs past here.
+    ctrl_.reset();
     display_.reset();
     interrupts_.reset();
     io_.reset();
@@ -126,6 +128,7 @@ void System::register_hle() {
     io_->register_hle();
     interrupts_->register_hle();
     display_->register_hle();
+    ctrl_->register_hle();
 }
 
 bool System::mount(std::string *error) {

@@ -207,6 +207,7 @@ void Display::leave_vblank() {
     flipped_this_frame_ = false;
     in_vblank_ = false;
     schedule_at(frame_end_ns(frame_ + 1u) - kVblankNs, [this] { enter_vblank(); });
+    if (on_vblank_end_) on_vblank_end_();
 }
 
 void Display::flip() {

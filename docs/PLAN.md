@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b → F11b → F13 → F14b → F15b → F16b → F17b → F18b → F19 → F20b → F21 → F22 | en serie |
+| — | F10b ✅ → F11b → F13 → F14b → F15b → F16b → F17b → F18b → F19 → F20b → F21 → F22 | en serie |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -96,7 +96,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F08b | Kernel HLE: integración, módulos y arranque | M1 | ✅ hecha (ola 3) |
 | F09 | IO, tiempo y vblank | M2 | ✅ hecha |
 | F10a | Ventana, presentación e input (autónomo) | M2 | ✅ hecha (ola 2) |
-| F10b | Presentación e input en el juego | M2 | ⬜ pendiente |
+| F10b | Presentación e input en el juego | M2 | ✅ hecha |
 | F11a | GE por software: reproductor de `.ppdmp` y 2D | M2 | ✅ hecha (ola 1) |
 | F11b | `sceGe*` en el juego y stub de `sceMpeg` | M2 | ⬜ pendiente |
 | F12 | GE por software: completo | M2 | ✅ hecha (ola 2) |
@@ -559,6 +559,18 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     `sceCtrlSetSamplingMode` es un `stub` en `hle_system.cpp`.
   - **Criterio heredado de F09**: con Start pulsado (un input grabado), la traza muestra al juego
     abriendo y leyendo `slot.dat` sin errores.
+- **Notas (F10b)**: hecha, ver `docs/sessions/F10b.md`.
+  - `sceCtrl` es `hle` (`Ctrl`, 12 NIDs), muestreado al **final** del vblank como en PPSSPP. Con
+    Start simulado (`mpo_boot --press start@12000+200`), el juego lee Start en 6 frames y abre la
+    intro 1,6 s antes.
+  - `mpo_boot --window 1` muestra cada flip en una ventana SDL a velocidad real; `--capture <dir>`
+    guarda PNG.
+  - Decidido: `SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS = "1"`, como PPSSPP. El `input.toml` del
+    usuario es `--input-map`, o si no `<config dir>/input.toml` (`%APPDATA%\mpo-pc-port`,
+    `$XDG_CONFIG_HOME/mpo-pc-port` o `~/.config/mpo-pc-port`), o si no el mapeo por defecto.
+  - **Pasan a F11b dos criterios**: "algo dibujado por el juego aparece en la ventana" y "con
+    Start, el juego abre `slot.dat`". El juego solo dibuja con el GE y `sceMpeg`, y sin el HLE del
+    GE cree que no tiene VRAM y no arranca la intro.
 
 ### F11a — GE por software: reproductor de `.ppdmp` y 2D (ola 1)
 
@@ -618,6 +630,17 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Notas (F09)**: el primer import sin HLE con `--interpreter 0` es `sceGeEdramGetAddr` (en
   `0x089C5B08`). En el bucle del título, `Main` encola unas 32 listas por segundo
   (`sceGeListEnQueue`, `UpdateStallAddr` y `DrawSync`).
+- **Notas (F10b)**: ver "Para la próxima sesión" en `docs/sessions/F10b.md`.
+  - **Criterios heredados de F09 y F10b**: con Start pulsado (`mpo_boot --press start@<ms>`), la
+    traza muestra al juego abriendo y leyendo `slot.dat` (LBN `0x39650`) sin errores; y algo
+    dibujado por el juego aparece en la ventana (`--window 1`) o en las capturas
+    (`--capture <dir>`).
+  - Hoy `sceGeEdramGetAddr` y `sceGeEdramGetSize` devuelven 0, así que el juego hace
+    `SetFrameBuf(0x00000000, 512, 5551)`. Registra un callback del GE (`sceGeSetCallback` a los
+    227 834 µs) y hace un `sceGeListSync`.
+  - Sin el GE, el juego da vueltas cada 13,95 s: `preseek` abre `MPO_OP_LONG.pmf`, pero nadie
+    llama a `sceMpeg`. Primero hay que ver si con el GE arranca el reproductor, y después
+    escribir el stub.
 
 ### F12 — GE por software: completo (ola 2)
 

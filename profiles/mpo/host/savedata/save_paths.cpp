@@ -34,6 +34,7 @@ PathEnvironment PathEnvironment::from_process() {
     PathEnvironment env;
     env.appdata = env_path("APPDATA");
     env.xdg_data_home = env_path("XDG_DATA_HOME");
+    env.xdg_config_home = env_path("XDG_CONFIG_HOME");
     env.home = env_path("HOME");
     return env;
 }
@@ -58,6 +59,16 @@ std::optional<fs::path> default_ms0_root(const PathEnvironment &env, HostOs os) 
     auto dir = default_data_dir(env, os);
     if (!dir) return std::nullopt;
     return *dir / "ms0";
+}
+
+std::optional<fs::path> default_config_dir(const PathEnvironment &env, HostOs os) {
+    if (os == HostOs::kWindows) return default_data_dir(env, os);
+    if (env.xdg_config_home && !env.xdg_config_home->empty() &&
+        env.xdg_config_home->has_root_directory()) {
+        return *env.xdg_config_home / kProjectDirName;
+    }
+    if (env.home && !env.home->empty()) return *env.home / ".config" / kProjectDirName;
+    return std::nullopt;
 }
 
 } // namespace mpo::savedata

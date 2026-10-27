@@ -4,7 +4,6 @@
 // game reads any data, registered as HleKind::kStub until their phase:
 //
 //   - sceOpenPSIDGetOpenPSID: PPSSPP's fixed id (F20b);
-//   - sceCtrlSetSamplingMode: remembers the mode (F10b);
 //   - sceUtilityGetSystemParamInt and sceImposeSetLanguageMode: PPSSPP's
 //     default system settings, English and Cross to confirm (F18b).
 //   - sceAudio channels (F16b): reserve, release, data length and volume
@@ -13,7 +12,7 @@
 //     threads (priority 0x10/0x11) spin and starve every thread below them.
 //
 // Ported from PPSSPP Core/HLE/sceUmd.cpp, scePower.cpp, sceOpenPSID.cpp,
-// sceCtrl.cpp, sceUtility.cpp and sceImpose.cpp @ v1.20.4.
+// sceUtility.cpp and sceImpose.cpp @ v1.20.4.
 
 #include <array>
 #include <memory>
@@ -26,7 +25,6 @@ namespace mpo::hle {
 namespace {
 
 constexpr std::uint32_t kErrInvalidArgument = 0x80010016u;
-constexpr std::uint32_t kErrInvalidMode = 0x80000107u;
 constexpr std::uint32_t kErrPrivRequired = 0x80000023u;
 constexpr std::uint32_t kErrInvalidSystemParam = 0x80110103u;
 
@@ -143,14 +141,6 @@ void register_system_hle(System &system) {
     stub("sceOpenPSID", 0xC69BEBCEu, "sceOpenPSIDGetOpenPSID", [&k](Ctx &c) {
         (void)k.memory().write_bytes(arg(c, 0), kOpenPsid);
         ret(c, 0u);
-    });
-    auto analog = std::make_shared<bool>(false);
-    stub("sceCtrl", 0x1F4011E6u, "sceCtrlSetSamplingMode", [analog](Ctx &c) {
-        const std::uint32_t mode = arg(c, 0);
-        if (mode > 1u) return ret(c, kErrInvalidMode);
-        const std::uint32_t previous = *analog ? 1u : 0u;
-        *analog = mode == 1u;
-        ret(c, previous);
     });
     stub("sceUtility", 0xA5DA2406u, "sceUtilityGetSystemParamInt", [&k](Ctx &c) {
         std::uint32_t value = 0;

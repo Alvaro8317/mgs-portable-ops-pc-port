@@ -7,8 +7,10 @@
 // starts 0.7315 ms before the end of each one. Entering the vblank counts the
 // frame (vcount, accumulated hcount), runs the vblank interrupt handlers,
 // wakes the threads in sceDisplayWaitVblank* and latches the framebuffer
-// that sceDisplaySetFrameBuf queued for the next frame. Presenting it is
-// F10b's: set_flip_handler() gets each flip.
+// that sceDisplaySetFrameBuf queued for the next frame. Each flip goes to
+// set_flip_handler() (F10b presents it), and leaving the vblank runs the
+// vblank-end handler (sceCtrl samples there, like PPSSPP's
+// DisplayFireVblankEnd).
 //
 // Interrupts keeps the sub-interrupt handlers (sceKernelRegisterSubIntrHandler)
 // of each interrupt and runs the enabled ones, in sub-interrupt order, inline
@@ -92,6 +94,10 @@ public:
     void set_flip_handler(std::function<void(const Framebuffer &)> handler) {
         on_flip_ = std::move(handler);
     }
+    // Called when each vblank ends (DisplayFireVblankEnd: __CtrlVblank).
+    void set_vblank_end_handler(std::function<void()> handler) {
+        on_vblank_end_ = std::move(handler);
+    }
 
     // 1001/60 ms and the vblank's 0.7315 ms, in nanoseconds.
     static constexpr std::uint64_t kFrameNumeratorNs = 1'001'000'000ull; // / 60
@@ -137,6 +143,7 @@ private:
     std::uint32_t hold_mode_ = 0;
     std::uint64_t flips_ = 0;
     std::function<void(const Framebuffer &)> on_flip_;
+    std::function<void()> on_vblank_end_;
 };
 
 } // namespace mpo::hle

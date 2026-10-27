@@ -15,6 +15,7 @@
 // dispatches, that HLE calls advance by the cycles they eat, and that jumps to
 // the next event when every thread waits (game_clock.hpp). The vblank runs on
 // it from the start (Display), and IO reads the user's ISO (IoManager).
+// The controller (F10b) is sampled at the end of each vblank (Ctrl).
 
 #pragma once
 
@@ -26,6 +27,7 @@
 #include <vector>
 
 #include "hle/cpu_bridge.hpp"
+#include "hle/ctrl.hpp"
 #include "hle/display.hpp"
 #include "hle/game_clock.hpp"
 #include "hle/hle_table.hpp"
@@ -74,6 +76,7 @@ public:
     [[nodiscard]] IoManager &io() noexcept { return *io_; }
     [[nodiscard]] Display &display() noexcept { return *display_; }
     [[nodiscard]] Interrupts &interrupts() noexcept { return *interrupts_; }
+    [[nodiscard]] Ctrl &ctrl() noexcept { return *ctrl_; }
     [[nodiscard]] const SystemConfig &config() const noexcept { return config_; }
 
     // Mounts the ISO and the memory stick of the config (boot() does it too).
@@ -107,12 +110,13 @@ private:
     std::unique_ptr<IoManager> io_;
     std::unique_ptr<Interrupts> interrupts_;
     std::unique_ptr<Display> display_;
+    std::unique_ptr<Ctrl> ctrl_;
     bool mounted_ = false;
     std::map<std::uint32_t, std::uint32_t> utility_modules_;
 };
 
 // The HLE groups (hle_kernel.cpp, hle_time.cpp, hle_system.cpp; IoManager,
-// Display and Interrupts register their own).
+// Display, Interrupts and Ctrl register their own).
 void register_kernel_hle(System &system);
 void register_module_hle(System &system);
 void register_time_hle(System &system);

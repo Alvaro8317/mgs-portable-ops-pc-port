@@ -3,13 +3,15 @@
 # mpo_hle (F08b): mpo_kernel on the PSPRecomp CPU (one dispatch loop per PSP
 # thread fiber), the HLE import table (histogram, trace, visible failure of
 # unimplemented NIDs), the kernel NIDs and the module loader; F09 adds IO on
-# mpo_io, the game clock and RTC, the vblank (sceDisplay) and interrupts.
+# mpo_io, the game clock and RTC, the vblank (sceDisplay) and interrupts;
+# F10b, sceCtrl.
 # Like mpo_recomp it only sees the framework headers: whatever links it also
 # links psprecomp_core (an object library) once.
 
 add_library(mpo_hle STATIC
     cpu_bridge.cpp
     game_clock.cpp
+    hle_ctrl.cpp
     hle_display.cpp
     hle_io.cpp
     hle_kernel.cpp
@@ -23,7 +25,8 @@ add_library(mpo_hle STATIC
 target_include_directories(mpo_hle PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_include_directories(mpo_hle SYSTEM PUBLIC
     $<TARGET_PROPERTY:psprecomp_core,INTERFACE_INCLUDE_DIRECTORIES>)
-target_link_libraries(mpo_hle PUBLIC mpo_kernel mpo_io)
+# mpo_frontend (F10a, no SDL): SceCtrlData and the button masks for sceCtrl.
+target_link_libraries(mpo_hle PUBLIC mpo_kernel mpo_io mpo_frontend)
 if(MSVC)
     # C4324: CpuBridge keeps PSPRecomp's alignas(16) AllegrexContext per thread.
     target_compile_options(mpo_hle PUBLIC /wd4324)
@@ -39,7 +42,13 @@ set(MPO_GENERATED_MODULES_DIR "" CACHE PATH
 if(TARGET mpo_generated_mgp_main)
     include(${PROJECT_SOURCE_DIR}/third_party/ppsspp_cpu/ppsspp_vfpu_tables.cmake)
     add_executable(mpo_boot boot_main.cpp)
-    target_link_libraries(mpo_boot PRIVATE psprecomp_core mpo_hle mpo_recomp mpo_generated_mgp_main)
+    target_link_libraries(mpo_boot PRIVATE psprecomp_core mpo_hle mpo_recomp mpo_generated_mgp_main
+                          mpo_ge_replay mpo_savedata)
+    # F10b: --window shows the display and reads the controls with SDL.
+    if(TARGET mpo_frontend_sdl)
+        target_link_libraries(mpo_boot PRIVATE mpo_frontend_sdl)
+        target_compile_definitions(mpo_boot PRIVATE MPO_BOOT_SDL=1)
+    endif()
     target_compile_definitions(mpo_boot PRIVATE MPO_DEFAULT_VFPU_TABLES="${MPO_VFPU_TABLES_DIR}")
     mpo_target_warnings(mpo_boot)
     foreach(mpo_module IN ITEMS sound2 kjfs zlibdec)

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Default host folder for ms0:/ (F18a).
+// Default host folders: ms0:/ (F18a) and the user's configuration (F10b).
 //
 //   Windows: %APPDATA%\mpo-pc-port\ms0
 //   Linux and others: $XDG_DATA_HOME/mpo-pc-port/ms0, or
@@ -8,6 +8,9 @@
 //                     unset or not absolute (XDG Base Directory spec).
 // Saves then live in <ms0>/PSP/SAVEDATA/, as on a memory stick. F18b passes
 // this root to the IO of F09 (mpo_boot --ms0) unless the user gives one.
+//
+// The configuration (input.toml) goes to %APPDATA%\mpo-pc-port on Windows
+// and to $XDG_CONFIG_HOME/mpo-pc-port (or ~/.config/mpo-pc-port) elsewhere.
 //
 // The environment is injected, so tests never touch the real folder.
 
@@ -32,9 +35,10 @@ enum class HostOs : unsigned char { kWindows, kPosix };
 
 // The variables the default depends on; unset ones are empty.
 struct PathEnvironment {
-    std::optional<std::filesystem::path> appdata;       // %APPDATA%
-    std::optional<std::filesystem::path> xdg_data_home; // $XDG_DATA_HOME
-    std::optional<std::filesystem::path> home;          // $HOME
+    std::optional<std::filesystem::path> appdata;         // %APPDATA%
+    std::optional<std::filesystem::path> xdg_data_home;   // $XDG_DATA_HOME
+    std::optional<std::filesystem::path> xdg_config_home; // $XDG_CONFIG_HOME
+    std::optional<std::filesystem::path> home;            // $HOME
 
     // Reads the process environment (wide on Windows, without C4996).
     static PathEnvironment from_process();
@@ -47,5 +51,9 @@ struct PathEnvironment {
 // <data dir>/mpo-pc-port/ms0.
 [[nodiscard]] std::optional<std::filesystem::path> default_ms0_root(const PathEnvironment &env,
                                                                     HostOs os = current_host_os());
+
+// <config dir>/mpo-pc-port, or nothing when the environment has no usable base.
+[[nodiscard]] std::optional<std::filesystem::path>
+default_config_dir(const PathEnvironment &env, HostOs os = current_host_os());
 
 } // namespace mpo::savedata

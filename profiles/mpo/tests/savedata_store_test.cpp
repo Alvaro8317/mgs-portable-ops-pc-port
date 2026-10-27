@@ -713,6 +713,21 @@ void test_default_paths() {
     CHECK(windows.has_value() && windows->filename() == "ms0" &&
           windows->parent_path().filename() == "mpo-pc-port" &&
           windows->parent_path().parent_path() == fs::path("Roaming"));
+
+    // The configuration (input.toml, F10b): XDG_CONFIG_HOME, ~/.config, or
+    // the same %APPDATA% folder as the data on Windows.
+    CHECK(sd::default_config_dir(env, sd::HostOs::kPosix) ==
+          fs::path("/home/user/.config/mpo-pc-port"));
+    env.xdg_config_home = fs::path("relative/conf"); // invalid per XDG: ignored
+    CHECK(sd::default_config_dir(env, sd::HostOs::kPosix) ==
+          fs::path("/home/user/.config/mpo-pc-port"));
+    env.xdg_config_home = fs::path("/conf");
+    CHECK(sd::default_config_dir(env, sd::HostOs::kPosix) == fs::path("/conf/mpo-pc-port"));
+    CHECK(sd::default_config_dir(env, sd::HostOs::kWindows) ==
+          sd::default_data_dir(env, sd::HostOs::kWindows));
+    env.home.reset();
+    env.xdg_config_home.reset();
+    CHECK(!sd::default_config_dir(env, sd::HostOs::kPosix).has_value());
     // The process environment is only read, never used for files here.
     (void)sd::PathEnvironment::from_process();
 }

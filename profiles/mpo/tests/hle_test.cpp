@@ -15,7 +15,8 @@
 // module_start threads with and without waiting, unload), a fake firmware
 // module and the memory adapter; F09: the vblank and a vblank interrupt
 // handler, IO on a synthetic ISO (async on the helper thread, sync, listing)
-// and the RTC.
+// and the RTC; F10b: sceCtrl (sampling at the vblank end, blocking reads,
+// peek, latch, negative reads, analog mode).
 
 #include <cstdint>
 #include <cstdio>
@@ -114,6 +115,12 @@ enum Stub : std::uint32_t {
     kRtcGetCurrentTick,
     kLibcTime,
     kRtcGetClockLocal,
+    // F10b.
+    kCtrlSetSamplingMode,
+    kCtrlReadBufferPositive,
+    kCtrlPeekBufferPositive,
+    kCtrlReadBufferNegative,
+    kCtrlReadLatch,
     kStubCount,
 };
 constexpr StubImport kStubImports[kStubCount] = {
@@ -134,6 +141,9 @@ constexpr StubImport kStubImports[kStubCount] = {
     {"sceDisplay", 0x9C6EAAD7u},       {"InterruptManager", 0xCA04A2B9u},
     {"InterruptManager", 0xFB8E22ECu}, {"sceRtc", 0x3F7AD767u},
     {"UtilsForUser", 0x27CC57F0u},     {"sceRtc", 0xE7C27D1Bu},
+    {"sceCtrl", 0x1F4011E6u},          {"sceCtrl", 0x1F803938u},
+    {"sceCtrl", 0x3A622550u},          {"sceCtrl", 0x60B81F86u},
+    {"sceCtrl", 0x0B588501u},
 };
 constexpr std::uint32_t stub(Stub s) {
     return kStubs + 8u * static_cast<std::uint32_t>(s);
@@ -840,6 +850,101 @@ void test_vblank_and_interrupts() {
     CHECK(!f.system->kernel().in_interrupt());
 }
 
+// ---- F10b: sceCtrl ------------------------------------------------------------
+
+// The controller is sampled when each vblank ends. The first read gets the
+// buffer __CtrlInit leaves, the second blocks until the first sample; after
+// 150 ms (Cross held from 100 ms) peek, the latch, a negative read and the
+// size check.
+void test_ctrl() {
+    Fixture f({}, true);
+    psprecomp::Runtime &rt = f.runtime;
+    f.system->ctrl().set_sampler([](std::uint64_t now) {
+        mpo::frontend::SceCtrlData data;
+        if (now >= 100'000u && now < 200'000u) data.buttons = mpo::frontend::ctrl::kCross;
+        // Bits a game must not see (CTRL_MASK_USER), and the stick.
+        data.buttons |= 0x01000000u;
+        data.analog[0][0] = 200;
+        data.analog[0][1] = 50;
+        return data;
+    });
+
+    Asm main(rt, kCode);
+    const std::uint32_t entry = main.here();
+    main.enter();
+    main.li(s7, kData);
+    main.li(a0, 1u); // Analog.
+    main.call(kCtrlSetSamplingMode);
+    main.sw(v0, 0, s7);
+    main.li(a0, kData + 0x100u);
+    main.li(a1, 8u);
+    main.call(kCtrlReadBufferPositive);
+    main.sw(v0, 4, s7);
+    main.li(a0, kData + 0x180u);
+    main.li(a1, 8u);
+    main.call(kCtrlReadBufferPositive); // Blocks until the first sample.
+    main.sw(v0, 8, s7);
+    main.call(kGetSystemTimeWide);
+    main.sw(v0, 12, s7);
+    main.li(a0, 150'000u);
+    main.call(kDelayThread);
+    main.li(a0, kData + 0x200u);
+    main.li(a1, 1u);
+    main.call(kCtrlPeekBufferPositive);
+    main.sw(v0, 16, s7);
+    main.li(a0, kData + 0x280u);
+    main.call(kCtrlReadLatch);
+    main.sw(v0, 20, s7);
+    main.li(a0, kData + 0x300u);
+    main.li(a1, 1u);
+    main.call(kCtrlReadBufferNegative);
+    main.sw(v0, 24, s7);
+    main.li(a0, kData + 0x380u);
+    main.li(a1, 65u); // More than the 64 buffers.
+    main.call(kCtrlPeekBufferPositive);
+    main.sw(v0, 28, s7);
+    main.li(a0, 0u); // Back to digital.
+    main.call(kCtrlSetSamplingMode);
+    main.sw(v0, 32, s7);
+    main.li(t0, 1u);
+    main.sw(t0, 36, s7);
+    main.leave();
+
+    (void)start_thread(*f.system, "ctrl", entry, 0x20u);
+    CHECK(f.system->run(400'000u) == mk::RunResult::kDeadline);
+    CHECK_EQ(f.word(kData + 36u), 1u);
+    CHECK_EQ(f.word(kData), 0u);      // It was digital.
+    CHECK_EQ(f.word(kData + 4u), 1u); // The buffer __CtrlInit leaves.
+    CHECK_EQ(f.word(kData + 0x100u), 0u);
+    CHECK_EQ(f.word(kData + 0x104u), 0u);
+    CHECK_EQ(f.word(kData + 0x108u), 0x80808080u);
+    // The first sample, when the first vblank ends at 1001/60 ms (16 684 us).
+    CHECK_EQ(f.word(kData + 8u), 1u);
+    CHECK_EQ(f.word(kData + 0x180u), 16'684u);
+    CHECK_EQ(f.word(kData + 0x184u), 0u);
+    CHECK_EQ(f.word(kData + 0x188u), 0x808032C8u); // Analog: x 200, y 50; stick 2 centred.
+    CHECK_EQ(f.word(kData + 0x18Cu), 0u);
+    CHECK(f.word(kData + 12u) >= 16'684u && f.word(kData + 12u) < 16'800u);
+    // Peek at ~167 ms: Cross, and only the user bits.
+    CHECK_EQ(f.word(kData + 16u), 1u);
+    CHECK_EQ(f.word(kData + 0x204u), mpo::frontend::ctrl::kCross);
+    CHECK_EQ(f.word(kData + 0x208u), 0x808032C8u);
+    // The latch counts every sample since boot: Cross was made and pressed.
+    CHECK(f.word(kData + 20u) >= 9u && f.word(kData + 20u) <= 10u);
+    CHECK_EQ(f.word(kData + 0x280u), mpo::frontend::ctrl::kCross); // make
+    CHECK_EQ(f.word(kData + 0x284u), 0u);                          // break
+    CHECK_EQ(f.word(kData + 0x288u), mpo::frontend::ctrl::kCross); // press
+    CHECK_EQ(f.word(kData + 0x28Cu), 0xFFFFFFFFu);                 // release
+    // A negative read of the newest buffer.
+    CHECK_EQ(f.word(kData + 24u), 1u);
+    CHECK_EQ(f.word(kData + 0x304u), ~mpo::frontend::ctrl::kCross);
+    CHECK_EQ(f.word(kData + 28u), 0x80000104u); // SCE_KERNEL_ERROR_INVALID_SIZE
+    CHECK_EQ(f.word(kData + 32u), 1u);          // It was analog.
+    CHECK(!f.system->ctrl().analog());
+    // 400 ms at 59.94 Hz: 23 vblanks have ended.
+    CHECK_EQ(f.system->ctrl().samples(), 23u);
+}
+
 // IO from a synthetic ISO: async open and read on the fd's helper thread,
 // poll, a synchronous seek and read, close, a missing file, a listing.
 void test_io() {
@@ -1034,6 +1139,7 @@ int main() {
     run_test("test_module_loader", &test_module_loader);
     run_test("test_runtime_memory", &test_runtime_memory);
     run_test("test_vblank_and_interrupts", &test_vblank_and_interrupts);
+    run_test("test_ctrl", &test_ctrl);
     run_test("test_io", &test_io);
     run_test("test_rtc", &test_rtc);
     std::printf("mpo_hle_test: %d checks, %d failures\n", g_checks, g_failures);
