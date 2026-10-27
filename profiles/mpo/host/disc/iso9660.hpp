@@ -25,6 +25,9 @@ struct IsoEntry {
     std::uint32_t lba = 0;
     std::uint32_t size = 0;
     bool directory = false;
+    // Position of the directory record in a depth-first walk of the disc, so
+    // a listing can keep the on-disc order after entries() is sorted by path.
+    std::uint32_t record_index = 0;
 };
 
 struct IsoVolumeInfo {
@@ -55,6 +58,9 @@ public:
     // Reads `out.size()` bytes of a file starting at `offset`.
     bool read(const IsoEntry &entry, std::uint64_t offset, std::span<std::uint8_t> out,
               std::string &error);
+    // Reads `out.size()` bytes at an absolute byte offset of the image (raw
+    // sector access: sce_lbn paths, the umd0: block device).
+    bool read_at(std::uint64_t offset, std::span<std::uint8_t> out, std::string &error);
     // Reads a whole file; refuses files larger than `max_size`.
     bool read_all(const IsoEntry &entry, std::uint32_t max_size, std::vector<std::uint8_t> &out,
                   std::string &error);

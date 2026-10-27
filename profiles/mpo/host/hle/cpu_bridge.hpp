@@ -15,6 +15,10 @@
 // the recompiled code (the runtime's starvation hook, every
 // `preemption_interval` dispatches) call Kernel::preemption_point().
 //
+// Interrupt handlers (vblank) run inline in the kernel event that raises them,
+// in a nested run_until() with no PSP thread (run_interrupt); visibility
+// points inside them do not preempt.
+//
 // A runtime stop (an unimplemented import, a guest memory fault) is fatal: the
 // thread parks itself and asks the kernel to stop, so Kernel::run() returns
 // kStopped and the host reads Runtime::stop_reason().
@@ -66,6 +70,16 @@ public:
         on_thread_start_ = std::move(handler);
     }
 
+    // Runs an interrupt handler (F09) on the stack of whoever calls it (the
+    // scheduler or the fiber of the interrupted thread, inside a kernel event),
+    // like PPSSPP's __RunOnePendingInterrupt on the idle thread: a fresh
+    // context with $a0/$a1, `gp` and `sp`, returning to the host trap. The
+    // interrupted context is saved and restored around it. A runtime stop
+    // asks the kernel to stop instead of parking (there may be no fiber).
+    std::uint32_t run_interrupt(kernel::Kernel &kernel, std::uint32_t entry, std::uint32_t a0,
+                                std::uint32_t a1, std::uint32_t gp, std::uint32_t sp);
+    [[nodiscard]] std::uint64_t interrupts() const noexcept { return interrupts_; }
+
     // kernel::HostHooks
     std::uint32_t run_thread(kernel::Kernel &kernel, const kernel::ThreadStart &start) override;
     std::uint32_t call_guest(kernel::Kernel &kernel, kernel::Uid thread, std::uint32_t entry,
@@ -100,6 +114,7 @@ private:
     std::function<void()> on_tick_;
     std::uint64_t switches_ = 0;
     std::uint64_t guest_calls_ = 0;
+    std::uint64_t interrupts_ = 0;
 };
 
 } // namespace mpo::hle

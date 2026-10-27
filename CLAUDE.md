@@ -245,7 +245,7 @@ La PSP-1000 es el objetivo: el juego es de 2006 y no usa la RAM extra.
 
 | Región | Rango | Notas |
 |---|---|---|
-| Scratchpad | `0x00010000–0x00013FFF` | 16 KiB |
+| Scratchpad | `0x00010000–0x00013FFF` | 16 KiB. Mapeado en la `GuestMemory` del framework desde F09 (`mgp_main` lo usa). |
 | VRAM (EDRAM) | `0x04000000–0x041FFFFF` | 2 MiB. Los framebuffers y texturas viven aquí. Ojo con los espejos y con `EdramSetAddrTranslation`. |
 | RAM de kernel | `0x08000000–0x087FFFFF` | 8 MiB. El HLE puede usarla para sus estructuras. |
 | RAM de usuario | `0x08800000–0x09FFFFFF` | 24 MiB. `mgp_main` es un PRX relocatable, y PPSSPP lo carga en `0x08804000` (`0x2F7800` bytes). |
@@ -418,9 +418,9 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
      `--prefix`, filtro `SHF_EXECINSTR`, `vsgn`) y nuestros parches (`framework/patches/`: pistas de
      análisis y stubs de imports);
    - el submódulo apunta a esa rama, y cada parche genérico se puede enviar upstream como PR;
-   - **hecho en F07b**: `mpo` está en `Alvaro8317/PSPRecomp`. Desde F08b, la punta es `b0f1937`
-     (15 commits sobre `f6e7d41`), con el bucle de dispatch por hilo, el arreglo de los slots de
-     import y los iteradores fuera de `invoke_import` durante la llamada. Los parches 0001 y 0002 ya están dentro como commits, así que
+   - **hecho en F07b**: `mpo` está en `Alvaro8317/PSPRecomp`. Desde F09, la punta es `92c9425`
+     (16 commits sobre `f6e7d41`), con el bucle de dispatch por hilo, el arreglo de los slots de
+     import, los iteradores fuera de `invoke_import` durante la llamada y el scratchpad. Los parches 0001 y 0002 ya están dentro como commits, así que
      `framework/patches/` queda solo como registro;
    - se descartaron dos alternativas:
      - una serie de parches sobre upstream, porque sería frágil con todo lo que hay que traer de

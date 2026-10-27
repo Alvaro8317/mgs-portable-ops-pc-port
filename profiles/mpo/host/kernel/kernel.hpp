@@ -344,6 +344,10 @@ public:
                                       std::uint32_t timeout_addr, bool process_callbacks,
                                       std::uint32_t provisional_result = 0);
     void resume_from_wait(Uid thread, std::uint32_t result);
+    // HLEKernel::ResumeFromWait: makes the thread ready with `result` but does
+    // not reschedule; a better thread runs at the next reschedule (the next
+    // blocking call or visibility point), as in PPSSPP after the HLE returns.
+    void wake_from_wait(Uid thread, std::uint32_t result);
     [[nodiscard]] bool is_waiting_for(Uid thread, WaitType type, Uid wait_id) const;
     // hleDelayResult: returns `result` to the current thread after `usec`.
     std::uint32_t delay_result(std::uint32_t result, std::uint32_t usec);
@@ -356,6 +360,17 @@ public:
     // Notifies a callback from host code (power, UMD, exit), like PPSSPP's
     // __KernelNotifyCallback.
     void notify_callback_from_host(Uid callback, std::uint32_t notify_arg);
+    // Wait types owned by other HLE modules (vblank, async IO...), which a
+    // callback may interrupt: PPSSPP's __KernelRegisterWaitTypeFuncs. `begin`
+    // runs when a callback starts on a thread that waits with `type` (the
+    // module stops counting it as a waiter); `end` when the callback returns:
+    // true wakes the thread with `result`, false keeps it waiting (the module
+    // counts it again). Neither may block or switch threads.
+    struct WaitTypeHooks {
+        std::function<void(Uid thread)> begin;
+        std::function<bool(Uid thread, std::uint32_t &result)> end;
+    };
+    void set_wait_type_hooks(WaitType type, WaitTypeHooks hooks);
 
     // A UID from the kernel's object pool for an object the host keeps itself
     // (F08b: loaded modules, which PPSSPP keeps in the same pool), so it never

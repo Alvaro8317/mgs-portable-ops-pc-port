@@ -94,7 +94,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F07b | Generación AOT, intérprete y difftest del emisor | M1 | ✅ hecha (ola 2) |
 | F08a | Primitivas del kernel sobre minicoro | M1 | ✅ hecha (ola 1) |
 | F08b | Kernel HLE: integración, módulos y arranque | M1 | ✅ hecha (ola 3) |
-| F09 | IO, tiempo y vblank | M2 | ⬜ pendiente |
+| F09 | IO, tiempo y vblank | M2 | ✅ hecha |
 | F10a | Ventana, presentación e input (autónomo) | M2 | ✅ hecha (ola 2) |
 | F10b | Presentación e input en el juego | M2 | ⬜ pendiente |
 | F11a | GE por software: reproductor de `.ppdmp` y 2D | M2 | ✅ hecha (ola 1) |
@@ -499,6 +499,17 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     `sceImposeSetLanguageMode`) se cubren aquí como `stub`, con los valores por defecto de PPSSPP,
     para poder llegar a `slot.dat`. Se completan en F10b (ctrl) y F18b (parámetros del sistema).
 
+- **Notas (F09)**: hecha, ver `docs/sessions/F09.md`.
+  - La IO (`mpo_io` + `IoManager`), el tiempo (`GameClock`, `sceRtc`), el vblank (`Display`) y las
+    interrupciones (`Interrupts`) son `hle`.
+  - Con el intérprete y `--unimplemented continue`, el juego lee del ISO sin errores los módulos,
+    el árbol del disco, las etapas `init`, `r_main01` y `title` y el video de la intro, con 1 198
+    vblanks en 20 s.
+  - **`slot.dat` todavía no**: el juego espera Start en el bucle del título. Pasa a criterio de
+    F10b y F11b.
+  - Para llegar ahí hizo falta mapear el scratchpad en el framework (`92c9425` en `mpo`) y un
+    `sceAudio` mínimo como `stub` (la salida bloqueante espera lo que duran sus muestras).
+
 ### F10a — Ventana, presentación e input, autónomo (ola 2)
 
 - **Objetivo**: una ventana SDL3 que presente un framebuffer de la PSP y lea los controles, sin el
@@ -517,7 +528,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     que hay que reconfigurar con `-DMPO_SDL3_AUDIO_ONLY=OFF`.
   - La CI de Linux instala `libx11-dev` y `libxext-dev`. Cada extensión de X11 se activa solo si
     está su cabecera.
-  - **Pendiente del usuario**: verlo a ojo y probar un mando real (procedimiento en la nota).
+  - **Mando real probado por el usuario** (2026-10-26): un Xbox 360 en Windows. Todos los botones,
+    los gatillos (umbral 0,75) y el stick salen bien, y al desconectarlo se sueltan los botones
+    (`analysis/f10a/f10a-mando*.txt`, en local).
+  - **Pendiente del usuario**: ver a ojo los framebuffers de prueba (procedimiento en la nota).
 
 ### F10b — Presentación e input en el juego
 
@@ -538,6 +552,13 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     128), los latches y el anillo de 64 buffers, como `__CtrlUpdateLatch` de PPSSPP.
   - Falta decidir `SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS` (sin él, SDL descarta el mando cuando
     la ventana no tiene foco) y de dónde se carga el `input.toml` del usuario.
+- **Notas (F09)**: ver "Para la próxima sesión" en `docs/sessions/F09.md`.
+  - El flip llama a `Display::set_flip_handler`; el framebuffer que se aplica está en
+    `Display::framebuffer()`.
+  - `sceCtrlReadBufferPositive` es lo primero que pide `Main` en cada frame del título.
+    `sceCtrlSetSamplingMode` es un `stub` en `hle_system.cpp`.
+  - **Criterio heredado de F09**: con Start pulsado (un input grabado), la traza muestra al juego
+    abriendo y leyendo `slot.dat` sin errores.
 
 ### F11a — GE por software: reproductor de `.ppdmp` y 2D (ola 1)
 
@@ -594,6 +615,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     desde la misma unidad que los stubs. Sin el parche 0002 de F06, esas llamadas nunca llegan al
     HLE.
 
+- **Notas (F09)**: el primer import sin HLE con `--interpreter 0` es `sceGeEdramGetAddr` (en
+  `0x089C5B08`). En el bucle del título, `Main` encola unas 32 listas por segundo
+  (`sceGeListEnQueue`, `UpdateStallAddr` y `DrawSync`).
+
 ### F12 — GE por software: completo (ola 2)
 
 - **Objetivo**: que el renderer de referencia cubra todo lo que usa el juego, según F05.
@@ -630,8 +655,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     - el test de BOUNDINGBOX, que hoy siempre responde "visible".
 - **Notas (ola 2)**: hecha, ver `docs/sessions/F12.md`. Los 4 dumps 3D quedan con 0 comandos
   `unsupported` y los 23 `features` de `ge_usage.py` tienen camino de código.
-  - **Falta la comparación por píxel contra PPSSPP**: el usuario aporta las capturas, al menos de
-    `mission1_1` y `cutscene_1` (procedimiento en la nota).
+  - **Comparación por píxel contra PPSSPP hecha** (2026-10-26): con las capturas del usuario de
+    `mission1_1` y `cutscene_1`, el renderer por software da **0 píxeles distintos** con
+    tolerancia 0 en las dos.
   - `[CenteredLines]` no aplica a MPO en v1.20.4, y softgpu no lo usa [V].
   - Morphing, DXT y mipmaps quedan como `unsupported` visibles.
   - **[?] Splines de un solo parche abiertos por los dos lados** (los 1 942 de MPO): los pesos de
@@ -674,6 +700,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Con un solo `Runtime`, cargar una etapa apaga la vía rápida para todo (brecha 8). Solo afecta
     al rendimiento.
   - Las 464 entradas de `mgp_main` que solo usan las etapas ya están sembradas por Ghidra.
+- **Notas (F09)**: las etapas pequeñas no siempre caen en `0x08B8F900`. `init` y `r_main01` cargan
+  en `0x08AFB800`, el primer hueco libre detrás de `mgp_main`; `title`, en `0x08B8F900`. La tabla
+  de overlays tiene que aceptar la base que le toque a cada etapa, y el corpus de cada una se
+  genera para su base real.
 
 ---
 
@@ -725,7 +755,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     las capas de validación, y corre `mpo_vulkan_renderer_test` con `MPO_VK_REQUIRE_VALIDATION=1`.
   - `mpo_vulkan_shaders_fresh` fallaba en Windows porque el checkout con `core.autocrlf` deja los
     shaders en CRLF. `compile_shaders.py` hashea las fuentes normalizadas a LF (`d7e779e`).
-  - **Pendiente del usuario**: la prueba en una GPU real en Windows (procedimiento en la nota).
+  - **Probado en una GPU real** (2026-10-26, `analysis/f14a/win-summary.md`, en local): RTX 5070 Ti
+    con MSVC 14.51. Los 11 dumps dan 0 errores de validación con 1.3 y con 1.2, y `ctest -R vulkan`
+    pasa sin saltarse. Contra `soft`, NVIDIA queda igual o más cerca que lavapipe (el mismo escalón
+    de 5 bits del blending); solo 2 píxeles de `cutscene_2` pasan de delta 25, en una arista.
 
 ### F14b — Renderer Vulkan en el juego
 
@@ -853,9 +886,11 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - `sound2` sin pistas deja el 9.8 % sin cubrir y usa `vsgn` (F06).
   - `__sceSasSetNoise` da silencio, igual que en PPSSPP. Hay que confirmarlo con la grabación.
   - Para oír audio en Linux hay que instalar `libpulse-dev`, `libpipewire-0.3-dev` o
-    `libasound2-dev` antes de configurar.
-  - **El usuario aporta** una grabación de PPSSPP del menú y de un tramo de misión con radio, en
-    `analysis/`.
+    `libasound2-dev` antes de configurar. **Hecho** (2026-10-26): el usuario instaló PipeWire,
+    Pulse y ALSA (y Wayland, EGL y libdecor), y SDL3 los detecta.
+  - **Grabaciones de referencia del usuario** (2026-10-26), en `analysis/f16b/` (local): WAV estéreo
+    de 44,1 kHz y 16 bit del menú (17,2 s) y de un tramo de misión con una llamada de radio
+    (153,8 s), y dos tramos más, `extra1` (24,3 s) y `extra2` (51,4 s).
 - **Notas (ola 3)**: `sound2` no tiene `module_start` [V]: sus hilos los arranca `mgp_main`. Lo
   primero que piden es `__sceSasInit`, `sceAudioChReserve` y el bucle `__sceSasCoreWithMix` +
   `sceAudioOutputPannedBlocking`, que son los imports pendientes más llamados (`docs/sessions/F08b.md`).
@@ -898,8 +933,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     `MediaEngine` de PPSSPP. `writeVideoImage` hace swizzle si el destino es VRAM con `0x00200000`.
   - Ningún PMF tiene mapa EP. Todos son H.264 480×272 a 29.97 fps con ATRAC3plus estéreo (752 bytes
     por frame). `ICON1.PMF` solo tiene vídeo (`docs/formats/psmf.md`).
-  - **El usuario aporta** las fuentes `flash0:/font/*.pgf` (desde su PSP o desde PPSSPP) en una
-    carpeta local ignorada por git, y la grabación de referencia del título con su vídeo.
+  - **Entregado por el usuario** (2026-10-26, local e ignorado por git):
+    - las fuentes del firmware: 18 archivos `.pgf` en `game/flash0/font/`;
+    - la grabación del título: `analysis/f17b/title_*.avi` (FFV1, 1440×816) y su WAV (estéreo,
+      44,1 kHz, 50,6 s).
   - FFmpeg en Windows: vcpkg (`ffmpeg[avcodec,swscale]`) con `MPO_FFMPEG=system`.
 - **Notas (F05)**: el decodificador real sustituye al stub de `sceMpeg`/`scePsmf` de F11.
   - La intro y el "Press Start" se muestran en tres framebuffers 8888 en `0x04000000`, `0x04088000`
@@ -1013,7 +1050,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     `epoch_offset`) y dónde se guarda la semilla.
   - Hay que comprobar con el juego las incógnitas de `apscan.md` §6: la unidad del reloj del
     cooldown y qué comprueba `0x0883754C`.
-  - **El usuario aporta** una partida en la que el AP Scan esté disponible.
+  - **Pendiente del usuario**: una partida en la que el AP Scan esté disponible (la que hay ahora
+    no lo tiene).
 
 ### F21 — Partida completa y estabilidad
 

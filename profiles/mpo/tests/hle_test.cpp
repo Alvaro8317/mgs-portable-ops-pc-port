@@ -13,11 +13,14 @@
 // continue policies, histogram), the module loader (a synthetic PRX: first
 // fit placement, relocation, exports linked as imports, imports covered,
 // module_start threads with and without waiting, unload), a fake firmware
-// module, the boot IO stub and the memory adapter.
+// module and the memory adapter; F09: the vblank and a vblank interrupt
+// handler, IO on a synthetic ISO (async on the helper thread, sync, listing)
+// and the RTC.
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <utility>
@@ -26,6 +29,7 @@
 #include "hle/system.hpp"
 #include "psprecomp/interpreter.hpp"
 #include "psprecomp/runtime.hpp"
+#include "synthetic_disc.hpp"
 
 namespace {
 
@@ -90,6 +94,26 @@ enum Stub : std::uint32_t {
     kTestExport,
     kGetModuleIdByAddress,
     kUnloadModule,
+    // F09.
+    kIoOpen,
+    kIoOpenAsync,
+    kIoRead,
+    kIoReadAsync,
+    kIoWaitAsyncCB,
+    kIoPollAsync,
+    kIoLseek32,
+    kIoClose,
+    kIoDopen,
+    kIoDread,
+    kIoDclose,
+    kGetSystemTimeWide,
+    kWaitVblankStartCB,
+    kGetVcount,
+    kRegisterSubIntr,
+    kEnableSubIntr,
+    kRtcGetCurrentTick,
+    kLibcTime,
+    kRtcGetClockLocal,
     kStubCount,
 };
 constexpr StubImport kStubImports[kStubCount] = {
@@ -100,7 +124,16 @@ constexpr StubImport kStubImports[kStubCount] = {
     {"ThreadManForUser", 0x68DA9E36u}, {"ThreadManForUser", 0xAA73C935u},
     {"sceFake", 0x12345678u},          {"ModuleMgrForUser", 0x50F0C1ECu},
     {"testlib", 0x11112222u},          {"ModuleMgrForUser", 0xD8B73127u},
-    {"ModuleMgrForUser", 0x2E0911AAu},
+    {"ModuleMgrForUser", 0x2E0911AAu}, {"IoFileMgrForUser", 0x109F50BCu},
+    {"IoFileMgrForUser", 0x89AA9906u}, {"IoFileMgrForUser", 0x6A638D83u},
+    {"IoFileMgrForUser", 0xA0B5A7C2u}, {"IoFileMgrForUser", 0x35DBD746u},
+    {"IoFileMgrForUser", 0x3251EA56u}, {"IoFileMgrForUser", 0x68963324u},
+    {"IoFileMgrForUser", 0x810C4BC3u}, {"IoFileMgrForUser", 0xB29DDF9Cu},
+    {"IoFileMgrForUser", 0xE3EB004Cu}, {"IoFileMgrForUser", 0xEB092469u},
+    {"ThreadManForUser", 0x82BC5777u}, {"sceDisplay", 0x46F186C3u},
+    {"sceDisplay", 0x9C6EAAD7u},       {"InterruptManager", 0xCA04A2B9u},
+    {"InterruptManager", 0xFB8E22ECu}, {"sceRtc", 0x3F7AD767u},
+    {"UtilsForUser", 0x27CC57F0u},     {"sceRtc", 0xE7C27D1Bu},
 };
 constexpr std::uint32_t stub(Stub s) {
     return kStubs + 8u * static_cast<std::uint32_t>(s);
@@ -204,10 +237,15 @@ struct Fixture {
     psprecomp::Runtime runtime{32u * 1024u * 1024u};
     mh::SystemConfig config;
     std::unique_ptr<mh::System> system;
-    explicit Fixture(mh::SystemConfig cfg = {}) : config(std::move(cfg)) {
+    explicit Fixture(mh::SystemConfig cfg = {}, bool vblank = false) : config(std::move(cfg)) {
         config.fiber_stack_size = 1u << 20u;
+        // Most scenarios expect the kernel to go idle: no 59.94 Hz vblank.
+        config.vblank = vblank;
         register_stubs(runtime);
         system = std::make_unique<mh::System>(runtime, config);
+    }
+    std::uint64_t dword(std::uint32_t address) {
+        return std::uint64_t{word(address)} | (std::uint64_t{word(address + 4u)} << 32u);
     }
     std::uint32_t word(std::uint32_t address) { return runtime.memory().load32(address); }
 };
@@ -729,18 +767,7 @@ void test_module_loader() {
     CHECK_EQ(modules.load(junk, "disc0:/junk.prx", 0u, false, &error), 0x80020148u);
 }
 
-void test_boot_io_and_memory() {
-    mh::BootIo io("/nonexistent-mpo-disc");
-    CHECK(io.host_path("disc0:/PSP_GAME/USRDIR/modules/a.prx") ==
-          std::filesystem::path("/nonexistent-mpo-disc") / "PSP_GAME" / "USRDIR" / "modules" /
-              "a.prx");
-    CHECK(io.host_path("umd1:PSP_GAME/x").filename() == "x");
-    CHECK(io.host_path("disc0:/../etc/passwd").empty());
-    CHECK(io.host_path("ms0:/PSP/SAVEDATA/x").empty());
-    CHECK_EQ(io.open("disc0:/missing", 1u), 0x80010002u);
-    CHECK_EQ(io.open("disc0:/missing", 2u), 0x80010016u); // write access
-    CHECK_EQ(io.close(3u), 0x80020323u);
-
+void test_runtime_memory() {
     psprecomp::Runtime runtime(32u * 1024u * 1024u);
     mh::RuntimeMemory memory(runtime.memory());
     runtime.memory().store32(0x08900000u, 0xCAFEF00Du);
@@ -751,6 +778,240 @@ void test_boot_io_and_memory() {
     CHECK(memory.translate(0x0A000000u, 4u) == nullptr);
     CHECK(memory.translate(0x09FFFFFEu, 4u) == nullptr);
     CHECK(memory.translate(0x00000000u, 4u) == nullptr);
+}
+
+// ---- F09: vblank, interrupts, IO, RTC ---------------------------------------
+
+// The vblank runs at 59.94 Hz: a thread waits three of them, and a vblank
+// sub-interrupt handler runs once per vblank in interrupt context.
+void test_vblank_and_interrupts() {
+    Fixture f({}, true);
+    psprecomp::Runtime &rt = f.runtime;
+
+    Asm handler(rt, kCode + 0x800u);
+    const std::uint32_t handler_entry = handler.here();
+    handler.li(t0, kData + 0x40u);
+    handler.lw(t1, 0, t0);
+    handler.addiu(t1, t1, 1);
+    handler.sw(t1, 0, t0);
+    handler.sw(a0, 4, t0);
+    handler.sw(a1, 8, t0);
+    handler.ret();
+
+    Asm main(rt, kCode);
+    const std::uint32_t entry = main.here();
+    main.enter();
+    main.li(s7, kData);
+    main.li(a0, 30u); // PSP_VBLANK_INTR
+    main.li(a1, 2u);
+    main.li(a2, handler_entry);
+    main.li(a3, 0x1234u);
+    main.call(kRegisterSubIntr);
+    main.sw(v0, 0, s7);
+    main.li(a0, 30u);
+    main.li(a1, 2u);
+    main.call(kEnableSubIntr);
+    main.sw(v0, 4, s7);
+    for (int i = 0; i < 3; ++i) main.call(kWaitVblankStartCB);
+    main.call(kGetVcount);
+    main.sw(v0, 8, s7);
+    main.call(kGetSystemTimeWide);
+    main.sw(v0, 12, s7);
+    main.li(t0, 1u);
+    main.sw(t0, 16, s7);
+    main.leave();
+
+    (void)start_thread(*f.system, "vblank", entry, 0x20u);
+    CHECK(f.system->run(1'000'000u) == mk::RunResult::kDeadline);
+    CHECK_EQ(f.word(kData), 0u);
+    CHECK_EQ(f.word(kData + 4u), 0u);
+    CHECK_EQ(f.word(kData + 16u), 1u);
+    CHECK_EQ(f.word(kData + 8u), 3u);
+    // The third vblank starts 3 * 1001/60 ms - 0.7315 ms in: 49 318.5 us.
+    CHECK(f.word(kData + 12u) >= 49'319u && f.word(kData + 12u) < 49'400u);
+    // 1 s at 59.94 Hz: the 60th vblank would start at 1 000 268.5 us.
+    const mh::Display &display = f.system->display();
+    CHECK_EQ(display.vcount(), 59u);
+    CHECK_EQ(f.word(kData + 0x40u), display.vcount());
+    CHECK_EQ(f.word(kData + 0x44u), 2u);      // $a0: the sub-interrupt
+    CHECK_EQ(f.word(kData + 0x48u), 0x1234u); // $a1: its argument
+    CHECK_EQ(f.system->interrupts().handled(), 59u);
+    CHECK(display.flips() >= 59u);
+    CHECK(!f.system->kernel().in_interrupt());
+}
+
+// IO from a synthetic ISO: async open and read on the fd's helper thread,
+// poll, a synchronous seek and read, close, a missing file, a listing.
+void test_io() {
+    std::vector<std::uint8_t> payload(3000);
+    for (std::size_t i = 0; i < payload.size(); ++i)
+        payload[i] = static_cast<std::uint8_t>(i * 13u);
+    const mpo::test::SyntheticIso iso = mpo::test::build_iso({
+        {"PSP_GAME/USRDIR/data.bin", payload},
+        {"PSP_GAME/USRDIR/other.bin", std::vector<std::uint8_t>(10, 1)},
+    });
+    mh::SystemConfig config;
+    config.disc_iso = mpo::test::write_temp_file("mpo_hle_test.iso", iso.bytes);
+    {
+        Fixture f(config);
+        std::string error;
+        CHECK(f.system->mount(&error));
+        psprecomp::Runtime &rt = f.runtime;
+        put_string(rt, kStrings, "disc0:/PSP_GAME/USRDIR/data.bin");
+        put_string(rt, kStrings + 0x40u, "disc0:/PSP_GAME/USRDIR/missing.bin");
+        put_string(rt, kStrings + 0x80u, "disc0:/PSP_GAME/USRDIR");
+        constexpr std::uint32_t kBuffer = kData + 0x1000u;
+        constexpr std::uint32_t kDirent = kData + 0x3000u;
+
+        Asm main(rt, kCode);
+        const std::uint32_t entry = main.here();
+        main.enter();
+        main.li(s7, kData);
+        main.li(a0, kStrings);
+        main.li(a1, 1u); // PSP_O_RDONLY
+        main.li(a2, 0u);
+        main.call(kIoOpenAsync);
+        main.move(s0, v0);
+        main.sw(v0, 0x00, s7);
+        main.move(a0, s0);
+        main.li(a1, kData + 0x80u);
+        main.call(kIoWaitAsyncCB);
+        main.sw(v0, 0x04, s7);
+        main.move(a0, s0);
+        main.li(a1, kBuffer);
+        main.li(a2, 3000u);
+        main.call(kIoReadAsync);
+        main.sw(v0, 0x08, s7);
+        main.move(a0, s0);
+        main.li(a1, kData + 0x88u);
+        main.call(kIoWaitAsyncCB);
+        main.sw(v0, 0x0C, s7);
+        main.move(a0, s0);
+        main.li(a1, kData + 0x90u);
+        main.call(kIoPollAsync);
+        main.sw(v0, 0x10, s7);
+        main.move(a0, s0);
+        main.li(a1, 2990u);
+        main.li(a2, 0u);
+        main.call(kIoLseek32);
+        main.sw(v0, 0x14, s7);
+        main.move(a0, s0);
+        main.li(a1, kBuffer + 0x1000u);
+        main.li(a2, 100u);
+        main.call(kIoRead);
+        main.sw(v0, 0x18, s7);
+        main.move(a0, s0);
+        main.call(kIoClose);
+        main.sw(v0, 0x1C, s7);
+        main.li(a0, kStrings + 0x40u);
+        main.li(a1, 1u);
+        main.li(a2, 0u);
+        main.call(kIoOpen);
+        main.sw(v0, 0x20, s7);
+        main.li(a0, kStrings + 0x80u);
+        main.call(kIoDopen);
+        main.move(s1, v0);
+        main.move(a0, s1);
+        main.li(a1, kDirent);
+        main.call(kIoDread);
+        main.sw(v0, 0x24, s7);
+        main.move(a0, s1);
+        main.li(a1, kDirent + 0x200u);
+        main.call(kIoDread);
+        main.sw(v0, 0x28, s7);
+        main.move(a0, s1);
+        main.li(a1, kDirent + 0x400u);
+        main.call(kIoDread);
+        main.sw(v0, 0x2C, s7);
+        main.move(a0, s1);
+        main.call(kIoDclose);
+        main.sw(v0, 0x30, s7);
+        main.call(kGetSystemTimeWide);
+        main.sw(v0, 0x34, s7);
+        main.li(t0, 1u);
+        main.sw(t0, 0x38, s7);
+        main.leave();
+
+        (void)start_thread(*f.system, "io", entry, 0x20u);
+        CHECK(f.system->run(10'000'000u) == mk::RunResult::kIdle);
+        CHECK_EQ(f.word(kData + 0x38u), 1u);
+        const std::uint32_t fd = f.word(kData);
+        CHECK_EQ(fd, 3u);                             // The lowest free fd.
+        CHECK_EQ(f.word(kData + 0x04u), 0u);          // WaitAsyncCB
+        CHECK_EQ(f.dword(kData + 0x80u), fd);         // The open's result: the fd.
+        CHECK_EQ(f.word(kData + 0x08u), 0u);          // ReadAsync
+        CHECK_EQ(f.dword(kData + 0x88u), 3000u);      // The read's result.
+        CHECK_EQ(f.word(kData + 0x10u), 0x8002032Au); // PollAsync: SCE_KERNEL_ERROR_NOASYNC
+        CHECK_EQ(f.word(kData + 0x14u), 2990u);
+        CHECK_EQ(f.word(kData + 0x18u), 10u); // Clamped at the end of the file.
+        CHECK_EQ(f.word(kData + 0x1Cu), 0u);
+        CHECK_EQ(f.word(kData + 0x20u), 0x80010002u); // ERRNO_FILE_NOT_FOUND
+        bool same = true;
+        for (std::size_t i = 0; i < payload.size(); ++i)
+            same = same && rt.memory().load8(kBuffer + static_cast<std::uint32_t>(i)) == payload[i];
+        CHECK(same);
+        CHECK_EQ(rt.memory().load8(kBuffer + 0x1000u), payload[2990]);
+        CHECK_EQ(f.word(kData + 0x24u), 1u);
+        CHECK_EQ(f.word(kData + 0x28u), 1u);
+        CHECK_EQ(f.word(kData + 0x2Cu), 0u); // The end of the listing.
+        CHECK_EQ(f.word(kData + 0x30u), 0u);
+        // On-disc order: data.bin, other.bin; SceIoStat says a regular file.
+        const auto name_at = [&rt](std::uint32_t address) {
+            std::string name;
+            for (std::uint8_t c = rt.memory().load8(address); c != 0u;
+                 c = rt.memory().load8(++address))
+                name += static_cast<char>(c);
+            return name;
+        };
+        CHECK(name_at(kDirent + 0x58u) == "data.bin");
+        CHECK(name_at(kDirent + 0x258u) == "other.bin");
+        CHECK_EQ(f.word(kDirent) & 0x2000u, 0x2000u);
+        CHECK_EQ(f.dword(kDirent + 8u), 3000u);
+        // UMD open 4 ms (async), read, sync read 100 us, close, a missing file
+        // 6 ms, the first dread 1 ms.
+        CHECK(f.word(kData + 0x34u) > 11'000u && f.word(kData + 0x34u) < 13'000u);
+        CHECK_EQ(f.system->io().open_files(), 0u);
+        bool helper = false;
+        for (const mk::Uid uid : f.system->kernel().thread_list()) {
+            mk::ThreadInfo info;
+            if (f.system->kernel().thread_info(uid, info) && info.name == "SceIoAsync")
+                helper = true;
+        }
+        CHECK(!helper); // Closing the fd deleted its helper thread.
+    }
+    std::error_code ec;
+    std::filesystem::remove(config.disc_iso, ec);
+}
+
+// The RTC on a fixed base (2001-09-09 01:46:40 UTC) in a UTC+2 zone.
+void test_rtc() {
+    mh::SystemConfig config;
+    config.rtc_from_host = false;
+    config.rtc_base_seconds = 1'000'000'000;
+    config.rtc_utc_offset_seconds = 7200;
+    Fixture f(config);
+    psprecomp::Runtime &rt = f.runtime;
+    Asm main(rt, kCode);
+    const std::uint32_t entry = main.here();
+    main.enter();
+    main.li(s7, kData);
+    main.li(a0, kData);
+    main.call(kRtcGetCurrentTick);
+    main.li(a0, kData + 8u);
+    main.call(kLibcTime);
+    main.sw(v0, 12, s7);
+    main.li(a0, kData + 0x20u);
+    main.call(kRtcGetClockLocal);
+    main.leave();
+    (void)start_thread(*f.system, "rtc", entry, 0x20u);
+    CHECK(f.system->run(10'000'000u) == mk::RunResult::kIdle);
+    const std::uint64_t base_ticks = 62'135'596'800'000'000ull + 1'000'000'000ull * 1'000'000ull;
+    CHECK(f.dword(kData) >= base_ticks && f.dword(kData) < base_ticks + 10'000u);
+    CHECK_EQ(f.word(kData + 8u), 1'000'000'000u);
+    CHECK_EQ(f.word(kData + 12u), 1'000'000'000u);
+    CHECK_EQ(f.word(kData + 0x20u), 2001u | (9u << 16u)); // year, month
+    CHECK_EQ(f.word(kData + 0x24u), 9u | (3u << 16u));    // day, hour (local)
+    CHECK_EQ(f.word(kData + 0x28u), 46u | (40u << 16u));  // minute, second
 }
 
 void run_test(const char *name, void (*test)()) {
@@ -771,7 +1032,10 @@ int main() {
     run_test("test_exit_and_restart", &test_exit_and_restart);
     run_test("test_unimplemented_imports", &test_unimplemented_imports);
     run_test("test_module_loader", &test_module_loader);
-    run_test("test_boot_io_and_memory", &test_boot_io_and_memory);
+    run_test("test_runtime_memory", &test_runtime_memory);
+    run_test("test_vblank_and_interrupts", &test_vblank_and_interrupts);
+    run_test("test_io", &test_io);
+    run_test("test_rtc", &test_rtc);
     std::printf("mpo_hle_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

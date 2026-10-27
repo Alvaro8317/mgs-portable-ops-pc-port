@@ -63,6 +63,8 @@ void CpuBridge::starvation_hook(psprecomp::Runtime &, psprecomp::AllegrexContext
     CpuBridge *self = g_preempting;
     if (self == nullptr || self->preempt_kernel_ == nullptr) return;
     if (self->on_tick_) self->on_tick_();
+    // An interrupt handler runs inside a kernel event: no thread to switch.
+    if (self->preempt_kernel_->in_interrupt()) return;
     self->preempt_kernel_->preemption_point();
 }
 
@@ -113,6 +115,30 @@ std::uint32_t CpuBridge::call_guest(kernel::Kernel &kernel, kernel::Uid, std::ui
     dispatch_until(kernel, callback_return_);
     const std::uint32_t v0 = runtime_.cpu().gpr[2];
     runtime_.cpu() = saved;
+    return v0;
+}
+
+std::uint32_t CpuBridge::run_interrupt(kernel::Kernel &kernel, std::uint32_t entry,
+                                       std::uint32_t a0, std::uint32_t a1, std::uint32_t gp,
+                                       std::uint32_t sp) {
+    ++interrupts_;
+    psprecomp::AllegrexContext &cpu = runtime_.cpu();
+    // Plain copies: nothing in this frame owns memory.
+    const psprecomp::AllegrexContext saved = cpu;
+    const psprecomp::Runtime::ThreadExecutionState execution =
+        runtime_.exchange_thread_execution_state({});
+    reset_thread_context(cpu);
+    cpu.gpr[4] = a0;
+    cpu.gpr[5] = a1;
+    cpu.gpr[28] = gp;
+    cpu.gpr[29] = sp;
+    cpu.gpr[31] = callback_return_;
+    cpu.pc = entry;
+    if (runtime_.run_until(callback_return_) != psprecomp::Runtime::RunUntilResult::Returned)
+        kernel.request_stop();
+    const std::uint32_t v0 = runtime_.cpu().gpr[2];
+    runtime_.cpu() = saved;
+    (void)runtime_.exchange_thread_execution_state(execution);
     return v0;
 }
 

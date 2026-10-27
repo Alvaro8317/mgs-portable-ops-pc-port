@@ -12,6 +12,12 @@ target_compile_definitions(mpo_disc_test PRIVATE
 mpo_target_warnings(mpo_disc_test)
 add_test(NAME mpo_disc_test COMMAND mpo_disc_test)
 
+# F09: the PSP file systems on a synthetic ISO and a temporary directory.
+add_executable(mpo_io_test io_test.cpp synthetic_disc.cpp)
+target_link_libraries(mpo_io_test PRIVATE mpo_io)
+mpo_target_warnings(mpo_io_test)
+add_test(NAME mpo_io_test COMMAND mpo_io_test)
+
 add_executable(mpo_crypto_test crypto_test.cpp)
 target_link_libraries(mpo_crypto_test PRIVATE mpo_host)
 mpo_target_warnings(mpo_crypto_test)
@@ -320,7 +326,7 @@ if(Python3_FOUND)
 endif()
 
 # F08b: mpo_hle on synthetic guest code (interpreter), no game data.
-add_executable(mpo_hle_test hle_test.cpp)
+add_executable(mpo_hle_test hle_test.cpp synthetic_disc.cpp)
 target_link_libraries(mpo_hle_test PRIVATE psprecomp_core mpo_hle)
 mpo_target_warnings(mpo_hle_test)
 add_test(NAME mpo_hle_test COMMAND mpo_hle_test)

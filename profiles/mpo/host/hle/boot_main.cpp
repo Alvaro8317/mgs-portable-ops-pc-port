@@ -3,7 +3,8 @@
 // mpo_boot (F08b): boots the user's mgp_main on the HLE kernel, recompiled
 // ahead of time, and reports how far it gets.
 //
-//   mpo_boot --elf game/elf/mgp_main.elf --disc game/disc [--tables <vfpu>]
+//   mpo_boot --elf game/elf/mgp_main.elf --iso game/ULUS-10202.iso [--tables <vfpu>]
+//            [--ms0 <dir>] [--realtime 0|1] [--rtc-base <unix seconds>]
 //            [--nid-table analysis/nids/ppsspp-v1.20.4.tsv]
 //            [--trace <file>] [--trace-limit N] [--until-us N]
 //            [--unimplemented stop|continue] [--interpreter 0|1]
@@ -175,7 +176,8 @@ static_call_sites(mpo::hle::System &system) {
 
 int main(int argc, char **argv) {
     std::string elf_path;
-    std::string disc;
+    std::string iso;
+    std::string ms0;
     std::string tables = MPO_DEFAULT_VFPU_TABLES;
     std::string nid_table;
     std::string trace_path;
@@ -188,8 +190,16 @@ int main(int argc, char **argv) {
         const std::string value = argv[i + 1];
         if (option == "--elf") {
             elf_path = value;
-        } else if (option == "--disc") {
-            disc = value;
+        } else if (option == "--iso") {
+            iso = value;
+        } else if (option == "--ms0") {
+            ms0 = value;
+        } else if (option == "--realtime") {
+            config.realtime = value != "0";
+        } else if (option == "--rtc-base") {
+            // A fixed wall clock (UTC, no zone offset) makes traces reproducible.
+            config.rtc_from_host = false;
+            config.rtc_base_seconds = std::strtoll(value.c_str(), nullptr, 0);
         } else if (option == "--tables") {
             tables = value;
         } else if (option == "--nid-table") {
@@ -219,7 +229,8 @@ int main(int argc, char **argv) {
         }
     }
     if (elf_path.empty()) return fail("usage: see boot_main.cpp (--elf is required)");
-    config.disc_root = disc;
+    config.disc_iso = iso;
+    config.ms0_root = ms0;
 
     std::string error;
     if (!mpo::vfpu::load_tables(tables, &error)) return fail(error);
@@ -290,6 +301,12 @@ int main(int argc, char **argv) {
                     static_cast<unsigned long long>(system.cpu().switches()),
                     static_cast<unsigned long long>(system.cpu().guest_calls()),
                     static_cast<unsigned long long>(system.hle().total_calls()));
+        std::printf(
+            "vblanks: %u (%llu flips, %llu interrupt handlers run), disc bytes read: %llu, "
+            "open files: %zu\n",
+            system.display().vcount(), static_cast<unsigned long long>(system.display().flips()),
+            static_cast<unsigned long long>(system.interrupts().handled()),
+            static_cast<unsigned long long>(system.io().bytes_read()), system.io().open_files());
         print_memory("after the run", memory_use());
 
         std::printf("\nmodules:\n");

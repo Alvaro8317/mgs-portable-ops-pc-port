@@ -13,37 +13,14 @@
 #include <bit>
 #include <cstdio>
 #include <string>
+#include <vector>
 
+#include "hle/hle_args.hpp"
 #include "hle/system.hpp"
 
 namespace mpo::hle {
 
 namespace {
-
-using Ctx = psprecomp::AllegrexContext;
-
-// $a0..$a3, $t0..$t3: the eight register arguments of the PSP ABI.
-inline std::uint32_t arg(const Ctx &ctx, int index) {
-    return ctx.gpr[static_cast<std::size_t>(index < 4 ? 4 + index : 8 + (index - 4))];
-}
-inline void ret(Ctx &ctx, std::uint32_t value) {
-    ctx.gpr[2] = value;
-}
-inline void ret64(Ctx &ctx, std::uint64_t value) {
-    ctx.gpr[2] = static_cast<std::uint32_t>(value);
-    ctx.gpr[3] = static_cast<std::uint32_t>(value >> 32u);
-}
-
-// A guest C string argument; empty `present` means a null pointer.
-struct GuestString {
-    std::string text;
-    bool present{};
-    [[nodiscard]] const char *c_str() const { return present ? text.c_str() : nullptr; }
-};
-GuestString guest_string(kernel::Kernel &k, std::uint32_t address) {
-    if (address == 0u || !k.memory().is_valid(address)) return {};
-    return {k.memory().read_c_string(address), true};
-}
 
 constexpr std::uint32_t kInvalidMode = 0x80000107u;
 constexpr std::uint32_t kPowerVmemInUse = 0x802B0200u;
@@ -392,22 +369,18 @@ void register_module_hle(System &system) {
     };
     // ModuleMgrForUser (sceKernelModule.cpp).
     def("ModuleMgrForUser", 0xB7F46618u, "sceKernelLoadModuleByID", [&system, &k](Ctx &c) {
-        // The id is a file descriptor (the boot IO stub until F09).
-        BootIo::File *file = system.io().file(arg(c, 0));
-        if (file == nullptr) {
-            ret(c, 0x80020323u); // SCE_KERNEL_ERROR_BADF
-            return;
-        }
+        // The id is a file descriptor; the module is the rest of the file
+        // (PPSSPP reads from the current position to the end).
+        std::vector<std::uint8_t> data;
+        std::string path;
+        if (const std::uint32_t result = system.io().read_rest(arg(c, 0), data, path); result != 0u)
+            return ret(c, result);
         // SceKernelLMOption: size, mpidtext, mpiddata, flags, position (u8 at +16).
         const std::uint32_t option = arg(c, 2);
         const bool from_top =
             option != 0u && k.memory().read_u8(option + 16u) == 1u; // PSP_SMEM_High
-        const std::size_t position =
-            static_cast<std::size_t>(std::min<std::uint64_t>(file->position, file->data.size()));
         std::string error;
-        const std::uint32_t uid =
-            system.modules().load(std::span<const std::uint8_t>(file->data).subspan(position),
-                                  file->path, 0u, from_top, &error);
+        const std::uint32_t uid = system.modules().load(data, path, 0u, from_top, &error);
         if (static_cast<std::int32_t>(uid) < 0)
             std::fprintf(stderr, "mpo: sceKernelLoadModuleByID: %s\n", error.c_str());
         ret(c, uid);

@@ -866,6 +866,10 @@ void Kernel::resume_from_wait(Uid uid, std::uint32_t result) {
     call.finish(0);
 }
 
+void Kernel::wake_from_wait(Uid uid, std::uint32_t result) {
+    impl_->resume_from_wait(uid, result);
+}
+
 bool Kernel::is_waiting_for(Uid uid, WaitType type, Uid wait_id) const {
     const Thread *t = impl_->thread(uid);
     return t != nullptr && t->is_waiting_for(type, wait_id);

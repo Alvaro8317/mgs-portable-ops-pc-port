@@ -2,15 +2,20 @@
 #
 # mpo_hle (F08b): mpo_kernel on the PSPRecomp CPU (one dispatch loop per PSP
 # thread fiber), the HLE import table (histogram, trace, visible failure of
-# unimplemented NIDs), the kernel NIDs, the module loader and the boot stubs.
+# unimplemented NIDs), the kernel NIDs and the module loader; F09 adds IO on
+# mpo_io, the game clock and RTC, the vblank (sceDisplay) and interrupts.
 # Like mpo_recomp it only sees the framework headers: whatever links it also
 # links psprecomp_core (an object library) once.
 
 add_library(mpo_hle STATIC
     cpu_bridge.cpp
+    game_clock.cpp
+    hle_display.cpp
+    hle_io.cpp
     hle_kernel.cpp
-    hle_stubs.cpp
+    hle_system.cpp
     hle_table.cpp
+    hle_time.cpp
     modules.cpp
     runtime_memory.cpp
     system.cpp
@@ -18,7 +23,7 @@ add_library(mpo_hle STATIC
 target_include_directories(mpo_hle PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_include_directories(mpo_hle SYSTEM PUBLIC
     $<TARGET_PROPERTY:psprecomp_core,INTERFACE_INCLUDE_DIRECTORIES>)
-target_link_libraries(mpo_hle PUBLIC mpo_kernel)
+target_link_libraries(mpo_hle PUBLIC mpo_kernel mpo_io)
 if(MSVC)
     # C4324: CpuBridge keeps PSPRecomp's alignas(16) AllegrexContext per thread.
     target_compile_options(mpo_hle PUBLIC /wd4324)

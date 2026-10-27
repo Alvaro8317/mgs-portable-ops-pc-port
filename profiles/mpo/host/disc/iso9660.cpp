@@ -206,6 +206,7 @@ bool IsoImage::read_directory(std::uint32_t lba, std::uint32_t size, const std::
         entry.lba = le32(&record[2]);
         entry.size = le32(&record[10]);
         entry.directory = (flags & kFlagDirectory) != 0;
+        entry.record_index = static_cast<std::uint32_t>(entries_.size());
         const std::uint64_t extent_end =
             std::uint64_t{entry.lba} * kIsoSectorSize + std::uint64_t{entry.size};
         if (extent_end > image_size_) {
@@ -240,6 +241,21 @@ bool IsoImage::read(const IsoEntry &entry, std::uint64_t offset, std::span<std::
     file_.read(reinterpret_cast<char *>(out.data()), static_cast<std::streamsize>(out.size()));
     if (!file_) {
         error = "read error in " + entry.path;
+        return false;
+    }
+    return true;
+}
+
+bool IsoImage::read_at(std::uint64_t offset, std::span<std::uint8_t> out, std::string &error) {
+    if (offset > image_size_ || out.size() > image_size_ - offset) {
+        error = "read past the end of the image";
+        return false;
+    }
+    file_.clear();
+    file_.seekg(static_cast<std::streamoff>(offset));
+    file_.read(reinterpret_cast<char *>(out.data()), static_cast<std::streamsize>(out.size()));
+    if (!file_) {
+        error = "read error at offset " + std::to_string(offset);
         return false;
     }
     return true;

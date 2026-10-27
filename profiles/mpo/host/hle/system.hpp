@@ -10,11 +10,11 @@
 //   system.boot(eboot_elf_bytes, "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN", &error);
 //   system.run(until_us);
 //
-// Time is a stub until F09: the kernel runs on a virtual clock that jumps to
-// the next timer when every thread waits, and that the visibility points of
-// the recompiled code advance by `us_per_preemption` every
-// `preemption_interval` dispatches, so a guest busy-wait on the clock still
-// makes progress.
+// Time (F09) is GameClock: virtual time that the visibility points of the
+// recompiled code advance by `us_per_preemption` every `preemption_interval`
+// dispatches, that HLE calls advance by the cycles they eat, and that jumps to
+// the next event when every thread waits (game_clock.hpp). The vblank runs on
+// it from the start (Display), and IO reads the user's ISO (IoManager).
 
 #pragma once
 
@@ -26,47 +26,35 @@
 #include <vector>
 
 #include "hle/cpu_bridge.hpp"
+#include "hle/display.hpp"
+#include "hle/game_clock.hpp"
 #include "hle/hle_table.hpp"
+#include "hle/io_manager.hpp"
 #include "hle/modules.hpp"
 #include "hle/runtime_memory.hpp"
-#include "kernel/clock.hpp"
 #include "kernel/kernel.hpp"
 #include "psprecomp/runtime.hpp"
 
 namespace mpo::hle {
 
 struct SystemConfig {
-    // Host directory with the disc's files (`PSP_GAME/...`), for the boot IO
-    // stub (F09 replaces it with the ISO). Empty: every open fails.
-    std::filesystem::path disc_root;
+    // The user's ISO for disc0:/umd0: (empty: no disc, every open fails).
+    std::filesystem::path disc_iso;
+    // Host directory for ms0: (empty: no memory stick). F18b passes the
+    // per-OS save folder; tests and traces use analysis/.
+    std::filesystem::path ms0_root;
     std::size_t fiber_stack_size = 64u * 1024u * 1024u;
     std::uint64_t preemption_interval = 4096u;
     std::uint64_t us_per_preemption = 100u;
     UnimplementedPolicy unimplemented = UnimplementedPolicy::kStop;
-};
-
-// Minimal file access for the module loader until F09: sceIoOpen/Read/Lseek/
-// Close of read-only files of the disc (disc0:/, umd0:/, umd1:/), read whole
-// from `disc_root`. Registered as `stub`.
-class BootIo {
-public:
-    explicit BootIo(std::filesystem::path disc_root) : disc_root_(std::move(disc_root)) {}
-
-    struct File {
-        std::string path;
-        std::vector<std::uint8_t> data;
-        std::uint64_t position{};
-    };
-    // Returns an fd (>= 3) or a PSP error code.
-    std::uint32_t open(const std::string &psp_path, std::uint32_t flags);
-    std::uint32_t close(std::uint32_t fd);
-    [[nodiscard]] File *file(std::uint32_t fd);
-    [[nodiscard]] std::filesystem::path host_path(const std::string &psp_path) const;
-
-private:
-    std::filesystem::path disc_root_;
-    std::map<std::uint32_t, File> files_;
-    std::uint32_t next_fd_ = 3;
+    // Run the 59.94 Hz vblank (off only for kernel tests that expect idle).
+    bool vblank = true;
+    // Throttle virtual time to the host's (GameClock::set_realtime).
+    bool realtime = false;
+    // The RTC base: the host's time and zone, unless fixed (traces, tests).
+    bool rtc_from_host = true;
+    std::int64_t rtc_base_seconds = 0;
+    std::int64_t rtc_utc_offset_seconds = 0;
 };
 
 class System {
@@ -78,13 +66,18 @@ public:
 
     [[nodiscard]] psprecomp::Runtime &runtime() noexcept { return runtime_; }
     [[nodiscard]] kernel::Kernel &kernel() noexcept { return *kernel_; }
-    [[nodiscard]] kernel::VirtualClock &clock() noexcept { return clock_; }
+    [[nodiscard]] GameClock &clock() noexcept { return clock_; }
+    [[nodiscard]] const Rtc &rtc() const noexcept { return rtc_; }
     [[nodiscard]] CpuBridge &cpu() noexcept { return bridge_; }
     [[nodiscard]] HleTable &hle() noexcept { return *hle_; }
     [[nodiscard]] ModuleManager &modules() noexcept { return modules_; }
-    [[nodiscard]] BootIo &io() noexcept { return io_; }
+    [[nodiscard]] IoManager &io() noexcept { return *io_; }
+    [[nodiscard]] Display &display() noexcept { return *display_; }
+    [[nodiscard]] Interrupts &interrupts() noexcept { return *interrupts_; }
     [[nodiscard]] const SystemConfig &config() const noexcept { return config_; }
 
+    // Mounts the ISO and the memory stick of the config (boot() does it too).
+    bool mount(std::string *error);
     // Loads the boot module and creates its root thread (ModuleManager::boot).
     bool boot(std::span<const std::uint8_t> elf, const std::string &boot_path, std::string *error);
     // Runs PSP threads until `until_us` of virtual time, a stop, or nothing can
@@ -105,18 +98,24 @@ private:
     psprecomp::Runtime &runtime_;
     SystemConfig config_;
     RuntimeMemory memory_;
-    kernel::VirtualClock clock_;
+    GameClock clock_;
+    Rtc rtc_;
     CpuBridge bridge_;
     std::unique_ptr<kernel::Kernel> kernel_;
     std::unique_ptr<HleTable> hle_;
     ModuleManager modules_;
-    BootIo io_;
+    std::unique_ptr<IoManager> io_;
+    std::unique_ptr<Interrupts> interrupts_;
+    std::unique_ptr<Display> display_;
+    bool mounted_ = false;
     std::map<std::uint32_t, std::uint32_t> utility_modules_;
 };
 
-// The HLE groups (hle_kernel.cpp, hle_stubs.cpp).
+// The HLE groups (hle_kernel.cpp, hle_time.cpp, hle_system.cpp; IoManager,
+// Display and Interrupts register their own).
 void register_kernel_hle(System &system);
 void register_module_hle(System &system);
-void register_boot_stubs(System &system);
+void register_time_hle(System &system);
+void register_system_hle(System &system);
 
 } // namespace mpo::hle

@@ -318,6 +318,7 @@ struct Kernel::Impl {
     int in_callback_count = 0;
     Uid exit_callback = 0;
     AfterCall after;
+    std::map<WaitType, Kernel::WaitTypeHooks> wait_hooks;
 
     Thread *thread(Uid uid) const { return get<Thread>(uid); }
     void ready_push_front(int priority, Uid uid) {

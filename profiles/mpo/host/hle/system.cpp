@@ -11,11 +11,6 @@ namespace mpo::hle {
 
 namespace {
 
-constexpr std::uint32_t kErrnoFileNotFound = 0x80010002u;
-constexpr std::uint32_t kErrnoInvalidArgument = 0x80010016u;
-constexpr std::uint32_t kBadFd = 0x80020323u;
-constexpr std::uint32_t kPspOpenWrite = 0x0002u;
-
 // Ported from PPSSPP Core/HLE/sceUtility.cpp @ v1.20.4 (moduleLoadInfo): the
 // user memory sceUtilityLoad(Av)Module reserves for each firmware module.
 struct UtilityModuleInfo {
@@ -68,57 +63,13 @@ constexpr std::uint32_t kLibraryNotFound = 0x8002013Cu;
 
 } // namespace
 
-// ---- BootIo -----------------------------------------------------------------
-
-std::filesystem::path BootIo::host_path(const std::string &psp_path) const {
-    std::string relative = psp_path;
-    std::string device;
-    if (const auto colon = relative.find(':'); colon != std::string::npos) {
-        device = relative.substr(0, colon);
-        relative.erase(0, colon + 1u);
-    }
-    std::transform(device.begin(), device.end(), device.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (device != "disc0" && device != "umd0" && device != "umd1") return {};
-    std::replace(relative.begin(), relative.end(), '\\', '/');
-    std::filesystem::path clean;
-    for (const auto &part : std::filesystem::path(relative)) {
-        const std::string name = part.string();
-        if (name == "..") return {};
-        if (name.empty() || name == "/" || name == ".") continue;
-        clean /= part;
-    }
-    return clean.empty() ? std::filesystem::path() : disc_root_ / clean;
-}
-
-std::uint32_t BootIo::open(const std::string &psp_path, std::uint32_t flags) {
-    if ((flags & kPspOpenWrite) != 0u) return kErrnoInvalidArgument;
-    const std::filesystem::path path = host_path(psp_path);
-    if (path.empty() || disc_root_.empty()) return kErrnoFileNotFound;
-    std::ifstream in(path, std::ios::binary);
-    if (!in) return kErrnoFileNotFound;
-    File file;
-    file.path = psp_path;
-    file.data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    const std::uint32_t fd = next_fd_++;
-    files_.emplace(fd, std::move(file));
-    return fd;
-}
-
-std::uint32_t BootIo::close(std::uint32_t fd) {
-    return files_.erase(fd) != 0u ? 0u : kBadFd;
-}
-
-BootIo::File *BootIo::file(std::uint32_t fd) {
-    const auto found = files_.find(fd);
-    return found != files_.end() ? &found->second : nullptr;
-}
-
 // ---- System ----------------------------------------------------------------
 
 System::System(psprecomp::Runtime &runtime, const SystemConfig &config)
-    : runtime_(runtime), config_(config), memory_(runtime.memory()), bridge_(runtime),
-      modules_(*this), io_(config.disc_root) {
+    : runtime_(runtime), config_(config), memory_(runtime.memory()),
+      rtc_(config.rtc_from_host ? Rtc::from_host()
+                                : Rtc(config.rtc_base_seconds, config.rtc_utc_offset_seconds)),
+      bridge_(runtime), modules_(*this) {
     kernel::KernelConfig kernel_config;
     kernel_config.memory = &memory_;
     kernel_config.clock = &clock_;
@@ -126,6 +77,9 @@ System::System(psprecomp::Runtime &runtime, const SystemConfig &config)
     kernel_config.fiber_stack_size = config.fiber_stack_size;
     kernel_ = std::make_unique<kernel::Kernel>(kernel_config);
     hle_ = std::make_unique<HleTable>(runtime_, *kernel_);
+    io_ = std::make_unique<IoManager>(*this);
+    interrupts_ = std::make_unique<Interrupts>(*this);
+    display_ = std::make_unique<Display>(*this, *interrupts_);
     hle_->set_unimplemented_policy(config.unimplemented);
     bridge_.set_callback_return(alloc_kernel_scratch(16u, "hle-callback-return"));
     bridge_.set_thread_return_handler(
@@ -140,11 +94,21 @@ System::System(psprecomp::Runtime &runtime, const SystemConfig &config)
     });
     bridge_.install_preemption(*kernel_, config.preemption_interval,
                                [this] { clock_.advance(config_.us_per_preemption); });
+    // Interrupt handlers run on a stack of their own (PPSSPP: the idle
+    // thread's 4 KiB), with the boot module's $gp once it is loaded.
+    constexpr std::uint32_t kInterruptStack = 0x1000u;
+    const std::uint32_t stack = alloc_kernel_scratch(kInterruptStack, "interrupt-stack");
+    interrupts_->set_context(0u, stack + kInterruptStack - 0x100u);
+    clock_.set_realtime(config.realtime);
     register_hle();
+    if (config.vblank) display_->start();
 }
 
 System::~System() {
     // The kernel abandons the fibers; nothing of the guest runs past here.
+    display_.reset();
+    interrupts_.reset();
+    io_.reset();
     hle_.reset();
     kernel_.reset();
 }
@@ -157,13 +121,32 @@ std::uint32_t System::alloc_kernel_scratch(std::uint32_t size, const char *tag) 
 void System::register_hle() {
     register_kernel_hle(*this);
     register_module_hle(*this);
-    register_boot_stubs(*this);
+    register_time_hle(*this);
+    register_system_hle(*this);
+    io_->register_hle();
+    interrupts_->register_hle();
+    display_->register_hle();
+}
+
+bool System::mount(std::string *error) {
+    if (mounted_) return true;
+    if (!config_.disc_iso.empty() && !io_->mount_disc(config_.disc_iso, error)) return false;
+    if (!config_.ms0_root.empty() &&
+        !io_->mount_memory_stick(config_.ms0_root, rtc_.utc_offset(), error))
+        return false;
+    mounted_ = true;
+    return true;
 }
 
 bool System::boot(std::span<const std::uint8_t> elf, const std::string &boot_path,
                   std::string *error) {
+    if (!mount(error)) return false;
     const std::uint32_t uid = modules_.boot(elf, boot_path, error);
-    return static_cast<std::int32_t>(uid) >= 0;
+    if (static_cast<std::int32_t>(uid) < 0) return false;
+    // __KernelStartIdleThreads: the interrupt context gets the boot module's $gp.
+    if (const Module *module = modules_.find(static_cast<kernel::Uid>(uid)))
+        interrupts_->set_gp(module->gp);
+    return true;
 }
 
 kernel::RunResult System::run(std::uint64_t until_us) {

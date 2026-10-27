@@ -432,6 +432,12 @@ void Kernel::Impl::wait_begin_callback(Thread &t) {
     }
     default:
         // Sleep has nothing to pause; other wait types belong to other modules.
+        if (const auto hook = wait_hooks.find(t.wait_type);
+            hook != wait_hooks.end() && hook->second.begin) {
+            hook->second.begin(t.uid);
+            t.paused = PausedWait{};
+            t.paused.active = true;
+        }
         break;
     }
 }
@@ -462,6 +468,13 @@ void Kernel::Impl::wait_end_callback(Thread &t) {
         } else {
             schedule(TimerKind::kWakeup, t.uid, static_cast<std::uint64_t>(left));
         }
+        return;
+    }
+
+    if (const auto hook = wait_hooks.find(t.wait_type);
+        hook != wait_hooks.end() && hook->second.end) {
+        std::uint32_t result = 0;
+        if (hook->second.end(t.uid, result)) resume_from_wait(t.uid, result);
         return;
     }
 
@@ -826,6 +839,10 @@ RunResult Kernel::run(std::uint64_t until_us) {
         }
         k.clock.wait_until(next);
     }
+}
+
+void Kernel::set_wait_type_hooks(WaitType type, WaitTypeHooks hooks) {
+    impl_->wait_hooks[type] = std::move(hooks);
 }
 
 void Kernel::request_stop() {
