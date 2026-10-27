@@ -9,6 +9,7 @@
 // no iterator and no owning object alive across the blocking call.
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 
 #include "hle/hle_args.hpp"

@@ -178,7 +178,11 @@ FileInfo DirectoryFileSystem::host_info(const std::filesystem::path &host,
     info.access = info.directory ? 0777u : 0666u;
     const auto written = std::filesystem::last_write_time(host, ec);
     if (!ec) {
-        const auto system = std::chrono::file_clock::to_sys(written);
+        // file_clock::to_sys is missing from MSVC's STL: rebase on both clocks'
+        // "now" instead (exact to well under a second, enough for a file time).
+        const auto system = std::chrono::system_clock::now() +
+                            std::chrono::duration_cast<std::chrono::system_clock::duration>(
+                                written - std::filesystem::file_time_type::clock::now());
         const std::int64_t micros =
             std::chrono::duration_cast<std::chrono::microseconds>(system.time_since_epoch())
                 .count();

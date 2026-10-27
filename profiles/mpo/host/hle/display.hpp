@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <vector>
 
 #include "kernel/kernel.hpp"
 
