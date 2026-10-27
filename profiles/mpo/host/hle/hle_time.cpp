@@ -129,13 +129,13 @@ void format_rfc3339(kernel::GuestMemory &memory, std::uint32_t out, std::uint64_
 
 void register_time_hle(System &system) {
     kernel::Kernel &k = system.kernel();
-    HleTable &t = system.hle();
+    HleTable &table = system.hle();
     GameClock &clock = system.clock();
     const Rtc &rtc = system.rtc();
     kernel::GuestMemory &memory = k.memory();
-    const auto def = [&t](const char *lib, std::uint32_t nid, const char *name,
-                          HleTable::Handler handler) {
-        t.add(lib, nid, name, HleKind::kImplemented, std::move(handler));
+    const auto def = [&table](const char *lib, std::uint32_t nid, const char *name,
+                              HleTable::Handler handler) {
+        table.add(lib, nid, name, HleKind::kImplemented, std::move(handler));
     };
     const auto local_minutes = [&rtc] { return static_cast<std::int32_t>(rtc.utc_offset() / 60); };
 
