@@ -159,6 +159,14 @@ bool ReplayOne(const fs::path &path, const fs::path &out_dir, bool alpha, void *
                     static_cast<unsigned long long>(vs.texture_hits),
                     static_cast<unsigned long long>(vs.clut_uploads),
                     static_cast<unsigned long long>(vs.line_pixels));
+        std::printf("  vulkan: blend %s, destination reads by %s: %llu batches (%llu barriers,"
+                    " %llu copies), %llu batches with fixed-function blending\n",
+                    mpo::vk::BlendPathName(gpu->options().blend),
+                    mpo::vk::DstReadName(gpu->dst_read()),
+                    static_cast<unsigned long long>(vs.dst_batches),
+                    static_cast<unsigned long long>(vs.dst_barriers),
+                    static_cast<unsigned long long>(vs.dst_copies),
+                    static_cast<unsigned long long>(vs.fixed_blend_batches));
         for (const auto &[what, count] : vs.approximations) {
             std::printf("  vulkan approximate: %s x%llu\n", what.c_str(),
                         static_cast<unsigned long long>(count));

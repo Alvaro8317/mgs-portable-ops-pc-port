@@ -32,16 +32,37 @@ std::vector<VkExtensionProperties> InstanceExtensions(const char *layer) {
     return out;
 }
 
-bool HasLayer(const char *name) {
+// The layer's specVersion, or 0 when it is not installed.
+std::uint32_t LayerVersion(const char *name) {
     std::uint32_t count = 0;
-    if (vkEnumerateInstanceLayerProperties(&count, nullptr) != VK_SUCCESS) return false;
+    if (vkEnumerateInstanceLayerProperties(&count, nullptr) != VK_SUCCESS) return 0;
     std::vector<VkLayerProperties> layers(count);
-    if (vkEnumerateInstanceLayerProperties(&count, layers.data()) != VK_SUCCESS) return false;
+    if (vkEnumerateInstanceLayerProperties(&count, layers.data()) != VK_SUCCESS) return 0;
     layers.resize(count);
-    return std::any_of(layers.begin(), layers.end(), [name](const VkLayerProperties &l) {
-        return std::strcmp(l.layerName, name) == 0;
-    });
+    for (const VkLayerProperties &l : layers) {
+        if (std::strcmp(l.layerName, name) == 0) return std::max<std::uint32_t>(l.specVersion, 1);
+    }
+    return 0;
 }
+
+std::vector<VkExtensionProperties> DeviceExtensions(VkPhysicalDevice dev) {
+    std::uint32_t count = 0;
+    if (vkEnumerateDeviceExtensionProperties(dev, nullptr, &count, nullptr) != VK_SUCCESS)
+        return {};
+    std::vector<VkExtensionProperties> out(count);
+    if (vkEnumerateDeviceExtensionProperties(dev, nullptr, &count, out.data()) != VK_SUCCESS)
+        return {};
+    out.resize(count);
+    return out;
+}
+
+// The validation layer must know VK_KHR_dynamic_rendering_local_read to
+// validate it: 1.3.275 (Ubuntu 24.04, the CI) reports its feature structure
+// as unknown and every barrier inside dynamic rendering as an error. With an
+// older layer active, the 1.3 path reads the destination through a copy
+// (F15a). 1.3.276 is the first header version after the one that layer
+// names; the exact first layer that knows the extension is not verified.
+constexpr std::uint32_t kLocalReadLayerVersion = VK_MAKE_API_VERSION(0, 1, 3, 276);
 
 VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                              VkDebugUtilsMessageTypeFlagsEXT types,
@@ -175,9 +196,11 @@ bool VulkanContext::Init(const ContextOptions &options, Status *status, std::str
     }
     bool use_validation_features = false;
     if (options.validation) {
-        if (HasLayer(kValidationLayer)) {
+        if (const std::uint32_t layer_version = LayerVersion(kValidationLayer);
+            layer_version != 0) {
             layers.push_back(kValidationLayer);
             caps_.validation_active = true;
+            caps_.validation_layer_version = layer_version;
             const auto layer_ext = InstanceExtensions(kValidationLayer);
             if (options.sync_validation &&
                 HasExtension(layer_ext, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME)) {
@@ -327,11 +350,7 @@ bool VulkanContext::Init(const ContextOptions &options, Status *status, std::str
             continue;
         }
         if (surface_ != VK_NULL_HANDLE) {
-            std::uint32_t ecount = 0;
-            vkEnumerateDeviceExtensionProperties(dev, nullptr, &ecount, nullptr);
-            std::vector<VkExtensionProperties> exts(ecount);
-            vkEnumerateDeviceExtensionProperties(dev, nullptr, &ecount, exts.data());
-            exts.resize(ecount);
+            const auto exts = DeviceExtensions(dev);
             if (!HasExtension(exts, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
                 rejected += std::string(" ") + props.deviceName + " (no VK_KHR_swapchain)";
                 continue;
@@ -367,15 +386,50 @@ bool VulkanContext::Init(const ContextOptions &options, Status *status, std::str
                         chosen.props.apiVersion >= VK_API_VERSION_1_3;
     caps_.api_version = use_13 ? VK_API_VERSION_1_3 : VK_API_VERSION_1_2;
 
+    // Optional extensions (F15a): reading the destination in the shader.
+    const auto dev_exts = DeviceExtensions(physical_);
+    const char *raster_order_ext = nullptr;
+    if (options.allow_raster_order && GetEnv("MPO_VK_NO_RASTER_ORDER") != "1") {
+        if (HasExtension(dev_exts, VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME)) {
+            raster_order_ext = VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME;
+        } else if (HasExtension(dev_exts,
+                                VK_ARM_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME)) {
+            raster_order_ext = VK_ARM_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME;
+        }
+    }
+    const bool layer_knows_local_read =
+        !caps_.validation_active || caps_.validation_layer_version >= kLocalReadLayerVersion;
+    const bool try_local_read =
+        use_13 && options.allow_local_read && GetEnv("MPO_VK_NO_LOCAL_READ") != "1" &&
+        HasExtension(dev_exts, VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME);
+    if (try_local_read && !layer_knows_local_read) {
+        Log("vulkan: VK_KHR_dynamic_rendering_local_read not used: the validation layer (" +
+            VersionString(caps_.validation_layer_version) + ") predates it");
+    }
+
     // Features.
     VkPhysicalDeviceVulkan13Features f13{};
     f13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     VkPhysicalDeviceVulkan12Features f12{};
     f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT fro{};
+    fro.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT;
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR flr{};
+    flr.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR;
     VkPhysicalDeviceFeatures2 f2{};
     f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     f2.pNext = &f12;
-    if (use_13) f12.pNext = &f13;
+    void **tail = &f12.pNext;
+    if (use_13) {
+        *tail = &f13;
+        tail = &f13.pNext;
+    }
+    if (raster_order_ext) {
+        *tail = &fro;
+        tail = &fro.pNext;
+    }
+    if (try_local_read && layer_knows_local_read) *tail = &flr;
     vkGetPhysicalDeviceFeatures2(physical_, &f2);
 
     VkPhysicalDeviceVulkan13Features want13{};
@@ -385,14 +439,37 @@ bool VulkanContext::Init(const ContextOptions &options, Status *status, std::str
     VkPhysicalDeviceFeatures2 want{};
     want.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     want.pNext = &want12;
-    if (f2.features.depthClamp) {
+    if (f2.features.depthClamp && options.allow_depth_clamp &&
+        GetEnv("MPO_VK_NO_DEPTH_CLAMP") != "1") {
         want.features.depthClamp = VK_TRUE;
         caps_.depth_clamp = true;
     }
+    std::vector<const char *> dev_ext;
+    if (surface_ != VK_NULL_HANDLE) dev_ext.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    void **want_tail = &want12.pNext;
     if (use_13 && f13.dynamicRendering) {
         want13.dynamicRendering = VK_TRUE;
-        want12.pNext = &want13;
+        *want_tail = &want13;
+        want_tail = &want13.pNext;
         caps_.dynamic_rendering = true;
+    }
+    VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT want_ro{};
+    want_ro.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT;
+    if (raster_order_ext && fro.rasterizationOrderColorAttachmentAccess) {
+        want_ro.rasterizationOrderColorAttachmentAccess = VK_TRUE;
+        *want_tail = &want_ro;
+        want_tail = &want_ro.pNext;
+        dev_ext.push_back(raster_order_ext);
+        caps_.raster_order = true;
+    }
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR want_lr{};
+    want_lr.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR;
+    if (caps_.dynamic_rendering && flr.dynamicRenderingLocalRead) {
+        want_lr.dynamicRenderingLocalRead = VK_TRUE;
+        *want_tail = &want_lr;
+        dev_ext.push_back(VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME);
+        caps_.local_read = true;
     }
 
     // Driver name (core in 1.2).
@@ -410,9 +487,6 @@ bool VulkanContext::Init(const ContextOptions &options, Status *status, std::str
     qci.queueFamilyIndex = queue_family_;
     qci.queueCount = 1;
     qci.pQueuePriorities = &priority;
-
-    std::vector<const char *> dev_ext;
-    if (surface_ != VK_NULL_HANDLE) dev_ext.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
     VkDeviceCreateInfo dci2{};
     dci2.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

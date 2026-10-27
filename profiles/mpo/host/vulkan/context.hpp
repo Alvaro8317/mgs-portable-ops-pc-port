@@ -43,6 +43,12 @@ struct ContextOptions {
     bool sync_validation = true;
     // Off: never use Vulkan 1.3 features even if the device has them.
     bool allow_vulkan_1_3 = true;
+    // Optional device features the GE renderer can use (F15a). Each one also
+    // has an environment toggle (MPO_VK_NO_DEPTH_CLAMP, MPO_VK_NO_RASTER_ORDER,
+    // MPO_VK_NO_LOCAL_READ = 1 turns it off), so a frame can be bisected.
+    bool allow_depth_clamp = true;
+    bool allow_raster_order = true;
+    bool allow_local_read = true;
     // Extra instance extensions (the window system's surface extensions).
     std::vector<std::string> instance_extensions;
     // The loader's vkGetInstanceProcAddr, when another library already loaded
@@ -66,6 +72,16 @@ struct DeviceCaps {
     VkPhysicalDeviceType device_type = VK_PHYSICAL_DEVICE_TYPE_OTHER;
     bool dynamic_rendering = false;
     bool depth_clamp = false;
+    // VK_EXT/ARM_rasterization_order_attachment_access (colour): input
+    // attachment reads are ordered with the colour writes of earlier
+    // fragments, so a shader can blend without barriers (F15a).
+    bool raster_order = false;
+    // VK_KHR_dynamic_rendering_local_read: input attachments and barriers
+    // inside dynamic rendering (the 1.3 path). Without it the 1.3 path reads
+    // the destination through a copy.
+    bool local_read = false;
+    // specVersion of VK_LAYER_KHRONOS_validation when it is active, else 0.
+    std::uint32_t validation_layer_version = 0;
     bool validation_active = false;
     bool sync_validation_active = false;
     bool debug_utils = false;
