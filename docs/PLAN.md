@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 → F14b → F15b → F16b → F17b → F18b → F19 → F20b → F21 → F22 | en serie |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b → F15b → F16b → F17b → F18b → F19 → F20b → F21 → F22 | en serie |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -100,7 +100,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F11a | GE por software: reproductor de `.ppdmp` y 2D | M2 | ✅ hecha (ola 1) |
 | F11b | `sceGe*` en el juego y stub de `sceMpeg` | M2 | ✅ hecha |
 | F12 | GE por software: completo | M2 | ✅ hecha (ola 2) |
-| F13 | Overlays de etapa en runtime | M2 | ⬜ pendiente |
+| F13 | Overlays de etapa en runtime | M2 | ✅ hecha |
 | F14a | Renderer Vulkan: base sobre los dumps | M3 | ✅ hecha (ola 3) |
 | F14b | Renderer Vulkan en el juego | M3 | ⬜ pendiente |
 | F15a | Renderer Vulkan: blending por shader y efectos (autónomo) | M3 | ✅ hecha (ola 4) |
@@ -747,6 +747,18 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   en `0x08AFB800`, el primer hueco libre detrás de `mgp_main`; `title`, en `0x08B8F900`. La tabla
   de overlays tiene que aceptar la base que le toque a cada etapa, y el corpus de cada una se
   genera para su base real.
+- **Notas (F13)**: hecha, ver `docs/sessions/F13.md`. **M2 cerrado.**
+  - **Cambio de criterio** (acordado con el usuario): entrar a `st01` necesita el OSK (F18b). Se
+    cumple con las etapas que el juego carga hoy: `init`, `r_main01` y `title` corren
+    recompiladas, con `--interpreter 0`, hasta "Input your name", con 0 instrucciones
+    interpretadas y el ciclo de carga y descarga verificado. Las 69 capturas son iguales, flip por
+    flip, a las de la misma ejecución con el intérprete.
+  - Las etapas son librerías compartidas (`build_overlays.py`, `-DMPO_GENERATED_OVERLAYS_DIR`,
+    `mpo_boot --overlays`), identificadas por el SHA-256 del PRX y la base (`config/stages.toml`)
+    y verificadas contra el `.text` enlazado en `sceKernelDcacheWritebackAll`.
+  - `st01` se recompila (52 unidades, 54 MB de C++) y su librería compila y carga; se verifica
+    contra el juego cuando se pueda entrar (F18b/F19). Compilar las 91 etapas tal cual sería unas
+    25 veces `mgp_main`: hay que deduplicar (F04, (b) o (b')) antes de F21.
 
 ---
 
@@ -817,6 +829,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Notas (ola 3)**: el renderer es `mpo::vk::GeRenderer` (`profiles/mpo/host/vulkan/`), conectado
   con `Ge::SetDrawBackend`. La ventana y la swapchain están en `mpo_vulkan_sdl`
   (`SwapchainPresenter`). Ver "Para F14b" en `docs/sessions/F14a.md`.
+- **Notas (F13)**: "la primera etapa" depende de F18b (el OSK del nombre). Con el título alcanza
+  para cerrar F14b; la primera etapa 3D en Vulkan se comprueba cuando se pueda entrar. Con
+  `build_overlays.py --stages init,r_main01,title` las etapas corren recompiladas
+  (`--interpreter 0`).
 
 ### F15a — Renderer Vulkan: blending por shader y efectos, autónomo (ola 4)
 
@@ -1101,6 +1117,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   reclutamiento y se borra un save desde el menú del juego (`LISTALLDELETE`), comprobando con
   hashes que el resto de `SAVEDATA` no cambia. Los saves de prueba se hashean antes y después.
   **M4 cerrado.**
+- **Notas (F13)**: al pasar el OSK se entra a la primera etapa jugable. Hay que recompilarla
+  (`build_overlays.py --stages <s>`) y comprobar en el reporte de `mpo_boot` que su overlay sale
+  "verified" (si sale con un aviso de base, añadirla a `config/stages.toml`).
 
 ---
 
@@ -1117,6 +1136,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Verificar que el gameplay corre a 20 fps con el timestep original.
 - **Criterios de hecho**: la primera misión se completa en Windows y Linux, y una repetición grabada
   la reproduce de forma idéntica. **M5 cerrado.**
+- **Notas (F13)**: el criterio de F13 "entrar a la primera etapa sin código interpretado" se
+  comprueba aquí con el reporte de `mpo_boot` (tabla "stage overlays"). Las etapas de la misión y
+  su transición tienen que estar en `build_overlays.py --stages`.
 
 ### F20a — Generador de APs virtuales, autónomo (ola 2)
 

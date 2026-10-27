@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Where each stage overlay (stage/<s>/<s>.prx) is recompiled for (F13).
+# generate.py --stage <s> and build_overlays.py read this table.
+#
+# mgp_main loads a stage with sceKernelLoadModuleByID(fd, 0, NULL): no fixed
+# address, so the HLE block allocator puts it in the first free hole that fits
+# (docs/sessions/F09.md). A corpus is only installed where it was generated
+# for; a stage loaded anywhere else runs on the interpreter and mpo_boot says
+# so ("no corpus at this base"), which is the cue to add it here.
+#
+# - default_base: the mission stages, after the resident Konami modules
+#   (title and st02 verified, F04 [V]).
+# - [[stage]]: the stages small enough to fit the hole right after mgp_main
+#   (0x08AFB800..0x08B20000), measured with mpo_boot (F09 [V]).
+
+default_base = 0x08B8F900
+
+[[stage]]
+name = "init"
+base = 0x08AFB800
+
+[[stage]]
+name = "r_main01"
+base = 0x08AFB800

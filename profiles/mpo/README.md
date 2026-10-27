@@ -173,6 +173,39 @@ build-rel/profiles/mpo/host/recomp/mpo_aot_probe --elf game/elf/mgp_main.elf \
   `-ffp-contract=off` y `-O${PSPRECOMP_GENERATED_OPT_LEVEL}`), en el pool `psprecomp_generated`
   (`-DPSPRECOMP_GENERATED_JOBS`, por defecto 1 por cada 4 GiB de RAM), y la sonda `mpo_aot_probe`.
 
+## Overlays de etapa (F13)
+
+Cada etapa (`stage/<s>/<s>.prx`) se recompila aparte, ya enlazada con su `.rlc`, y se compila como
+una librería compartida (`<build>/overlays/stage_<s>.so` o `.dll`) que `mpo_boot` carga al
+arrancar:
+
+```bash
+# 1. Por cada etapa: validar el PRX y el _zar, enlazar el .rlc, Ghidra (si falta) y psp_recomp.
+python3 -I profiles/mpo/scripts/build_overlays.py \
+    --psp-recomp build/framework/psprecomp/psp_recomp \
+    --stages init,r_main01,title --ghidra --out profiles/mpo/generated/overlays
+# 2. Una librería por etapa, junto a mpo_boot.
+cmake -B build-rel -DMPO_GENERATED_OVERLAYS_DIR=$PWD/profiles/mpo/generated/overlays
+cmake --build build-rel --target mpo_boot mpo_overlay_init mpo_overlay_r_main01 mpo_overlay_title
+# 3. --overlays: por defecto <build>/overlays; `none` para no cargar ninguna.
+build-rel/profiles/mpo/host/hle/mpo_boot --elf game/elf/mgp_main.elf --iso game/ULUS-10202.iso \
+    --interpreter 0 ...
+```
+
+- `scripts/generate.py --stage <s>` enlaza la etapa (`<out>/stage_<s>.prx`, con `rlc.py link`),
+  genera el C++ con el prefijo `stage_<s>` para la base de `config/stages.toml` y escribe
+  `<out>/overlay.txt`: el SHA-256 de `<s>.prx`, la base, el tamaño de la imagen y el SHA-256 del
+  `.text` tal como lo deja el juego después de aplicar el `.rlc`.
+- `scripts/build_overlays.py` lo hace para varias etapas (`--stages` o `--all`). Las etapas con el
+  mismo PRX y la misma base comparten corpus (`r_main01 = r_net01`, `st08 = st0801 = st0802`...).
+- En el runtime (`host/hle/overlays.cpp`), `sceKernelLoadModuleByID` instala el corpus cuyo PRX y
+  base coinciden con lo que carga el juego, antes de `module_start` y de ligar los stubs. Cuando el
+  juego aplica el `.rlc` y llama a `sceKernelDcacheWritebackAll`, se compara el `.text`: si no es
+  el esperado, el corpus se quita y la etapa vuelve al intérprete, con aviso. `UnloadModule` lo
+  desinstala. El reporte de `mpo_boot` lista cada etapa cargada y lo que se interpretó en ella.
+- Una librería se enlaza contra el `mpo_boot` que la carga (`ENABLE_EXPORTS`): hay que volver a
+  compilarla si cambia el runtime (lo detecta por el tamaño de `Runtime` y `AllegrexContext`).
+
 ### Difftest del emisor (sin el juego, en `ctest`)
 
 `mpo_aot_casegen` coloca los casos del arnés de F07a como código de un ELF sintético,

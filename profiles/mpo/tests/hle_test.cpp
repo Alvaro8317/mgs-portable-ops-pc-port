@@ -22,6 +22,7 @@
 // ring buffer and its read callback) and the binding of the import stubs of
 // a module loaded without recompiled code.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -35,6 +36,7 @@
 #include "hle/system.hpp"
 #include "psprecomp/interpreter.hpp"
 #include "psprecomp/runtime.hpp"
+#include "psprecomp/sha256.hpp"
 #include "synthetic_disc.hpp"
 
 namespace {
@@ -819,6 +821,130 @@ void test_module_loader() {
     CHECK_EQ(modules.load(junk, "disc0:/junk.prx", 0u, false, &error), 0x80020148u);
 }
 
+// F13: a stage overlay corpus for the synthetic PRX. Its install function
+// stands in for psp_recomp output: it registers the module's entry and the
+// wrapper of one import stub, so the loader only binds the other one.
+int g_overlay_installs = 0;
+
+void overlay_entry(psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) {
+    ctx.gpr[2] = 0x5A5Au;
+    ctx.pc = ctx.gpr[31];
+}
+
+void install_synthetic_overlay(psprecomp::Runtime &runtime) {
+    ++g_overlay_installs;
+    runtime.register_function(0x08804000u, &overlay_entry, "overlay_entry");
+    runtime.register_function(0x08804110u, &overlay_entry, "overlay_import_wrapper");
+}
+
+std::string guest_sha256(psprecomp::Runtime &rt, std::uint32_t address, std::uint32_t size) {
+    return psprecomp::sha256_bytes(
+        std::span<const std::uint8_t>(rt.memory().raw_pointer(address, size), size));
+}
+
+void test_overlays() {
+    Fixture f;
+    psprecomp::Runtime &rt = f.runtime;
+    mh::System &system = *f.system;
+    mh::ModuleManager &modules = system.modules();
+    mh::OverlayManager &overlays = system.overlays();
+    const std::vector<std::uint8_t> prx = synthetic_prx();
+    std::string error;
+
+    // The code as loaded, then as "the game" leaves it after its .rlc: one
+    // word of the text patched (what the corpus is generated from).
+    constexpr std::uint32_t kBase = 0x08804000u;
+    constexpr std::uint32_t kText = 0x20u;
+    constexpr std::uint32_t kLinkedWord = 0x0000000Du; // An ori with another immediate.
+    const std::uint32_t probe = modules.load(prx, "disc0:/probe.prx", 0u, false, &error);
+    CHECK(static_cast<std::int32_t>(probe) > 0);
+    // No corpus at all: the module counts as interpreted.
+    CHECK_EQ(overlays.stats().size(), 1u);
+    CHECK_EQ(overlays.stats()[0].interpreted, 1u);
+    CHECK_EQ(overlays.stats()[0].base, kBase);
+    CHECK(overlays.stats()[0].name.starts_with("SyntheticModule@"));
+    const std::uint32_t original = rt.memory().load32(kBase + 0x0Cu);
+    rt.memory().store32(kBase + 0x0Cu, (original & 0xFFFF0000u) | kLinkedWord);
+    const std::string linked_text = guest_sha256(rt, kBase, kText);
+    CHECK_EQ(modules.unload_module(static_cast<mk::Uid>(probe)), probe);
+
+    const std::string prx_sha256 = psprecomp::sha256_bytes(prx);
+    const mh::OverlayModuleInfo info{mh::kOverlayAbiVersion,
+                                     static_cast<std::uint32_t>(sizeof(psprecomp::Runtime)),
+                                     static_cast<std::uint32_t>(sizeof(psprecomp::AllegrexContext)),
+                                     "synthetic",
+                                     kBase,
+                                     0x200u,
+                                     prx_sha256.c_str(),
+                                     0u,
+                                     kText,
+                                     linked_text.c_str()};
+    overlays.add_corpus(info, &install_synthetic_overlay, "");
+    CHECK_EQ(overlays.corpora().size(), 1u);
+
+    // Loaded where the corpus was generated for: installed before the stubs
+    // are bound; the corpus's own wrapper stays.
+    const std::uint32_t uid = modules.load(prx, "disc0:/stage.prx", 0u, false, &error);
+    const mh::Module *module = modules.find(static_cast<mk::Uid>(uid));
+    CHECK(module != nullptr && module->base == kBase);
+    CHECK_EQ(g_overlay_installs, 1);
+    CHECK(overlays.installed(static_cast<mk::Uid>(uid)));
+    CHECK(rt.has_function(kBase));
+    CHECK(module != nullptr && module->bound_stubs.size() == 1u);
+    CHECK(module != nullptr && module->bound_stubs[0] == 0x08804118u);
+    // The cache is written back before the game links the stage: still the
+    // image as loaded, so the overlay stays pending.
+    overlays.verify();
+    CHECK_EQ(overlays.stats().back().verified, 0u);
+    CHECK_EQ(overlays.stats().back().mismatches, 0u);
+    // Linked: verified, and the corpus runs.
+    rt.memory().store32(kBase + 0x0Cu, (original & 0xFFFF0000u) | kLinkedWord);
+    overlays.verify();
+    const mh::OverlayStats &stats = overlays.stats().back();
+    CHECK(stats.name == "synthetic");
+    CHECK_EQ(stats.loads, 1u);
+    CHECK_EQ(stats.installs, 1u);
+    CHECK_EQ(stats.verified, 1u);
+    CHECK_EQ(stats.mismatches, 0u);
+    psprecomp::AllegrexContext ctx{};
+    ctx.pc = kBase;
+    ctx.gpr[31] = 0x08800000u;
+    CHECK(rt.invoke_isolated_aot(kBase, ctx));
+    CHECK_EQ(ctx.gpr[2], 0x5A5Au);
+    // A second copy elsewhere: the corpus is for another base.
+    const std::uint32_t other = modules.load(prx, "disc0:/other.prx", 0u, false, &error);
+    const mh::Module *other_module = modules.find(static_cast<mk::Uid>(other));
+    CHECK(other_module != nullptr && other_module->base == kBase + 0x200u);
+    CHECK(!overlays.installed(static_cast<mk::Uid>(other)));
+    CHECK_EQ(g_overlay_installs, 1);
+    CHECK_EQ(modules.unload_module(static_cast<mk::Uid>(other)), other);
+    // Unloading removes the corpus with the module.
+    CHECK_EQ(modules.unload_module(static_cast<mk::Uid>(uid)), uid);
+    CHECK(!rt.has_function(kBase));
+    CHECK(!rt.has_function(0x08804110u));
+
+    // Linked with something else: the corpus does not describe that memory.
+    // It goes, the stubs are bound to the HLE and the interpreter runs it.
+    const std::uint32_t bad = modules.load(prx, "disc0:/bad.prx", 0u, false, &error);
+    CHECK_EQ(g_overlay_installs, 2);
+    rt.memory().store32(kBase + 0x0Cu, (original & 0xFFFF0000u) | 0x0Eu);
+    // Through the HLE the game calls right after its .rlc.
+    const mh::HleTable::Entry *writeback = system.hle().find("UtilsForUser", 0x79D1C3FAu);
+    CHECK(writeback != nullptr && writeback->kind == mh::HleKind::kImplemented);
+    overlays.verify();
+    CHECK(!overlays.installed(static_cast<mk::Uid>(bad)));
+    const auto named =
+        std::find_if(overlays.stats().begin(), overlays.stats().end(),
+                     [](const mh::OverlayStats &s) { return s.name == "synthetic"; });
+    CHECK(named != overlays.stats().end() && named->installs == 2u && named->mismatches == 1u);
+    CHECK(!rt.has_function(kBase));
+    const mh::Module *bad_module = modules.find(static_cast<mk::Uid>(bad));
+    CHECK(rt.has_function(0x08804110u) && rt.has_function(0x08804118u));
+    CHECK(bad_module != nullptr && bad_module->bound_stubs.size() == 2u);
+    CHECK_EQ(modules.unload_module(static_cast<mk::Uid>(bad)), bad);
+    CHECK(!rt.has_function(0x08804110u));
+}
+
 void test_runtime_memory() {
     psprecomp::Runtime runtime(32u * 1024u * 1024u);
     mh::RuntimeMemory memory(runtime.memory());
@@ -1445,6 +1571,7 @@ int main() {
     run_test("test_exit_and_restart", &test_exit_and_restart);
     run_test("test_unimplemented_imports", &test_unimplemented_imports);
     run_test("test_module_loader", &test_module_loader);
+    run_test("test_overlays", &test_overlays);
     run_test("test_runtime_memory", &test_runtime_memory);
     run_test("test_vblank_and_interrupts", &test_vblank_and_interrupts);
     run_test("test_ctrl", &test_ctrl);

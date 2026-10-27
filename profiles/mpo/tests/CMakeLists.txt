@@ -58,7 +58,8 @@ endif()
 
 # Python tools in profiles/mpo/tools: tests with synthetic data only.
 if(Python3_FOUND)
-    foreach(mpo_tool_test IN ITEMS tools_test zstd_lite_test ge_usage_test ge_frame_diff_test)
+    foreach(mpo_tool_test IN ITEMS tools_test zstd_lite_test ge_usage_test ge_frame_diff_test
+                                   overlay_scripts_test)
         add_test(NAME mpo_${mpo_tool_test}
                  COMMAND Python3::Interpreter -I ${CMAKE_CURRENT_SOURCE_DIR}/${mpo_tool_test}.py)
     endforeach()
@@ -334,6 +335,24 @@ add_executable(mpo_hle_test hle_test.cpp synthetic_disc.cpp)
 target_link_libraries(mpo_hle_test PRIVATE psprecomp_core mpo_hle)
 mpo_target_warnings(mpo_hle_test)
 add_test(NAME mpo_hle_test COMMAND mpo_hle_test)
+
+# F13: a real overlay library, loaded the way mpo_boot loads the stages.
+add_executable(mpo_overlay_library_test overlay_library_test.cpp)
+target_link_libraries(mpo_overlay_library_test PRIVATE psprecomp_core mpo_hle)
+mpo_target_warnings(mpo_overlay_library_test)
+mpo_enable_overlay_host(mpo_overlay_library_test)
+set(mpo_test_overlay_dir "${CMAKE_CURRENT_BINARY_DIR}/test_overlays")
+mpo_add_overlay_library(mpo_test_overlay HOST mpo_overlay_library_test
+    OUTPUT_DIR "${mpo_test_overlay_dir}" PREFIX test_overlay NAME library_test
+    BASE 0x08B8F900 SIZE 0x1000
+    PRX_SHA256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    TEXT_OFFSET 0x10 TEXT_SIZE 0x20
+    TEXT_SHA256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    SOURCES overlay_test_corpus.cpp)
+mpo_target_warnings(mpo_test_overlay)
+# No add_dependencies(test -> library): on Windows the library links the
+# test's import library, so that would be a cycle. Both are in ALL.
+add_test(NAME mpo_overlay_library_test COMMAND mpo_overlay_library_test "${mpo_test_overlay_dir}")
 
 # mpo_savedata (F18a): dialogs on a virtual clock, and the savedata files in a
 # temporary ms0:/ (never the real save folder). The store test also links

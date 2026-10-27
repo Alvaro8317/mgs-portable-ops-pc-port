@@ -278,15 +278,20 @@ void register_sysmem_and_friends(System &system) {
         [&system](Ctx &) { system.runtime().stop("the game called sceKernelExitGame"); }, true);
     // UtilsForUser: the data cache is the host's, the code is recompiled
     // ahead of time (CLAUDE.md §5: no self-modifying code), so these are the
-    // no-ops PPSSPP makes of them; GPI (development switches) reads 0.
+    // no-ops PPSSPP makes of them; GPI (development switches) reads 0. The
+    // game writes back the cache right after linking a stage with its .rlc,
+    // which is when an installed overlay can be checked (F13).
     for (const auto &[nid, name] :
          {std::pair{0x79D1C3FAu, "sceKernelDcacheWritebackAll"},
           std::pair{0x3EE30821u, "sceKernelDcacheWritebackRange"},
           std::pair{0x34B9FA9Eu, "sceKernelDcacheWritebackInvalidateRange"},
-          std::pair{0xC2DF770Eu, "sceKernelIcacheInvalidateRange"},
-          std::pair{0x37FB5C42u, "sceKernelGetGPI"}}) {
-        def("UtilsForUser", nid, name, [](Ctx &c) { ret(c, 0u); });
+          std::pair{0xC2DF770Eu, "sceKernelIcacheInvalidateRange"}}) {
+        def("UtilsForUser", nid, name, [&system](Ctx &c) {
+            system.overlays().verify();
+            ret(c, 0u);
+        });
     }
+    def("UtilsForUser", 0x37FB5C42u, "sceKernelGetGPI", [](Ctx &c) { ret(c, 0u); });
     // sceSuspendForUser (scePower.cpp).
     def("sceSuspendForUser", 0x090CCB3Fu, "sceKernelPowerTick", [](Ctx &c) { ret(c, 0u); });
     def("sceSuspendForUser", 0xEADB1BD7u, "sceKernelPowerLock",

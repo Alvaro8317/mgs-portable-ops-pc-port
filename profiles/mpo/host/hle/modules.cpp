@@ -15,7 +15,6 @@
 #include <unordered_map>
 
 #include "hle/system.hpp"
-#include "psprecomp/interpreter.hpp"
 
 namespace mpo::hle {
 
@@ -222,6 +221,7 @@ std::uint32_t ModuleManager::load_fake(std::span<const std::uint8_t> header,
 
 std::uint32_t ModuleManager::load(std::span<const std::uint8_t> image, const std::string &path,
                                   std::uint32_t load_address, bool from_top, std::string *error) {
+    const std::span<const std::uint8_t> file = image;
     if (read_u32(image, 0u) == kSceMagic) {
         const std::uint32_t header_size = read_u32(image, 4u);
         if (header_size < image.size()) image = image.subspan(header_size);
@@ -308,20 +308,18 @@ std::uint32_t ModuleManager::load(std::span<const std::uint8_t> image, const std
         read_exports(*module, info->ent_top, info->ent_end);
         if (module->entry == 0u) module->entry = module->start_func;
         module->imports = elf.scan_imports(runtime.memory(), *info);
-        for (const psprecomp::PspImport &import : module->imports) {
-            const std::uint32_t stub = psprecomp::GuestMemory::canonical(import.stub_address);
-            if (runtime.has_function(stub)) continue;
-            stub_bindings()[stub] = StubBinding{intern_library(import.library), import.nid};
-            char nid[16];
-            std::snprintf(nid, sizeof(nid), "%08X", import.nid);
-            runtime.register_function(stub, &invoke_bound_stub, import.library + "::" + nid);
-            module->bound_stubs.push_back(stub);
-        }
         // PPSSPP loads a firmware module it replaces with HLE, but never runs it.
         module->fake = is_hle_firmware_module(module->name);
         module->uid = k.create_host_object(module->name.c_str());
         Module &m = *module;
         modules_.emplace(m.uid, std::move(module));
+        // A stage overlay's corpus (F13) goes in before the stubs are bound:
+        // it brings its own import wrappers. A module with no code at its
+        // entry and no corpus runs on the interpreter; OverlayManager says so.
+        const std::uint32_t code = m.start_func != 0u ? m.start_func : m.entry;
+        if (!m.fake && code != 0u && code != 0xFFFFFFFFu)
+            (void)system_.overlays().on_module_loaded(m.uid, m.name, file, m.base, m.size, code);
+        bind_stubs(m);
         link(m);
         system_.hle().cover_imports(m.imports);
         system_.hle().trace_event(
@@ -329,22 +327,33 @@ std::uint32_t ModuleManager::load(std::span<const std::uint8_t> image, const std
             "%zu imports",
             m.uid, m.name.c_str(), path.c_str(), m.base, m.base + m.size, m.gp, m.start_func,
             m.exports.size(), m.imports.size());
-        const std::uint32_t code = m.start_func != 0u ? m.start_func : m.entry;
-        if (!m.fake && code != 0u && code != 0xFFFFFFFFu && !runtime.has_function(code)) {
-            std::fprintf(stderr,
-                         "mpo: module '%s' loaded at %08X has no recompiled code at its entry %08X "
-                         "(no corpus "
-                         "for it, or one generated for another address)%s\n",
-                         m.name.c_str(), m.base, code,
-                         psprecomp::interpreter_fallback_enabled() ? "; the interpreter will run it"
-                                                                   : "");
-        }
         return static_cast<std::uint32_t>(m.uid);
     } catch (const std::exception &e) {
         if (block != kernel::BlockAllocator::kFailed && blocks != nullptr) blocks->free(block);
         if (error != nullptr) *error = path + ": " + e.what();
         return err::kUnsupportedPrxType;
     }
+}
+
+void ModuleManager::bind_stubs(Module &module) {
+    // The import stubs no corpus covers (F11b): host functions that call the
+    // HLE import, like the wrappers of a generated corpus.
+    psprecomp::Runtime &runtime = system_.runtime();
+    for (const psprecomp::PspImport &import : module.imports) {
+        const std::uint32_t stub = psprecomp::GuestMemory::canonical(import.stub_address);
+        if (runtime.has_function(stub)) continue;
+        stub_bindings()[stub] = StubBinding{intern_library(import.library), import.nid};
+        char nid[16];
+        std::snprintf(nid, sizeof(nid), "%08X", import.nid);
+        runtime.register_function(stub, &invoke_bound_stub, import.library + "::" + nid);
+        if (std::find(module.bound_stubs.begin(), module.bound_stubs.end(), stub) ==
+            module.bound_stubs.end())
+            module.bound_stubs.push_back(stub);
+    }
+}
+
+void ModuleManager::bind_import_stubs(kernel::Uid uid) {
+    if (Module *m = get(uid); m != nullptr) bind_stubs(*m);
 }
 
 void ModuleManager::read_exports(Module &module, std::uint32_t ent_top, std::uint32_t ent_end) {
@@ -580,6 +589,7 @@ std::uint32_t ModuleManager::unload_module(kernel::Uid uid) {
     Module *m = get(uid);
     if (m == nullptr) return k.delay_result(err::kUnknownModule, 150u);
     unlink(*m);
+    system_.overlays().on_module_unloaded(uid);
     for (const std::uint32_t stub : m->bound_stubs) {
         system_.runtime().unregister_functions(stub, stub + 8u);
         stub_bindings().erase(stub);

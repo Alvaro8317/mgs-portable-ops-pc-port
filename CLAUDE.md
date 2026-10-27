@@ -142,8 +142,13 @@ los hilos y fibras, en vez de depender de `ulimit`.
   - El `.rlc` no es un archivo aparte: va **dentro del `_zar`** de la etapa. Es una tabla con el
     formato de las relocaciones PRX que enlaza la etapa con `mgp_main`, y **la aplica `mgp_main`**
     (`0x08805C0C`) al cargarla (ver `docs/formats/rlc.md`, verificado en F04).
-  - Hay que recompilar cada PRX de etapa por separado, como una librería compartida identificada por
-    hash, a partir del PRX ya enlazado (`rlc.py link`).
+  - Cada PRX de etapa se recompila por separado, como una librería compartida, a partir del PRX ya
+    enlazado (`rlc.py link`). Se hace con `build_overlays.py`, y `OverlayManager` la instala al
+    cargarla (F13 [V]):
+    - la etapa se identifica por el SHA-256 del PRX y la base (`config/stages.toml`): `init` y
+      `r_main01` van en `0x08AFB800` y el resto en `0x08B8F900`;
+    - las etapas con el mismo PRX traen el mismo `.rlc`;
+    - el `.text` se verifica después del `.rlc`, en `sceKernelDcacheWritebackAll`.
   - El intérprete cubre lo que no se haya recompilado.
 - Hay otros módulos de Konami, que son PRX aparte en `USRDIR/modules/` y no van cifrados (verificado
   en F02): `KCEJ_FS` (`kjfs.prx`, el sistema de archivos), `KCEJ_SOUND2` (`sound2.prx`, el driver de

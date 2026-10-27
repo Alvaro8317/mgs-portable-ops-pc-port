@@ -1,0 +1,39 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Entry point of one stage overlay library, configured from the stage's
+// overlay.txt (generate.py --stage) by profiles/mpo/host/hle/CMakeLists.txt.
+// Everything else in the library is psp_recomp output with the
+// @MPO_OVERLAY_PREFIX@ symbol prefix.
+
+#define MPO_OVERLAY_MODULE 1
+#include "hle/overlay_module.hpp"
+
+#include "psprecomp/allegrex_context.hpp"
+#include "psprecomp/runtime.hpp"
+
+namespace psprecomp {
+void register_@MPO_OVERLAY_PREFIX@_functions(Runtime &runtime);
+}
+
+namespace {
+
+constexpr mpo::hle::OverlayModuleInfo kInfo{
+    mpo::hle::kOverlayAbiVersion,
+    static_cast<std::uint32_t>(sizeof(psprecomp::Runtime)),
+    static_cast<std::uint32_t>(sizeof(psprecomp::AllegrexContext)),
+    "@MPO_OVERLAY_NAME@",
+    @MPO_OVERLAY_BASE@u,
+    @MPO_OVERLAY_SIZE@u,
+    "@MPO_OVERLAY_PRX_SHA256@",
+    @MPO_OVERLAY_TEXT_OFFSET@u,
+    @MPO_OVERLAY_TEXT_SIZE@u,
+    "@MPO_OVERLAY_TEXT_SHA256@",
+};
+
+} // namespace
+
+const mpo::hle::OverlayModuleInfo *mpo_overlay_info() { return &kInfo; }
+
+void mpo_register_overlay(psprecomp::Runtime &runtime) {
+    psprecomp::register_@MPO_OVERLAY_PREFIX@_functions(runtime);
+}

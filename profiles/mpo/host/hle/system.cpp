@@ -69,7 +69,7 @@ System::System(psprecomp::Runtime &runtime, const SystemConfig &config)
     : runtime_(runtime), config_(config), memory_(runtime.memory()),
       rtc_(config.rtc_from_host ? Rtc::from_host()
                                 : Rtc(config.rtc_base_seconds, config.rtc_utc_offset_seconds)),
-      bridge_(runtime), modules_(*this) {
+      bridge_(runtime), modules_(*this), overlays_(*this) {
     kernel::KernelConfig kernel_config;
     kernel_config.memory = &memory_;
     kernel_config.clock = &clock_;

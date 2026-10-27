@@ -18,6 +18,8 @@
 // The controller (F10b) is sampled at the end of each vblank (Ctrl). The GE
 // (F11b) runs the display lists of sceGe on mpo_ge (GeManager), and sceMpeg
 // plays the videos on the media engine of F17a without showing them (Mpeg).
+// The stage overlays (F13) install their recompiled corpus when the game loads
+// them (OverlayManager).
 
 #pragma once
 
@@ -37,6 +39,7 @@
 #include "hle/io_manager.hpp"
 #include "hle/modules.hpp"
 #include "hle/mpeg.hpp"
+#include "hle/overlays.hpp"
 #include "hle/runtime_memory.hpp"
 #include "kernel/kernel.hpp"
 #include "psprecomp/runtime.hpp"
@@ -77,6 +80,7 @@ public:
     [[nodiscard]] CpuBridge &cpu() noexcept { return bridge_; }
     [[nodiscard]] HleTable &hle() noexcept { return *hle_; }
     [[nodiscard]] ModuleManager &modules() noexcept { return modules_; }
+    [[nodiscard]] OverlayManager &overlays() noexcept { return overlays_; }
     [[nodiscard]] IoManager &io() noexcept { return *io_; }
     [[nodiscard]] Display &display() noexcept { return *display_; }
     [[nodiscard]] Interrupts &interrupts() noexcept { return *interrupts_; }
@@ -113,6 +117,7 @@ private:
     std::unique_ptr<kernel::Kernel> kernel_;
     std::unique_ptr<HleTable> hle_;
     ModuleManager modules_;
+    OverlayManager overlays_;
     std::unique_ptr<IoManager> io_;
     std::unique_ptr<Interrupts> interrupts_;
     std::unique_ptr<Display> display_;

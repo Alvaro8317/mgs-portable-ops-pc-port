@@ -102,6 +102,10 @@ public:
     std::uint32_t get_module_id();
     std::uint32_t get_module_id_by_address(std::uint32_t address) const;
 
+    // Binds the import stubs of a module that no corpus covers to the HLE
+    // (after a stage overlay's corpus was removed, F13).
+    void bind_import_stubs(kernel::Uid uid);
+
     // The thread of a module function (module_start/stop, the boot root)
     // returned with $v0 (CpuBridge's thread return handler).
     void on_thread_return(kernel::Uid thread, std::uint32_t v0);
@@ -114,6 +118,7 @@ private:
     Module *get(kernel::Uid uid);
     std::uint32_t load_fake(std::span<const std::uint8_t> psp_header, const std::string &path,
                             bool from_top, std::string *error);
+    void bind_stubs(Module &module);
     void read_exports(Module &module, std::uint32_t ent_top, std::uint32_t ent_end);
     void link(Module &module);
     void unlink(const Module &module);

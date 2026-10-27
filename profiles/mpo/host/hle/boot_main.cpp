@@ -11,6 +11,7 @@
 //            [--fiber-stack-mib N] [--preempt-interval N] [--us-per-preempt N]
 //            [--press <buttons>@<ms>[+<ms>]]... [--capture <dir>] [--capture-every N]
 //            [--window 0|1] [--scale N] [--input-map <input.toml>]
+//            [--overlays <dir>|none]
 //
 // It measures the start-up (registering the dispatch table: time and memory),
 // runs PSP threads until --until-us of virtual time (default 5 s), a runtime
@@ -21,6 +22,11 @@
 //
 // F11b: the report adds the GE (lists, commands, interrupts) and the video
 // frames sceMpeg played.
+//
+// F13: the stage overlay libraries in --overlays (default: <build>/overlays)
+// are loaded at start; the report lists every stage the game loaded, whether
+// its corpus was installed and verified, and the instructions the
+// interpreter ran inside the stage windows.
 //
 // F10b: the display and the controller.
 //   --press start@15000+200   holds Start from 15 s to 15.2 s of PSP time
@@ -283,6 +289,7 @@ int main(int argc, char **argv) {
     bool window = false;
     int window_scale = 2;
     std::string input_map;
+    std::string overlays_dir = MPO_DEFAULT_OVERLAYS;
     for (int i = 1; i + 1 < argc; i += 2) {
         const std::string option = argv[i];
         const std::string value = argv[i + 1];
@@ -338,6 +345,8 @@ int main(int argc, char **argv) {
             window_scale = std::max(1, std::atoi(value.c_str()));
         } else if (option == "--input-map") {
             input_map = value;
+        } else if (option == "--overlays") {
+            overlays_dir = value == "none" ? std::string() : value;
         } else {
             return fail("unknown option " + option);
         }
@@ -404,6 +413,10 @@ int main(int argc, char **argv) {
         if (!nid_table.empty() && !system.hle().load_nid_names(nid_table, &error))
             return fail(error);
         system.hle().set_trace(trace, trace_limit);
+        if (!overlays_dir.empty()) {
+            const std::size_t overlays = system.overlays().load_libraries(overlays_dir);
+            std::printf("stage overlays: %zu corpora from %s\n", overlays, overlays_dir.c_str());
+        }
 
         // ---- F10b: what the display shows, and the controller ----
         mpo::frontend::InputTranslator translator;
@@ -589,10 +602,36 @@ int main(int argc, char **argv) {
                         site != sites.end() ? site->second : 0u, entry->library.c_str(),
                         entry->name.c_str(), entry->calls != 0u ? "" : "");
         }
+        // F13: the stages and the code the interpreter ran inside them.
+        const auto profile = psprecomp::interpreter_entry_profile();
+        std::printf("\nstage overlays: %zu loaded\n", system.overlays().stats().size());
+        std::printf("  %-28s %-17s %5s %8s %8s %10s %11s %12s\n", "overlay", "window", "loads",
+                    "installs", "verified", "mismatches", "interpreted", "instructions");
+        const auto in_window = [](const mpo::hle::OverlayStats &overlay, std::uint32_t address) {
+            return address >= overlay.base && address < overlay.base + overlay.size;
+        };
+        // Stages that share a window (init and r_main01) share its count.
+        for (const mpo::hle::OverlayStats &overlay : system.overlays().stats()) {
+            std::uint64_t instructions = 0;
+            for (const auto &[address, count] : profile)
+                if (in_window(overlay, address)) instructions += count;
+            std::printf("  %-28s %08X..%08X %5u %8u %8u %10u %11u %12llu\n", overlay.name.c_str(),
+                        overlay.base, overlay.base + overlay.size, overlay.loads, overlay.installs,
+                        overlay.verified, overlay.mismatches, overlay.interpreted,
+                        static_cast<unsigned long long>(instructions));
+        }
+        std::uint64_t stage_instructions = 0;
+        for (const auto &[address, count] : profile) {
+            const auto &overlays = system.overlays().stats();
+            if (std::any_of(overlays.begin(), overlays.end(),
+                            [&](const auto &overlay) { return in_window(overlay, address); }))
+                stage_instructions += count;
+        }
         const psprecomp::InterpreterStats stats = psprecomp::interpreter_stats();
-        std::printf("\ninterpreter: %llu instructions in %llu entries\n",
+        std::printf("\ninterpreter: %llu instructions in %llu entries (%llu in stage windows)\n",
                     static_cast<unsigned long long>(stats.instructions),
-                    static_cast<unsigned long long>(stats.entries));
+                    static_cast<unsigned long long>(stats.entries),
+                    static_cast<unsigned long long>(stage_instructions));
         const bool faulted =
             runtime.stopped() &&
             runtime.stop_reason().find("unimplemented HLE import") == std::string::npos &&
