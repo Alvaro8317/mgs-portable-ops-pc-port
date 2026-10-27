@@ -66,7 +66,8 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 1 ✅ | F06, F07a, F08a, F11a, F16a | F03, F04 y F05 (cumplidos). Integrada el 2026-10-25. |
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
-| — | F09 → F10b → F11b → F13 → F14b → F15 → F16b → F17b → F18 → F19 → F20b → F21 → F22 | en serie |
+| 4 🟨 | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hace F09 en serie. |
+| — | F09 → F10b → F11b → F13 → F14b → F15b → F16b → F17b → F18b → F19 → F20b → F21 → F22 | en serie |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -102,12 +103,14 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F13 | Overlays de etapa en runtime | M2 | ⬜ pendiente |
 | F14a | Renderer Vulkan: base sobre los dumps | M3 | ✅ hecha (ola 3) |
 | F14b | Renderer Vulkan en el juego | M3 | ⬜ pendiente |
-| F15 | Renderer Vulkan: framebuffers y efectos | M3 | ⬜ pendiente |
+| F15a | Renderer Vulkan: blending por shader y efectos (autónomo) | M3 | ⬜ pendiente (ola 4) |
+| F15b | Renderer Vulkan: framebuffers en el juego | M3 | ⬜ pendiente |
 | F16a | Audio autónomo: SAS, ATRAC3 y salida SDL3 | M4 | ✅ hecha (ola 1) |
 | F16b | Audio en el juego: `sceAudio`, `sceSas` y `sceAtrac` | M4 | ⬜ pendiente |
 | F17a | Decodificador de PMF y fuente PGF (autónomos) | M4 | ✅ hecha (ola 2) |
 | F17b | Video del título y fuentes en el juego | M4 | ⬜ pendiente |
-| F18 | Savedata, OSK y diálogos | M4 | ⬜ pendiente |
+| F18a | Savedata, OSK y diálogos (autónomo) | M4 | ⬜ pendiente (ola 4) |
+| F18b | Savedata, OSK y diálogos en el juego | M4 | ⬜ pendiente |
 | F19 | Primera misión y repetición de input | M5 | ⬜ pendiente |
 | F20a | Generador de APs virtuales (autónomo) | M6 | ✅ hecha (ola 2) |
 | F20b | AP Scan, red y GPS en el juego | M6 | ⬜ pendiente |
@@ -486,6 +489,15 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     `sceOpenPSIDGetOpenPSID`, `sceCtrlSetSamplingMode`, `sceUtilityGetSystemParamInt`,
     `sceImposeSetLanguageMode` y `sceDisplayGetAccumulatedHcount`, antes de cargar los módulos.
   - Un NID nuevo es una línea: `HleTable::add(lib, nid, nombre, HleKind::kImplemented, handler)`.
+- **Notas (ola 4)**: F09 se hace en la sesión principal mientras corren F15a y F18a.
+  - **`ms0:/`**: F09 lo mapea a un directorio que se pasa por opción (`mpo_boot --ms0 <dir>`), sin
+    decidir la carpeta por defecto de cada sistema operativo. Esa carpeta la resuelve `mpo_savedata`
+    (F18a), y se conecta en F18b. En las pruebas, `ms0:/` apunta a `analysis/f09/ms0/`, nunca a una
+    carpeta de saves real.
+  - Los imports triviales que cortan el arranque antes de que el juego lea datos
+    (`sceOpenPSIDGetOpenPSID`, `sceCtrlSetSamplingMode`, `sceUtilityGetSystemParamInt`,
+    `sceImposeSetLanguageMode`) se cubren aquí como `stub`, con los valores por defecto de PPSSPP,
+    para poder llegar a `slot.dat`. Se completan en F10b (ctrl) y F18b (parámetros del sistema).
 
 ### F10a — Ventana, presentación e input, autónomo (ola 2)
 
@@ -730,19 +742,60 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   con `Ge::SetDrawBackend`. La ventana y la swapchain están en `mpo_vulkan_sdl`
   (`SwapchainPresenter`). Ver "Para F14b" en `docs/sessions/F14a.md`.
 
-### F15 — Renderer Vulkan: framebuffers y efectos
+### F15a — Renderer Vulkan: blending por shader y efectos, autónomo (ola 4)
 
-- **Objetivo**: igualar al renderer por software en todos los casos.
-- **Requisitos**: F14b.
+- **Objetivo**: que `--renderer=vulkan` salga igual que `--renderer=soft` en los 11 dumps de F05,
+  sin el juego.
+- **Requisitos**: F14a. Los 11 dumps en `/mnt/c/Users/eduar/Documents/PPSSPP/PSP/SYSTEM/DUMP/`.
+- **Tareas**:
+  - **Blending por shader** con la aritmética entera de softgpu (`((2c+1)(2f+1)) >> 10`, truncado) y
+    el **dither después** del blending, leyendo el destino en el fragment shader:
+    - `VK_EXT_rasterization_order_attachment_access` o `VK_EXT_fragment_shader_interlock` donde
+      estén; si no, input attachment con dependencia propia o una copia del target por lote (este
+      último camino tiene que existir siempre, porque es el que funciona en cualquier GPU);
+    - con el blending en el shader caen solos los casos que F14a hoy aproxima: factores dobles, dos
+      colores fijos distintos, `ABS_DIFF` y máscara de color por bit;
+    - el blending fijo se queda como vía rápida cuando el resultado es exacto (sin blending o sin
+      redondeo que se note), detrás de un toggle.
+  - **Operaciones lógicas** en el shader, con el mismo camino de lectura del destino (no aparecen en
+    F05; tests sintéticos contra softgpu).
+  - **Clamp de profundidad**: comprobar con tests sintéticos que el clamp y la guard-band de `mpo_ge`
+    llegan bien a la GPU (Z fuera de 0-65535, vértices más allá de la guard-band, `GEQUAL` con el
+    rango de F05), y que el `depthClamp` de Vulkan no cambia nada cuando no está.
+  - **Herramienta de comparación** `soft` contra `vulkan` con un umbral: reproduce cada dump con los
+    dos renderers y falla si la diferencia pasa del umbral (píxeles distintos y delta máxima por
+    canal). Puede ser un modo de `mpo_ppdmp_replay` o un script sobre `ge_frame_diff.py`. Tiene que
+    servir para la prueba en Windows y para F15b.
+  - **Toggles A/B por variable de entorno** para cada optimización (`MPO_VK_*`, como
+    `MPO_VK_NO_13`): blending fijo frente a shader, cada camino de lectura del destino, la
+    agrupación de draws y la caché de texturas. Se documentan en la nota.
+- **Criterios de hecho**:
+  - en los 11 dumps, la diferencia con `soft` está por debajo del umbral en lavapipe, en los
+    caminos 1.3 y 1.2 y con 0 errores de validación (incluida la de sincronización). El objetivo es
+    0 píxeles distintos; el umbral por defecto (pensado para GPUs reales) se fija y justifica en la
+    nota;
+  - logic ops y clamp de profundidad tienen tests sintéticos que pasan contra softgpu;
+  - `ctest` pasa con Clang (ASan y UBSan) y GCC, y `mpo_vulkan_renderer_test` sigue corriendo en la
+    CI con lavapipe;
+  - el procedimiento de la prueba en una GPU real de Windows (F14a) se amplía con la herramienta
+    nueva.
+- **Notas (ola 4)**: es un cambio dentro de `profiles/mpo/host/vulkan/` y sus tests. Si hace falta
+  tocar `ge/`, que sea mínimo y justificado, como en F14a (ninguna otra fase de la ola toca `ge/` ni
+  `vulkan/`). Los shaders cambian, así que hay que regenerar `ge_shaders_spv.inc` con
+  `compile_shaders.py` (`mpo_vulkan_shaders_fresh`).
+
+### F15b — Renderer Vulkan: framebuffers en el juego
+
+- **Objetivo**: igualar al renderer por software en el juego, en todos los casos.
+- **Requisitos**: F14b y F15a.
 - **Tareas**:
   - Seguimiento de framebuffers en VRAM, render-to-texture, texturizar desde el target actual y
-    lecturas de la CPU.
-  - Blending por shader (con el dither después) cuando el hardware no alcance, operaciones lógicas
-    y clamp de profundidad. Splines y beziers en GPU, si la teselación en la CPU de F14a no alcanza.
-  - Herramienta para comparar frames entre `soft` y `vulkan` con un umbral.
-  - Toggles A/B por variable de entorno para cada optimización.
-- **Criterios de hecho**: en las escenas de F05, la diferencia entre los dos renderers está por debajo
-  del umbral. **M3 cerrado.**
+    lecturas de la CPU (invalidar los targets y la caché de texturas cuando la CPU escribe en VRAM).
+  - Subir desde la VRAM los framebuffers que no dibuja el GE (el video 8888 de F05 §4.1) para
+    presentarlos.
+  - Splines y beziers en GPU, si la teselación en la CPU de F14a no alcanza.
+- **Criterios de hecho**: en las escenas de F05, ahora corriendo el juego, la diferencia entre los
+  dos renderers está por debajo del umbral de F15a. **M3 cerrado.**
 - **Notas (F05)**: **en las escenas capturadas no hubo render-to-texture.** Lo que se lee de VRAM es
   una caché de texturas CLUT en `0x0CC000` y más arriba, y hay que invalidarla cuando se escribe en
   VRAM.
@@ -853,15 +906,58 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     y `0x04110000`, sin draws del GE.
   - El bucle del título es probablemente `MPO_OP_LOOP.pmf` o `MPO_loop.pmf` [?].
 
-### F18 — Savedata, OSK y diálogos
+### F18a — Savedata, OSK y diálogos, autónomo (ola 4)
+
+- **Objetivo**: tener la lógica de `sceUtilitySavedata`, `sceUtilityOsk` y `sceUtilityMsgDialog`
+  lista y probada, sin el juego.
+- **Requisitos**: ninguno. Para saber qué usa el juego: F03 y F04 (los imports de `sceUtility*`
+  están en 23 etapas, no en `mgp_main`; `prx_imports.py` y el export de Ghidra de `title` en
+  `analysis/out/stage_title`).
+- **Tareas**:
+  - Librería `mpo_savedata` en `profiles/mpo/host/savedata/`, con la API estrecha de las olas (la
+    memoria de la PSP como `span` y callbacks; sin NIDs).
+  - **Qué usa el juego**: ubicar en las etapas (Ghidra) las llamadas a
+    `sceUtilitySavedataInitStart`, `sceUtilityOskInitStart` y `sceUtilityMsgDialogInitStart`, y qué
+    modos y campos de los parámetros rellenan (como hizo F20a con el AP Scan). Si no se puede
+    resolver en estático, se priorizan los modos por lo que hace PPSSPP y se anota como [?].
+  - **Máquina de estados** de los tres diálogos, portada de PPSSPP (`Core/Dialog/PSPDialog.cpp`,
+    `PSPSaveDialog.cpp`, `SavedataParam.cpp`, `PSPOskDialog.cpp`, `PSPMsgDialog.cpp`, con cabecera
+    de origen): `InitStart` → `Update` → `GetStatus` → `ShutdownStart`, los retrasos de cada
+    transición, los códigos de error y lo que se escribe en la estructura de parámetros.
+  - **Savedata**: los modos que usa el juego, **incluido delete**. Leer el issue #6600 de PPSSPP
+    (el borrado podía vaciar `SAVEDATA`) y probar que el borrado solo toca la carpeta del save
+    elegido. Escribir y leer `PARAM.SFO` (se puede reusar el lector de `host/disc/param_sfo`), el
+    archivo de datos y los íconos, con la misma estructura de carpetas que PPSSPP
+    (`PSP/SAVEDATA/<gameName><saveName>/`) para que los saves sean compatibles.
+  - **Cifrado, si aplica**: averiguar si MPO pide savedata cifrado (la clave y la versión de cifrado
+    de los parámetros). Si aplica, el cifrado va detrás de una interfaz inyectable. **Ojo**: hoy
+    libkirk solo lo enlaza el instalador y las claves no se versionan (F02). F18a no cambia esa regla
+    por su cuenta: propone en la nota cómo llega al runtime y lo prueba con un cifrador falso.
+  - **Carpetas de saves por sistema operativo**: `%APPDATA%` en Windows y `$XDG_DATA_HOME` (o
+    `~/.local/share`) en Linux, con una carpeta del proyecto. Esa es la raíz por defecto de `ms0:/`
+    que F18b le pasa a la IO de F09. Los tests nunca usan la carpeta real.
+  - **UI del OSK y del diálogo de mensajes**: el modelo (distribución del teclado, navegación con el
+    mando, edición del texto en UTF-16, los botones del diálogo y su resultado) va separado del
+    dibujo y se prueba sin ventana. El dibujo se propone en la nota (Dear ImGui sobre SDL3 o
+    dibujado en el framebuffer de la PSP) y, si cabe, se muestra con una demo propia.
+  - Tests sin datos del juego: transiciones y tiempos de cada diálogo, guardar → cargar → borrar
+    sobre una carpeta temporal (con los hashes de antes y después), el caso de #6600, parámetros
+    inválidos y el OSK con una secuencia de input sintética.
+- **Criterios de hecho**: `ctest` pasa con Clang (ASan y UBSan) y GCC, y la nota documenta qué modos
+  y campos usa MPO, si hace falta el cifrado y cómo se dibujan los diálogos.
+- **Notas (ola 4)**: si se añade Dear ImGui u otra dependencia, va en `third_party/` con su LICENSE y
+  en `THIRD_PARTY.md`.
+
+### F18b — Savedata, OSK y diálogos en el juego
 
 - **Objetivo**: guardar y cargar partida, y poder escribir nombres y contraseñas.
-- **Requisitos**: F17b.
+- **Requisitos**: F17b y F18a. Los imports están en las etapas, así que necesita F13.
 - **Tareas**:
-  - `sceUtilitySavedata` con todos los modos que use el juego (incluido **delete**, con cuidado del
-    bug de PPSSPP #6600), cifrado de savedata si aplica y diálogos propios con ImGui.
-  - `sceUtilityOsk` y `sceUtilityMsgDialog`.
-  - Carpetas de saves por sistema operativo, y compatibilidad de saves con PPSSPP si se puede.
+  - Registrar los NIDs de `sceUtilitySavedata*`, `sceUtilityOsk*` y `sceUtilityMsgDialog*` sobre
+    `mpo_savedata`, y completar `sceUtilityGetSystemParamInt` y `sceImposeSetLanguageMode`.
+  - Conectar la raíz de `ms0:/` de F09 a la carpeta por defecto de `mpo_savedata`.
+  - Dibujar los diálogos en la ventana del juego, con el renderer elegido.
+  - Si hace falta el cifrado, conectarlo como se haya decidido en F18a.
 - **Criterios de hecho**: se guarda y se carga entre ejecuciones y se ingresa una contraseña de
   reclutamiento. Los saves de prueba se hashean antes y después. **M4 cerrado.**
 
@@ -872,7 +968,7 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 ### F19 — Primera misión y repetición de input
 
 - **Objetivo**: completar la primera misión.
-- **Requisitos**: F18.
+- **Requisitos**: F18b.
 - **Tareas**:
   - Grabar y reproducir el input de forma determinista (lectura por lectura).
   - Capturar frames cada N y compararlos contra referencias locales.
