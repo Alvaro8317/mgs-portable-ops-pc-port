@@ -2223,10 +2223,6 @@ void test_utility() {
     mh::SystemConfig config;
     config.ms0_root = ms0;
     Fixture f(config);
-#ifdef _WIN32
-    // Diagnostics for the Windows CI, where this test failed without a message.
-    f.system->hle().set_trace(stdout, 4000u);
-#endif
     psprecomp::Runtime &rt = f.runtime;
     const auto put = [&rt](std::uint32_t address, const void *data, std::size_t size) {
         const auto *bytes = static_cast<const std::uint8_t *>(data);
@@ -2414,9 +2410,12 @@ void test_utility() {
     CHECK_EQ(result(6), 0u);
     CHECK_EQ(f.word(kSave + 0x1Cu), 0u); // common.result
     const std::filesystem::path dir = ms0 / "PSP" / "SAVEDATA" / "ULUS10202001";
-    std::ifstream data_file(dir / "00000000.000", std::ios::binary);
-    const std::vector<std::uint8_t> written((std::istreambuf_iterator<char>(data_file)),
-                                            std::istreambuf_iterator<char>());
+    std::vector<std::uint8_t> written;
+    {
+        // Closed before remove_all below: Windows cannot delete an open file.
+        std::ifstream data_file(dir / "00000000.000", std::ios::binary);
+        written.assign(std::istreambuf_iterator<char>(data_file), std::istreambuf_iterator<char>());
+    }
     CHECK(written == payload);
     CHECK(std::filesystem::is_regular_file(dir / "PARAM.SFO"));
     // AUTOLOAD: the same bytes, and dataSize as read (MPO checks it).
@@ -2474,7 +2473,9 @@ void test_utility() {
     CHECK_EQ(f.system->utility().ppge().stats().lists, 32u);
     CHECK_EQ(f.system->ge().stats().interrupts, interrupts_before);
     CHECK(!f.system->volatile_memory().locked());
-    std::filesystem::remove_all(ms0);
+    std::error_code ec;
+    std::filesystem::remove_all(ms0, ec);
+    CHECK(!ec);
 }
 
 #ifdef _WIN32
