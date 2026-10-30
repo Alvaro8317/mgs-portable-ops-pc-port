@@ -180,6 +180,14 @@ Fonts::Fonts(System &system) : system_(system) {}
 
 Fonts::~Fonts() = default;
 
+const font::Pgf *Fonts::firmware_font(std::string_view file_name) {
+    (void)load_internal_fonts();
+    for (const auto &f : internal_) {
+        if (f->valid && file_name == f->style.fontFileName) return &f->pgf;
+    }
+    return nullptr;
+}
+
 std::size_t Fonts::load_internal_fonts() {
     if (fonts_loaded_) return internal_.size();
     fonts_loaded_ = true;

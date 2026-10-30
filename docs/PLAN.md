@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b → F15b → F19 → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b → F19 → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) puede ir en paralelo, en su worktree. |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -110,7 +110,8 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F17a | Decodificador de PMF y fuente PGF (autónomos) | M4 | ✅ hecha (ola 2) |
 | F17b | Video del título y fuentes en el juego | M4 | ✅ hecha (Windows y la sincronía contra PPSSPP: pendientes) |
 | F18a | Savedata, OSK y diálogos (autónomo) | M4 | ✅ hecha (ola 4) |
-| F18b | Savedata, OSK y diálogos en el juego | M4 | ⬜ pendiente |
+| F18b | Savedata, OSK y diálogos en el juego | M4 | ✅ hecha (la contraseña pasa a F19; el teclado del PC y Windows: pendientes del usuario) |
+| F18c | Conversor de saves cifrados en el instalador (autónomo) | M4 | ⬜ pendiente |
 | F19 | Primera misión y repetición de input | M5 | ⬜ pendiente |
 | F20a | Generador de APs virtuales (autónomo) | M6 | ✅ hecha (ola 2) |
 | F20b | AP Scan, red y GPS en el juego | M6 | ⬜ pendiente |
@@ -919,6 +920,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Casi todo lo que le queda (render-to-texture, transferencias de bloque y el coste del readback)
     se ve en esas escenas 3D, no en el título.
   - El orden en serie queda F16b → F17b → F18b → F15b → F19.
+  - **Notas (F18b)**: ya se llega a una escena 3D, la celda de `st04vo`, con
+    `analysis/f18b/walk_new_game.txt` más Start a los 90 s para saltar el cómic. Vulkan avisa ahí de
+    "framebuffer reused with another format or stride" y "texture from a render target" (F15).
 - **Tareas**:
   - Seguimiento de framebuffers en VRAM, render-to-texture, texturizar desde el target actual y
     lecturas de la CPU (invalidar los targets y la caché de texturas cuando la CPU escribe en VRAM).
@@ -1190,6 +1194,35 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   (`build_overlays.py --stages <s>`) y comprobar en el reporte de `mpo_boot` que su overlay sale
   "verified" (si sale con un aviso de base, añadirla a `config/stages.toml`).
 
+- **Notas (cierre de F18b)**: hecha, ver `docs/sessions/F18b.md`.
+  - NIDs sobre `mpo_savedata` (`host/hle/utility.hpp`), dibujo con PPGe (`host/hle/ppge.hpp`) y
+    texto PGF del firmware, `ms0:/` por defecto en la carpeta por sistema operativo,
+    `mpo_boot --osk-text` y el teclado del PC en el OSK.
+  - **[V]** NEW GAME → nombre (OSK) → `AUTOSAVE` → dificultad → `r_main02` → `flashdemo` →
+    **`st04vo`, la celda, la primera etapa jugable**, todo recompilado. `slot.dat` se lee por
+    `umd1:` por sectores, no por `sce_lbn`.
+  - **[V]** Cargar (`LISTLOAD`) en otro proceso, y borrar (`LISTALLDELETE`) solo el save elegido,
+    con hashes.
+  - **Cambios de plan**: la contraseña de reclutamiento se prueba en F19 (está en `briefing`,
+    después del prólogo), y el conversor de saves cifrados es la fase F18c.
+
+### F18c — Conversor de saves cifrados en el instalador (autónomo)
+
+- **Objetivo**: poder usar en el port un save de una PSP o de PPSSPP, y llevar uno del port a ellas.
+- **Requisitos**: F18a (la interfaz `SavedataCipher` y el contrato de MPO) y F02 (libkirk en el
+  instalador). No necesita el juego en marcha: se puede hacer en una ola, en su worktree.
+- **Decidido por el usuario el 2026-10-30**: un conversor en el instalador, y el runtime nunca lleva
+  claves.
+- **Tareas**:
+  - `mpo --import-save <dir>` y `mpo --export-save <dir>`: un save de MPO en modo 5 (de una PSP o de
+    PPSSPP) a uno sin cifrar en `ms0/PSP/SAVEDATA`, y al revés.
+  - Implementar `SavedataCipher` portando `EncryptData`, `DecryptData`, `UpdateHash` y `BuildHash`
+    de `Core/Dialog/SavedataParam.cpp`, más `Core/HLE/sceChnnlsv.cpp`, que se **descarga al
+    configurar con su SHA-256** (como `third_party/ppsspp_crypto`) porque trae claves.
+  - Tests sin datos del juego (un save sintético cifrado y descifrado de ida y vuelta).
+- **Criterios de hecho**: un save de PPSSPP del usuario (`PSP/SAVEDATA/ULUS10202*`) se importa, el
+  port lo carga con LOAD GAME, y exportarlo de vuelta da un save que PPSSPP carga; todo en local.
+
 ---
 
 ## M5 y M6 — Jugable
@@ -1205,6 +1238,12 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Verificar que el gameplay corre a 20 fps con el timestep original.
 - **Criterios de hecho**: la primera misión se completa en Windows y Linux, y una repetición grabada
   la reproduce de forma idéntica. **M5 cerrado.**
+- **Notas (F18b)**: ver `docs/sessions/F18b.md`.
+  - La primera etapa jugable es **`st04vo`** (la celda), ya recompilada, igual que `r_main02` y
+    `flashdemo`. El recorrido para llegar es `analysis/f18b/walk_new_game.txt` más Start para
+    saltar el cómic.
+  - **Criterio que viene de F18b**: ingresar una contraseña de reclutamiento en `briefing` (OSK con
+    límite de 10).
 - **Notas (F13)**: el criterio de F13 "entrar a la primera etapa sin código interpretado" se
   comprueba aquí con el reporte de `mpo_boot` (tabla "stage overlays"). Las etapas de la misión y
   su transición tienen que estar en `build_overlays.py --stages`.

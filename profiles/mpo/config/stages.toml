@@ -12,7 +12,7 @@
 # - default_base: the mission stages, after the resident Konami modules
 #   (title and st02 verified, F04 [V]).
 # - [[stage]]: the stages small enough to fit the hole right after mgp_main
-#   (0x08AFB800..0x08B20000), measured with mpo_boot (F09 [V]).
+#   (0x08AFB800..0x08B20000), measured with mpo_boot (F09 [V]; r_main02, F18b [V]).
 
 default_base = 0x08B8F900
 
@@ -22,4 +22,8 @@ base = 0x08AFB800
 
 [[stage]]
 name = "r_main01"
+base = 0x08AFB800
+
+[[stage]]
+name = "r_main02"
 base = 0x08AFB800

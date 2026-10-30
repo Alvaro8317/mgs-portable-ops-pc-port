@@ -99,6 +99,16 @@ public:
 
     // Set when the last load met an encrypted save and no cipher.
     [[nodiscard]] bool needs_cipher() const noexcept { return needs_cipher_; }
+
+    // What the store did (F18b's report): loads, saves and deletes that
+    // succeeded, and the directory of the last one.
+    struct Activity {
+        std::uint64_t loads = 0;
+        std::uint64_t saves = 0;
+        std::uint64_t removes = 0;
+        std::string last_dir;
+    };
+    [[nodiscard]] const Activity &activity() const noexcept { return activity_; }
     // A short host-side reason for the last failure (empty if none).
     [[nodiscard]] const std::string &last_error() const noexcept { return last_error_; }
 
@@ -136,6 +146,7 @@ private:
     int listed_count_ = 0;
     int selected_save_ = 0;
     bool needs_cipher_ = false;
+    Activity activity_;
     std::string last_error_;
 };
 

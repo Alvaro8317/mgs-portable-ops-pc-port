@@ -48,6 +48,7 @@
 #include "psprecomp/interpreter.hpp"
 #include "psprecomp/runtime.hpp"
 #include "psprecomp/sha256.hpp"
+#include "savedata/psp_types.hpp"
 #include "synthetic_disc.hpp"
 #include "video_test_util.h"
 
@@ -181,6 +182,22 @@ enum Stub : std::uint32_t {
     kFontGetCharGlyphImageClip,
     kFontClose,
     kFontDoneLib,
+    // F18b.
+    kSavedataInitStart,
+    kSavedataShutdownStart,
+    kSavedataUpdate,
+    kSavedataGetStatus,
+    kMsgDialogInitStart,
+    kMsgDialogShutdownStart,
+    kMsgDialogUpdate,
+    kMsgDialogGetStatus,
+    kMsgDialogAbort,
+    kOskInitStart,
+    kOskShutdownStart,
+    kOskUpdate,
+    kOskGetStatus,
+    kGetSystemParamInt,
+    kGetSystemParamString,
     kStubCount,
 };
 constexpr StubImport kStubImports[kStubCount] = {
@@ -222,7 +239,14 @@ constexpr StubImport kStubImports[kStubCount] = {
     {"sceLibFont", 0x099EF33Cu},       {"sceLibFont", 0xA834319Du},
     {"sceLibFont", 0x0DA7535Eu},       {"sceLibFont", 0xDCC80C2Fu},
     {"sceLibFont", 0xCA1E6945u},       {"sceLibFont", 0x3AEA8CB6u},
-    {"sceLibFont", 0x574B6FBCu},
+    {"sceLibFont", 0x574B6FBCu},       {"sceUtility", 0x50C4CD57u},
+    {"sceUtility", 0x9790B33Cu},       {"sceUtility", 0xD4B95FFBu},
+    {"sceUtility", 0x8874DBE0u},       {"sceUtility", 0x2AD8E239u},
+    {"sceUtility", 0x67AF3428u},       {"sceUtility", 0x95FC253Bu},
+    {"sceUtility", 0x9A1C91D7u},       {"sceUtility", 0x4DB1E739u},
+    {"sceUtility", 0xF6269B82u},       {"sceUtility", 0x3DFAEBA9u},
+    {"sceUtility", 0x4B85C861u},       {"sceUtility", 0xF3F76017u},
+    {"sceUtility", 0xA5DA2406u},       {"sceUtility", 0x34B78343u},
 };
 constexpr std::uint32_t stub(Stub s) {
     return kStubs + 8u * static_cast<std::uint32_t>(s);
@@ -2181,6 +2205,269 @@ void run_test(const char *name, void (*test)()) {
 
 } // namespace
 
+// F18b: the sceUtility dialogs through their NIDs. A save (AUTOSAVE) and a
+// load (AUTOLOAD) of the same data in a temporary ms0:/, a message dialog
+// closed with Abort, an OSK the script types into, and the system
+// parameters. The dialogs draw with PPGe: lists without GE interrupts, and
+// the volatile memory lock taken and given back.
+void test_utility() {
+    namespace sd = mpo::savedata;
+    const std::filesystem::path ms0 = std::filesystem::temp_directory_path() / "mpo_hle_test_ms0";
+    std::filesystem::remove_all(ms0);
+    std::filesystem::create_directories(ms0);
+    mh::SystemConfig config;
+    config.ms0_root = ms0;
+    Fixture f(config);
+    psprecomp::Runtime &rt = f.runtime;
+    const auto put = [&rt](std::uint32_t address, const void *data, std::size_t size) {
+        const auto *bytes = static_cast<const std::uint8_t *>(data);
+        for (std::size_t k = 0; k < size; ++k)
+            rt.memory().store8(address + static_cast<std::uint32_t>(k), bytes[k]);
+    };
+    const auto put_u16 = [&rt](std::uint32_t address, const char *text) {
+        for (std::size_t k = 0; k <= std::strlen(text); ++k)
+            rt.memory().store16(address + 2u * static_cast<std::uint32_t>(k),
+                                static_cast<std::uint16_t>(text[k]));
+    };
+
+    constexpr std::uint32_t kSave = kData + 0x2000u;
+    constexpr std::uint32_t kSaveBuf = kData + 0x3000u;
+    constexpr std::uint32_t kLoad = kData + 0x4000u;
+    constexpr std::uint32_t kLoadBuf = kData + 0x5000u;
+    constexpr std::uint32_t kMsg = kData + 0x6000u;
+    constexpr std::uint32_t kOsk = kData + 0x7000u;
+    constexpr std::uint32_t kOskField = kData + 0x7100u;
+    constexpr std::uint32_t kOskOut = kData + 0x7200u;
+    constexpr std::uint32_t kOskDesc = kData + 0x7600u;
+    constexpr std::uint32_t kNick = kData + 0x7800u;
+    constexpr std::uint32_t kResults = kData + 0x8000u;
+    constexpr std::uint32_t kDataSize = 0x180u;
+
+    // The requests, shaped like MPO's (docs/analysis/utility.md).
+    const auto common = [](std::uint32_t size) {
+        sd::DialogCommon c{};
+        c.size = size;
+        c.language = 1;
+        c.button_swap = 0;
+        c.graphics_thread = 0x30;
+        c.access_thread = 0x18;
+        c.font_thread = 0x38;
+        c.sound_thread = 0x28;
+        return c;
+    };
+    const auto savedata = [&](sd::SavedataMode mode, std::uint32_t buffer) {
+        sd::SavedataParam p{};
+        p.common = common(sizeof(sd::SavedataParam));
+        p.mode = static_cast<std::uint32_t>(mode);
+        p.overwrite_mode = 1;
+        std::snprintf(p.game_name, sizeof(p.game_name), "ULUS10202");
+        std::snprintf(p.save_name, sizeof(p.save_name), "001");
+        std::snprintf(p.file_name, sizeof(p.file_name), "00000000.000");
+        p.data_buf = buffer;
+        p.data_buf_size = 0x1000u;
+        p.data_size = mode == sd::SavedataMode::kAutoSave ? kDataSize : 0u;
+        std::snprintf(p.sfo_param.title, sizeof(p.sfo_param.title), "TEST TITLE");
+        std::snprintf(p.sfo_param.savedata_title, sizeof(p.sfo_param.savedata_title), "SAVE");
+        std::snprintf(p.sfo_param.detail, sizeof(p.sfo_param.detail), "DETAIL");
+        p.sfo_param.parental_level = 9;
+        p.focus = 3; // LATEST
+        return p;
+    };
+    const sd::SavedataParam save = savedata(sd::SavedataMode::kAutoSave, kSaveBuf);
+    const sd::SavedataParam load = savedata(sd::SavedataMode::kAutoLoad, kLoadBuf);
+    put(kSave, &save, sizeof(save));
+    put(kLoad, &load, sizeof(load));
+    std::vector<std::uint8_t> payload(kDataSize);
+    for (std::size_t k = 0; k < payload.size(); ++k)
+        payload[k] = static_cast<std::uint8_t>(k * 7u + 3u);
+    put(kSaveBuf, payload.data(), payload.size());
+
+    sd::MsgDialogParam msg{};
+    msg.common = common(sd::kMsgDialogSizeV2);
+    msg.type = 1;
+    std::snprintf(msg.string, sizeof(msg.string), "Hello from the test.");
+    msg.options = sd::msg_option::kTextSound;
+    put(kMsg, &msg, sd::kMsgDialogSizeV2);
+
+    sd::OskFieldData field{};
+    field.unk_00 = 4;
+    field.language = 1;
+    field.input_type = 9; // LATIN_DIGIT | LATIN_UPPERCASE, as MPO
+    field.lines = 1;
+    field.desc = kOskDesc;
+    field.intext = 0u;
+    field.outtext_length = 0x200u;
+    field.outtext = kOskOut;
+    field.outtext_limit = 15u;
+    sd::OskParams osk{};
+    osk.common = common(sizeof(sd::OskParams));
+    osk.field_count = 1;
+    osk.fields = kOskField;
+    put(kOskField, &field, sizeof(field));
+    put(kOsk, &osk, sizeof(osk));
+    put_u16(kOskDesc, "INPUT YOUR NAME");
+    f.system->utility().queue_osk_text("AB1");
+
+    Asm main(rt, kCode);
+    const std::uint32_t entry = main.here();
+    std::int32_t slot = 0;
+    const auto rec = [&] {
+        main.sw(v0, slot, s7);
+        slot += 4;
+    };
+    const auto delay = [&](std::uint32_t us) {
+        main.li(a0, us);
+        main.call(kDelayThread);
+    };
+    const auto call0 = [&](Stub s) {
+        main.call(s);
+        rec();
+    };
+    const auto call1 = [&](Stub s, std::uint32_t a) {
+        main.li(a0, a);
+        main.call(s);
+        rec();
+    };
+    main.enter();
+    main.li(s7, kResults);
+    // 0-6: AUTOSAVE.
+    call1(kSavedataInitStart, kSave);
+    delay(250000u);
+    call0(kSavedataGetStatus);
+    call1(kSavedataUpdate, 1u);
+    call1(kSavedataUpdate, 1u);
+    call0(kSavedataGetStatus);
+    call0(kSavedataShutdownStart);
+    delay(10000u);
+    call0(kSavedataGetStatus);
+    // 7-13: AUTOLOAD.
+    call1(kSavedataInitStart, kLoad);
+    delay(250000u);
+    call0(kSavedataGetStatus);
+    call1(kSavedataUpdate, 1u);
+    call1(kSavedataUpdate, 1u);
+    call0(kSavedataGetStatus);
+    call0(kSavedataShutdownStart);
+    delay(10000u);
+    call0(kSavedataGetStatus);
+    // 14-21: a message, aborted.
+    call1(kMsgDialogInitStart, kMsg);
+    delay(400000u);
+    call0(kMsgDialogGetStatus);
+    call1(kMsgDialogUpdate, 2u);
+    call0(kMsgDialogAbort);
+    call1(kMsgDialogUpdate, 2u);
+    call0(kMsgDialogGetStatus);
+    call0(kMsgDialogShutdownStart);
+    delay(50000u);
+    call0(kMsgDialogGetStatus);
+    // 22-27: the OSK, typed by the script once the fade-in ends (15
+    // updates at animSpeed 2), then 15 more to fade out: FINISHED after 30.
+    call1(kOskInitStart, kOsk);
+    delay(400000u);
+    call0(kOskGetStatus);
+    for (int k = 0; k < 30; ++k) {
+        main.li(a0, 2u);
+        main.call(kOskUpdate);
+    }
+    rec();
+    call0(kOskGetStatus);
+    call0(kOskShutdownStart);
+    delay(60000u);
+    call0(kOskGetStatus);
+    // 28-29: the system parameters.
+    main.li(a0, 1u); // NICKNAME
+    main.li(a1, kNick);
+    main.li(a2, 32u);
+    call0(kGetSystemParamString);
+    main.li(a0, 8u); // LANGUAGE
+    main.li(a1, kNick + 0x40u);
+    call0(kGetSystemParamInt);
+    main.leave();
+
+    const std::uint64_t interrupts_before = f.system->ge().stats().interrupts;
+    (void)start_thread(*f.system, "utility", entry, 0x20u);
+    CHECK(f.system->run(10'000'000u) == mk::RunResult::kIdle);
+    CHECK(!rt.stopped());
+    if (rt.stopped()) std::printf("  stop: %s\n", rt.stop_reason().c_str());
+
+    const auto result = [&f](int index) {
+        return f.word(kResults + 4u * static_cast<std::uint32_t>(index));
+    };
+    // AUTOSAVE: RUNNING after the init job, FINISHED after two updates,
+    // NONE after the shutdown job.
+    CHECK_EQ(result(0), 0u);
+    CHECK_EQ(result(1), 2u);
+    CHECK_EQ(result(2), 0u);
+    CHECK_EQ(result(3), 0u);
+    CHECK_EQ(result(4), 3u);
+    CHECK_EQ(result(5), 0u);
+    CHECK_EQ(result(6), 0u);
+    CHECK_EQ(f.word(kSave + 0x1Cu), 0u); // common.result
+    const std::filesystem::path dir = ms0 / "PSP" / "SAVEDATA" / "ULUS10202001";
+    std::ifstream data_file(dir / "00000000.000", std::ios::binary);
+    const std::vector<std::uint8_t> written((std::istreambuf_iterator<char>(data_file)),
+                                            std::istreambuf_iterator<char>());
+    CHECK(written == payload);
+    CHECK(std::filesystem::is_regular_file(dir / "PARAM.SFO"));
+    // AUTOLOAD: the same bytes, and dataSize as read (MPO checks it).
+    for (int k = 7; k <= 13; ++k) CHECK_EQ(result(k), k == 8 ? 2u : k == 11 ? 3u : 0u);
+    CHECK_EQ(f.word(kLoad + 0x1Cu), 0u);
+    CHECK_EQ(f.word(kLoad + 0x7Cu), kDataSize);
+    bool same = true;
+    for (std::uint32_t k = 0; k < kDataSize; ++k)
+        same = same && rt.memory().load8(kLoadBuf + k) == payload[k];
+    CHECK(same);
+    // The message: RUNNING, an update that draws, Abort, FINISHED, NONE.
+    CHECK_EQ(result(14), 0u);
+    CHECK_EQ(result(15), 2u);
+    CHECK_EQ(result(16), 0u);
+    CHECK_EQ(result(17), 0u);
+    CHECK_EQ(result(18), 0u);
+    CHECK_EQ(result(19), 3u);
+    CHECK_EQ(result(20), 0u);
+    CHECK_EQ(result(21), 0u);
+    // The OSK: the script's text in the output field, CHANGED.
+    CHECK_EQ(result(22), 0u);
+    CHECK_EQ(result(23), 2u);
+    CHECK_EQ(result(24), 0u);
+    CHECK_EQ(result(25), 3u);
+    CHECK_EQ(result(26), 0u);
+    CHECK_EQ(result(27), 0u);
+    CHECK_EQ(rt.memory().load16(kOskOut), static_cast<std::uint16_t>('A'));
+    CHECK_EQ(rt.memory().load16(kOskOut + 2u), static_cast<std::uint16_t>('B'));
+    CHECK_EQ(rt.memory().load16(kOskOut + 4u), static_cast<std::uint16_t>('1'));
+    CHECK_EQ(rt.memory().load16(kOskOut + 6u), 0u);
+    CHECK_EQ(f.word(kOskField + 0x2Cu), 2u);
+    // The system parameters: PPSSPP's nickname, English.
+    CHECK_EQ(result(28), 0u);
+    std::string nick;
+    for (std::uint32_t k = 0; rt.memory().load8(kNick + k) != 0u && k < 32u; ++k)
+        nick.push_back(static_cast<char>(rt.memory().load8(kNick + k)));
+    CHECK(nick == "PPSSPP");
+    CHECK_EQ(result(29), 0u);
+    CHECK_EQ(f.word(kNick + 0x40u), 1u);
+
+    // The counters, PPGe and the volatile memory.
+    const mh::Utility::Stats &us = f.system->utility().stats();
+    CHECK_EQ(us.savedata_runs, 2u);
+    CHECK_EQ(us.msg_runs, 1u);
+    CHECK_EQ(us.osk_runs, 1u);
+    CHECK_EQ(us.cancelled, 0u);
+    CHECK_EQ(us.failures, 0u);
+    const mpo::savedata::SavedataStore::Activity &activity = f.system->utility().store().activity();
+    CHECK_EQ(activity.saves, 1u);
+    CHECK_EQ(activity.loads, 1u);
+    CHECK_EQ(activity.removes, 0u);
+    // Two message updates and 30 OSK updates drew; the savedata modes are
+    // invisible.
+    CHECK_EQ(us.drawn_frames, 32u);
+    CHECK_EQ(f.system->utility().ppge().stats().lists, 32u);
+    CHECK_EQ(f.system->ge().stats().interrupts, interrupts_before);
+    CHECK(!f.system->volatile_memory().locked());
+    std::filesystem::remove_all(ms0);
+}
+
 int main() {
     // Every test assembles real Allegrex code, which only the interpreter runs.
     psprecomp::set_interpreter_fallback_enabled(true);
@@ -2201,6 +2488,7 @@ int main() {
     run_test("test_audio", &test_audio);
     run_test("test_mpeg_decode", &test_mpeg_decode);
     run_test("test_font", &test_font);
+    run_test("test_utility", &test_utility);
     std::printf("mpo_hle_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

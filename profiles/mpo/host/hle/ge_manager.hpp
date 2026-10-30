@@ -84,8 +84,10 @@ public:
 
     // The calls, as the HLE wrappers see them (also for tests). List IDs are
     // the internal ones (0..63), without LIST_ID_MAGIC.
+    // `interrupts` false is PPSSPP's gpu->EnableInterrupts(false), which only
+    // PPGe uses (F18b): the FINISH completes the list without a GE interrupt.
     std::uint32_t enqueue(std::uint32_t list_pc, std::uint32_t stall, int callback_id,
-                          std::uint32_t opt_param, bool head);
+                          std::uint32_t opt_param, bool head, bool interrupts = true);
     std::uint32_t dequeue(int list_id);
     std::uint32_t update_stall(int list_id, std::uint32_t stall);
     std::uint32_t list_sync(int list_id, std::uint32_t mode);
@@ -107,6 +109,7 @@ private:
         bool interrupted = false;
         bool pending_interrupt = false;
         bool started = false;
+        bool interrupts = true;
         std::uint64_t wait_until_ticks = 0;
         std::uint32_t context = 0;
         std::uint32_t stack_addr = 0;

@@ -46,6 +46,8 @@ public:
     // __CtrlReadLatch: the buttons pressed since the last call (sceUtility
     // dialogs, F18b).
     std::uint32_t take_dialog_make();
+    // __CtrlPeekButtons: the buttons of the last sample.
+    [[nodiscard]] std::uint32_t peek_buttons() const noexcept { return old_buttons_; }
 
 private:
     struct Latch {

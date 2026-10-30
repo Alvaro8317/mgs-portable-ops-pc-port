@@ -63,7 +63,7 @@ Lo arman `FUN_08b97f5c` (común), `FUN_08b97fdc` (carga), `FUN_08b98218` (guarda
 |---|---|---|
 | `common.size` | `0x00` | `0x600` |
 | `common.language` | `0x04` | `FUN_08899254()` (idioma del sistema) |
-| `common.buttonSwap` | `0x08` | `1` salvo que el botón de confirmar del sistema sea círculo |
+| `common.buttonSwap` | `0x08` | **`0` con el sistema en "Cruz confirma"** (`GetSystemParamInt(9) = 1`, el de PPSSPP): en los diálogos confirma Círculo, como en los menús del juego [V en el juego, F18b] |
 | hilos (graphics, access, font, sound) | `0x0C`–`0x18` | `0x30`, `0x18`, `0x38`, `0x28` |
 | `mode` | `0x30` | ver la tabla de modos |
 | `overwriteMode` | `0x38` | `1` al guardar |
@@ -168,3 +168,19 @@ Los llamadores (`FUN_08b98b70`…`FUN_08b99710`, con `FUN_08b987b8` como constru
   `title` también lista `ms0:/PSP/SAVEDATA` con `sceIoDopen`/`Dread`.
 - `Update` se llama con `animSpeed = 2` (20 FPS); un fundido dura 15 llamadas.
 - La regla de un diálogo a la vez y los códigos `WRONG_TYPE` están en `utility_dialogs.hpp`.
+
+## 6. Lo que se vio en el juego (F18b) [V]
+
+- El arranque ("Checking Memory Stick…") **no** llama a `sceUtilitySavedata`: la comprobación es
+  con `sceIoDopen`/`sceIoDread`. La primera llamada de savedata es el `AUTOSAVE` de NEW GAME.
+- NEW GAME: OSK "INPUT YOUR NAME" → el juego pregunta "<nombre> — Is this name OK?" (dibujado por
+  el juego) → MsgDialog "This game saves data automatically…" → `AUTOSAVE` de la ranura `001`
+  (`0xA610` bytes; el juego dibuja "Saving…" y "Save successful.") → MsgDialog "A single save file
+  will be used…" → "NEW GAME: DIFFICULTY SELECT".
+- Algunos nombres se rechazan (al menos "SNAKE") con un MsgDialog, "One or more of the words
+  entered cannot be used in this game.", y el OSK se abre otra vez.
+- Con un save, el TITLE MENU añade LOAD GAME (seleccionado) y DELETE: LOAD GAME es `LISTLOAD`, y
+  DELETE es `LISTALLDELETE`, que después de borrar vuelve a la lista con lo que queda y termina con
+  CANCEL al salir con Back.
+- El detalle del save (`SAVEDATA_DETAIL`) es "Player ID : 01 / New Game / Number of Times Cleared :
+  0" para una partida nueva.

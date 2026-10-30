@@ -30,6 +30,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "pgf.h"
@@ -62,6 +63,10 @@ public:
         return missing_;
     }
     [[nodiscard]] const Stats &stats() const noexcept { return stats_; }
+    // The firmware font with this file name (e.g. "ltn0.pgf"), loading the
+    // fonts first if needed; null when it is missing or invalid. PPGe draws
+    // the sceUtility dialogs with it (F18b).
+    const font::Pgf *firmware_font(std::string_view file_name);
 
     // The calls, as the HLE wrappers see them (also for tests).
     std::uint32_t new_lib(std::uint32_t params_addr, std::uint32_t error_addr);

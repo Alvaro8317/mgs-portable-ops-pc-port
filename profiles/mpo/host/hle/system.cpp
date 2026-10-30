@@ -86,6 +86,7 @@ System::System(psprecomp::Runtime &runtime, const SystemConfig &config)
     mpeg_ = std::make_unique<Mpeg>(*this);
     audio_ = std::make_unique<Audio>(*this);
     fonts_ = std::make_unique<Fonts>(*this);
+    utility_ = std::make_unique<Utility>(*this);
     hle_->set_unimplemented_policy(config.unimplemented);
     bridge_.set_callback_return(alloc_kernel_scratch(16u, "hle-callback-return"));
     bridge_.set_thread_return_handler(
@@ -112,6 +113,7 @@ System::System(psprecomp::Runtime &runtime, const SystemConfig &config)
 
 System::~System() {
     // The kernel abandons the fibers; nothing of the guest runs past here.
+    utility_.reset();
     fonts_.reset();
     audio_.reset();
     mpeg_.reset();
@@ -142,6 +144,7 @@ void System::register_hle() {
     mpeg_->register_hle();
     audio_->register_hle();
     fonts_->register_hle();
+    utility_->register_hle();
 }
 
 bool System::mount(std::string *error) {

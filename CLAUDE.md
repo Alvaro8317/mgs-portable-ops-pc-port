@@ -146,7 +146,7 @@ los hilos y fibras, en vez de depender de `ulimit`.
     enlazado (`rlc.py link`). Se hace con `build_overlays.py`, y `OverlayManager` la instala al
     cargarla (F13 [V]):
     - la etapa se identifica por el SHA-256 del PRX y la base (`config/stages.toml`): `init` y
-      `r_main01` van en `0x08AFB800` y el resto en `0x08B8F900`;
+      `r_main01` (y `r_main02`, F18b [V]) van en `0x08AFB800` y el resto en `0x08B8F900`;
     - las etapas con el mismo PRX traen el mismo `.rlc`;
     - el `.text` se verifica después del `.rlc`, en `sceKernelDcacheWritebackAll`.
   - El intérprete cubre lo que no se haya recompilado.
@@ -200,7 +200,12 @@ los hilos y fibras, en vez de depender de `ulimit`.
   - MPO pide savedata **cifrado en modo 5** (clave propia, SDK `0x02080010`) y borra con
     `LISTALLDELETE` y `gameName` vacío, así que el borrado solo puede tocar el directorio elegido
     (PPSSPP #6600) (F18a [V]);
-  - el OSK solo pide dígitos y mayúsculas (`inputtype = 9`).
+  - el OSK solo pide dígitos y mayúsculas (`inputtype = 9`);
+  - los diálogos se dibujan con display lists al estilo de PPGe y el texto PGF del firmware
+    (`host/hle/ppge.hpp`), y el runtime guarda sin cifrar (F18b [V]). NEW GAME llega así a la
+    primera etapa jugable, `st04vo` (la celda);
+  - en los diálogos del juego, Círculo confirma (`buttonSwap = 0`) con el sistema en "Cruz
+    confirma" (F18b [V]).
 
 **Red (no hace falta para jugar):**
 - `sceNetAdhoc*`, `sceNetApctl*`, `sceHttp*`, `sceNpAuth`.
@@ -445,6 +450,15 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
      - una serie de parches sobre upstream, porque sería frágil con todo lo que hay que traer de
        Yakumo;
      - apuntar a la copia de Yakumo, porque nos ataría a su ritmo y nos alejaría de upstream.
+
+### Tomadas (2026-10-30, F18b)
+
+8. **Los diálogos de `sceUtility` se dibujan en el framebuffer de la PSP**, con display lists al
+   estilo de PPGe y las fuentes PGF del firmware, para que salgan igual en softgpu y Vulkan y en las
+   capturas. Se descartó Dear ImGui sobre SDL3.
+9. **El cifrado de los saves (modo 5) solo está en el instalador**: un conversor
+   `mpo --import-save/--export-save` (fase F18c). El runtime guarda sin cifrar y nunca lleva
+   claves KIRK. Se descartó una opción de CMake que las enlazara en el runtime.
 
 ### Abiertas
 

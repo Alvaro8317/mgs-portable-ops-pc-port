@@ -3,9 +3,10 @@
 // sceUmdUser and scePower (F09), plus the stubs the boot needs before the
 // game reads any data, registered as HleKind::kStub until their phase:
 //
-//   - sceOpenPSIDGetOpenPSID: PPSSPP's fixed id (F20b);
-//   - sceUtilityGetSystemParamInt and sceImposeSetLanguageMode: PPSSPP's
-//     default system settings, English and Cross to confirm (F18b).
+//   - sceOpenPSIDGetOpenPSID: PPSSPP's fixed id (F20b).
+//
+// sceUtilityGetSystemParamInt and sceImposeSetLanguageMode moved to
+// hle_utility.cpp in F18b.
 //
 // sceAudio left this file for hle_audio.cpp in F16b.
 //
@@ -24,7 +25,6 @@ namespace {
 
 constexpr std::uint32_t kErrInvalidArgument = 0x80010016u;
 constexpr std::uint32_t kErrPrivRequired = 0x80000023u;
-constexpr std::uint32_t kErrInvalidSystemParam = 0x80110103u;
 
 // The disc is inserted, ready and (umdActivated starts true) readable.
 constexpr std::uint32_t kUmdNotPresent = 0x01u;
@@ -48,9 +48,6 @@ constexpr std::uint32_t kPowerState = 0x00001000u | 0x00000080u | 0x00000064u;
 
 constexpr std::array<std::uint8_t, 16> kOpenPsid = {0x10, 0x02, 0xA3, 0x44, 0x13, 0xF5, 0x93, 0xB0,
                                                     0xCC, 0x6E, 0xD1, 0x32, 0x27, 0x85, 0x0F, 0x9D};
-
-constexpr std::uint32_t kLanguageEnglish = 1u;
-constexpr std::uint32_t kButtonCross = 1u;
 
 } // namespace
 
@@ -129,33 +126,6 @@ void register_system_hle(System &system) {
         (void)k.memory().write_bytes(arg(c, 0), kOpenPsid);
         ret(c, 0u);
     });
-    stub("sceUtility", 0xA5DA2406u, "sceUtilityGetSystemParamInt", [&k](Ctx &c) {
-        std::uint32_t value = 0;
-        switch (arg(c, 0)) {
-        case 2: // Ad hoc channel: automatic.
-            k.memory().write_u32(arg(c, 1), 0u);
-            return ret(c, 0x800ADF4u);
-        case 3:  // WLAN power save: off.
-        case 4:  // Date format: YYYYMMDD.
-        case 5:  // Time format: 24 h.
-        case 6:  // Time zone: 0.
-        case 7:  // Daylight savings: standard.
-        case 10: // Parental level: 0.
-            value = 0u;
-            break;
-        case 8:
-            value = kLanguageEnglish;
-            break;
-        case 9:
-            value = kButtonCross;
-            break;
-        default:
-            return ret(c, kErrInvalidSystemParam);
-        }
-        k.memory().write_u32(arg(c, 1), value);
-        ret(c, 0u);
-    });
-    stub("sceImpose", 0x36AA6E91u, "sceImposeSetLanguageMode", [](Ctx &c) { ret(c, 0u); });
 }
 
 } // namespace mpo::hle

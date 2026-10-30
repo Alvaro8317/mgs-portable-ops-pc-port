@@ -22,7 +22,8 @@
 // them (OverlayManager). sceAudio, sceSasCore and sceAtrac3plus (F16b) mix on
 // mpo_audio and hand every 64-sample block to Audio::set_output (Audio).
 // sceMpeg shows the videos and plays their sound, and sceLibFont draws text
-// with the firmware fonts of SystemConfig::font_dir (F17b, Fonts).
+// with the firmware fonts of SystemConfig::font_dir (F17b, Fonts). The
+// sceUtility dialogs save to ms0_root and draw with PPGe (F18b, Utility).
 
 #pragma once
 
@@ -46,6 +47,8 @@
 #include "hle/mpeg.hpp"
 #include "hle/overlays.hpp"
 #include "hle/runtime_memory.hpp"
+#include "hle/utility.hpp"
+#include "hle/volatile_memory.hpp"
 #include "kernel/kernel.hpp"
 #include "psprecomp/runtime.hpp"
 
@@ -54,8 +57,9 @@ namespace mpo::hle {
 struct SystemConfig {
     // The user's ISO for disc0:/umd0: (empty: no disc, every open fails).
     std::filesystem::path disc_iso;
-    // Host directory for ms0: (empty: no memory stick). F18b passes the
-    // per-OS save folder; tests and traces use analysis/.
+    // Host directory for ms0: (empty: no memory stick), also the savedata
+    // root. mpo_boot passes the per-OS save folder unless --ms0 is given;
+    // tests and traces use analysis/.
     std::filesystem::path ms0_root;
     // Host directory with the firmware fonts, flash0:/font/*.pgf (F17b; empty:
     // none, sceFontOpen fails). The user supplies them.
@@ -97,6 +101,8 @@ public:
     [[nodiscard]] Mpeg &mpeg() noexcept { return *mpeg_; }
     [[nodiscard]] Audio &audio() noexcept { return *audio_; }
     [[nodiscard]] Fonts &fonts() noexcept { return *fonts_; }
+    [[nodiscard]] VolatileMemory &volatile_memory() noexcept { return volatile_memory_; }
+    [[nodiscard]] Utility &utility() noexcept { return *utility_; }
     [[nodiscard]] const SystemConfig &config() const noexcept { return config_; }
 
     // Mounts the ISO and the memory stick of the config (boot() does it too).
@@ -136,12 +142,15 @@ private:
     std::unique_ptr<Mpeg> mpeg_;
     std::unique_ptr<Audio> audio_;
     std::unique_ptr<Fonts> fonts_;
+    std::unique_ptr<Utility> utility_;
+    VolatileMemory volatile_memory_;
     bool mounted_ = false;
     std::map<std::uint32_t, std::uint32_t> utility_modules_;
 };
 
 // The HLE groups (hle_kernel.cpp, hle_time.cpp, hle_system.cpp; IoManager,
-// Display, Interrupts, Ctrl, GeManager, Mpeg, Audio and Fonts register their own).
+// Display, Interrupts, Ctrl, GeManager, Mpeg, Audio, Fonts and Utility register
+// their own).
 void register_kernel_hle(System &system);
 void register_module_hle(System &system);
 void register_time_hle(System &system);

@@ -12,7 +12,7 @@
 //            [--press <buttons>@<ms>[+<ms>]]... [--capture <dir>] [--capture-every N]
 //            [--window 0|1] [--scale N] [--input-map <input.toml>]
 //            [--overlays <dir>|none] [--renderer soft|vulkan] [--capture-window 0|1]
-//            [--audio 0|1] [--audio-wav <file>] [--fonts <dir>]
+//            [--audio 0|1] [--audio-wav <file>] [--fonts <dir>] [--osk-text <text>]...
 //
 // It measures the start-up (registering the dispatch table: time and memory),
 // runs PSP threads until --until-us of virtual time (default 5 s), a runtime
@@ -67,6 +67,18 @@
 //                             the mixer produces.
 // The report adds the mixer's blocks, the SAS mixes, the ATRAC decodes and the
 // device's underruns and overruns.
+//
+// F18b: the sceUtility dialogs (savedata, OSK, messages) draw over the game.
+//   --ms0 <dir>               the memory stick, also the savedata root. By
+//                             default the per-OS folder (%APPDATA% or
+//                             $XDG_DATA_HOME, mpo-pc-port/ms0): tests and
+//                             traces always pass one of their own.
+//   --osk-text <text>         types <text> and finishes the next OSK, for
+//                             unattended runs. Repeatable: one per OSK.
+// With --window 1, while an OSK is on screen the PC keyboard types into it
+// (Backspace deletes, Enter finishes, Escape cancels) and its keys press no
+// PSP buttons. The report adds the dialogs, the saves, loads and deletes, and
+// what PPGe drew.
 
 #include <algorithm>
 #include <chrono>
@@ -340,6 +352,7 @@ int main(int argc, char **argv) {
     bool capture_window = false;
     int audio = -1; // -1: on with a window.
     std::string audio_wav;
+    std::vector<std::string> osk_texts;
     for (int i = 1; i + 1 < argc; i += 2) {
         const std::string option = argv[i];
         const std::string value = argv[i + 1];
@@ -409,13 +422,26 @@ int main(int argc, char **argv) {
             audio_wav = value;
         } else if (option == "--fonts") {
             fonts = value;
+        } else if (option == "--osk-text") {
+            osk_texts.push_back(value);
         } else {
             return fail("unknown option " + option);
         }
     }
     if (elf_path.empty()) return fail("usage: see boot_main.cpp (--elf is required)");
     config.disc_iso = iso;
+    if (ms0.empty()) {
+        const auto root =
+            mpo::savedata::default_ms0_root(mpo::savedata::PathEnvironment::from_process());
+        if (root) {
+            std::error_code ec;
+            std::filesystem::create_directories(*root, ec);
+            if (ec) return fail("cannot create the memory stick folder " + root->string());
+            ms0 = root->string();
+        }
+    }
     config.ms0_root = ms0;
+    std::printf("ms0: %s\n", ms0.empty() ? "(none: the game cannot save)" : ms0.c_str());
     if (fonts.empty() && !iso.empty()) {
         const std::filesystem::path guess =
             std::filesystem::path(iso).parent_path() / "flash0" / "font";
@@ -497,6 +523,7 @@ int main(int argc, char **argv) {
         if (!nid_table.empty() && !system.hle().load_nid_names(nid_table, &error))
             return fail(error);
         system.hle().set_trace(trace, trace_limit);
+        for (const std::string &text : osk_texts) system.utility().queue_osk_text(text);
         if (!overlays_dir.empty()) {
             const std::size_t overlays = system.overlays().load_libraries(overlays_dir);
             std::printf("stage overlays: %zu corpora from %s\n", overlays, overlays_dir.c_str());
@@ -579,6 +606,47 @@ int main(int argc, char **argv) {
                             mpo::frontend::SdlPresenter::video_driver().c_str(),
                             presenter->render_driver().c_str());
         }
+        // F18b: the PC keyboard types into the OSK while it is on screen.
+        SDL_Window *text_window = presenter ? presenter->window() : nullptr;
+#if MPO_BOOT_VULKAN
+        if (vk_window) text_window = vk_window->window();
+#endif
+        bool text_input = false;
+        const auto sync_text_input = [&] {
+            const bool takes = system.utility().osk_takes_text();
+            if (takes == text_input || text_window == nullptr) return;
+            if (takes)
+                (void)SDL_StartTextInput(text_window);
+            else
+                (void)SDL_StopTextInput(text_window);
+            text_input = takes;
+        };
+        // True when the event went to the OSK. Key releases always reach the
+        // translator, so a key held when the OSK opened is let go.
+        const auto osk_keyboard = [&](const SDL_Event &event) {
+            if (!text_input) return false;
+            mpo::hle::Utility &utility = system.utility();
+            if (event.type == SDL_EVENT_TEXT_INPUT) {
+                (void)utility.host_type(event.text.text);
+                return true;
+            }
+            if (event.type != SDL_EVENT_KEY_DOWN) return false;
+            switch (event.key.key) {
+            case SDLK_BACKSPACE:
+                (void)utility.host_backspace();
+                break;
+            case SDLK_RETURN:
+            case SDLK_KP_ENTER:
+                (void)utility.host_finish();
+                break;
+            case SDLK_ESCAPE:
+                (void)utility.host_cancel();
+                break;
+            default:
+                break;
+            }
+            return true;
+        };
 #endif
 
         // ---- F14b: the GE on Vulkan ----
@@ -685,7 +753,9 @@ int main(int argc, char **argv) {
 #if MPO_BOOT_VULKAN && MPO_BOOT_SDL
             if (swapchain) {
                 SDL_Event event;
+                sync_text_input();
                 while (SDL_PollEvent(&event)) {
+                    if (osk_keyboard(event)) continue;
                     if (input->HandleEvent(event)) continue;
                     if (event.type == SDL_EVENT_QUIT ||
                         event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
@@ -752,7 +822,9 @@ int main(int argc, char **argv) {
 #if MPO_BOOT_SDL
             if (presenter) {
                 SDL_Event event;
+                sync_text_input();
                 while (SDL_PollEvent(&event)) {
+                    if (osk_keyboard(event)) continue;
                     if (input->HandleEvent(event)) continue;
                     if (event.type == SDL_EVENT_QUIT ||
                         event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
@@ -819,6 +891,26 @@ int main(int argc, char **argv) {
                         static_cast<unsigned long long>(fonts_hle.stats().glyphs_drawn),
                         static_cast<unsigned long long>(fonts_hle.stats().guest_allocs),
                         static_cast<unsigned long long>(fonts_hle.stats().guest_frees));
+        }
+        {
+            const mpo::hle::Utility::Stats &us = system.utility().stats();
+            const mpo::savedata::SavedataStore::Activity &sa = system.utility().store().activity();
+            const mpo::hle::Ppge::Stats &ps = system.utility().ppge().stats();
+            std::printf("utility: %llu savedata, %llu osk and %llu message dialogs, %llu frames "
+                        "drawn; %llu saves, %llu loads, %llu deletes; %llu cancelled, %llu "
+                        "failed; ppge: %llu lists, %llu texts, %llu dropped\n",
+                        static_cast<unsigned long long>(us.savedata_runs),
+                        static_cast<unsigned long long>(us.osk_runs),
+                        static_cast<unsigned long long>(us.msg_runs),
+                        static_cast<unsigned long long>(us.drawn_frames),
+                        static_cast<unsigned long long>(sa.saves),
+                        static_cast<unsigned long long>(sa.loads),
+                        static_cast<unsigned long long>(sa.removes),
+                        static_cast<unsigned long long>(us.cancelled),
+                        static_cast<unsigned long long>(us.failures),
+                        static_cast<unsigned long long>(ps.lists),
+                        static_cast<unsigned long long>(ps.texts),
+                        static_cast<unsigned long long>(ps.text_overflow));
         }
         const mpo::hle::Audio::Stats &as = system.audio().stats();
         std::printf("audio: %llu blocks mixed from %llu us (%.1f s, %llu audible), %u channels "

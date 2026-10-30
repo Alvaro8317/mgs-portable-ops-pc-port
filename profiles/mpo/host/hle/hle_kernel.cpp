@@ -23,7 +23,6 @@ namespace mpo::hle {
 namespace {
 
 constexpr std::uint32_t kInvalidMode = 0x80000107u;
-constexpr std::uint32_t kPowerVmemInUse = 0x802B0200u;
 constexpr std::uint32_t kCanNotWait = kernel::error::kCanNotWait;
 constexpr std::uint32_t kIllegalContext = kernel::error::kIllegalContext;
 
@@ -75,28 +74,6 @@ std::string format_printf(kernel::Kernel &k, const Ctx &ctx, const std::string &
         }
     }
     return result;
-}
-
-// sceSuspendForUser volatile memory lock (PPSSPP Core/HLE/scePower.cpp
-// @ v1.20.4): 0x08400000, 4 MiB, one owner, waiters served in order.
-struct VolatileMemory {
-    bool locked{};
-    struct Waiter {
-        kernel::Uid thread;
-        std::uint32_t addr_ptr;
-        std::uint32_t size_ptr;
-    };
-    std::vector<Waiter> waiters;
-};
-
-std::uint32_t volatile_lock(kernel::Kernel &k, VolatileMemory &vm, std::uint32_t type,
-                            std::uint32_t addr_ptr, std::uint32_t size_ptr) {
-    if (type != 0u) return kInvalidMode;
-    if (vm.locked) return kPowerVmemInUse;
-    if (k.memory().is_valid(addr_ptr, 4u)) k.memory().write_u32(addr_ptr, 0x08400000u);
-    if (k.memory().is_valid(size_ptr, 4u)) k.memory().write_u32(size_ptr, 0x00400000u);
-    vm.locked = true;
-    return 0u;
 }
 
 void register_threadman(System &system) {
@@ -298,9 +275,9 @@ void register_sysmem_and_friends(System &system) {
         [](Ctx &c) { ret(c, arg(c, 0) == 0u ? 0u : kInvalidMode); });
     def("sceSuspendForUser", 0x3AEE7261u, "sceKernelPowerUnlock",
         [](Ctx &c) { ret(c, arg(c, 0) == 0u ? 0u : kInvalidMode); });
-    auto volatile_memory = std::make_shared<VolatileMemory>();
+    VolatileMemory &volatile_memory = system.volatile_memory();
     def("sceSuspendForUser", 0x3E0271D3u, "sceKernelVolatileMemLock",
-        [&k, volatile_memory](Ctx &c) {
+        [&k, &volatile_memory](Ctx &c) {
             const std::uint32_t type = arg(c, 0);
             const std::uint32_t addr_ptr = arg(c, 1);
             const std::uint32_t size_ptr = arg(c, 2);
@@ -310,47 +287,25 @@ void register_sysmem_and_friends(System &system) {
             } else if (k.in_interrupt()) {
                 error = kIllegalContext;
             } else {
-                error = volatile_lock(k, *volatile_memory, type, addr_ptr, size_ptr);
+                error = volatile_memory.lock(k, type, addr_ptr, size_ptr);
             }
-            if (error == kPowerVmemInUse) {
-                volatile_memory->waiters.push_back({k.current_thread(), addr_ptr, size_ptr});
+            if (error == VolatileMemory::kInUse) {
+                volatile_memory.add_waiter({k.current_thread(), addr_ptr, size_ptr});
                 ret(c, k.wait_current_thread(kernel::WaitType::kVmem, 1, 0u, 0u, false, 0u));
                 return;
             }
             if (error == kCanNotWait) {
-                k.memory().write_u32(addr_ptr, 0x08400000u);
-                k.memory().write_u32(size_ptr, 0x00400000u);
+                k.memory().write_u32(addr_ptr, VolatileMemory::kStart);
+                k.memory().write_u32(size_ptr, VolatileMemory::kSize);
             }
             ret(c, error);
         });
     def("sceSuspendForUser", 0xA14F40B2u, "sceKernelVolatileMemTryLock",
-        [&k, volatile_memory](Ctx &c) {
-            ret(c, volatile_lock(k, *volatile_memory, arg(c, 0), arg(c, 1), arg(c, 2)));
+        [&k, &volatile_memory](Ctx &c) {
+            ret(c, volatile_memory.lock(k, arg(c, 0), arg(c, 1), arg(c, 2)));
         });
     def("sceSuspendForUser", 0xA569E425u, "sceKernelVolatileMemUnlock",
-        [&k, volatile_memory](Ctx &c) {
-            if (arg(c, 0) != 0u) {
-                ret(c, kInvalidMode);
-                return;
-            }
-            if (!volatile_memory->locked) {
-                ret(c, kernel::error::kSemaOvf);
-                return;
-            }
-            volatile_memory->locked = false;
-            // Hand it over to the first waiter still waiting.
-            while (!volatile_memory->waiters.empty()) {
-                const VolatileMemory::Waiter waiter = volatile_memory->waiters.front();
-                volatile_memory->waiters.erase(volatile_memory->waiters.begin());
-                if (!k.is_waiting_for(waiter.thread, kernel::WaitType::kVmem, 1)) continue;
-                if (volatile_lock(k, *volatile_memory, 0u, waiter.addr_ptr, waiter.size_ptr) ==
-                    0u) {
-                    k.resume_from_wait(waiter.thread, 0u);
-                    break;
-                }
-            }
-            ret(c, 0u);
-        });
+        [&k, &volatile_memory](Ctx &c) { ret(c, volatile_memory.unlock(k, arg(c, 0))); });
     // StdioForUser (sceIo.cpp: PSP_STDIN 0, PSP_STDOUT 1, PSP_STDERR 2).
     def("StdioForUser", 0x172D316Eu, "sceKernelStdin", [](Ctx &c) { ret(c, 0u); });
     def("StdioForUser", 0xA6BAB2E9u, "sceKernelStdout", [](Ctx &c) { ret(c, 1u); });

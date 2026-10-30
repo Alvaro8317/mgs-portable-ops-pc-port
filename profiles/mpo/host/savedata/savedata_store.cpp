@@ -502,6 +502,8 @@ int SavedataStore::load(kernel::GuestMemory &memory, SavedataParam &param,
     load_file(memory, dir / kIcon1FileName, param.icon1_file_data);
     load_file(memory, dir / kPic1FileName, param.pic1_file_data);
     load_file(memory, dir / kSnd0FileName, param.snd0_file_data);
+    ++activity_.loads;
+    activity_.last_dir = folder;
     return 0;
 }
 
@@ -703,6 +705,8 @@ int SavedataStore::save(kernel::GuestMemory &memory, SavedataParam &param,
     write_extra(param.icon1_file_data, kIcon1FileName, true);
     write_extra(param.pic1_file_data, kPic1FileName, false);
     write_extra(param.snd0_file_data, kSnd0FileName, true);
+    ++activity_.saves;
+    activity_.last_dir = folder;
     return 0;
 }
 
@@ -739,6 +743,8 @@ bool SavedataStore::remove(const SavedataParam &param, int save_id) {
         last_error_ = "cannot delete " + path_text(dir) + ": " + ec.message();
         return false;
     }
+    ++activity_.removes;
+    activity_.last_dir = info->save_dir;
     return true;
 }
 

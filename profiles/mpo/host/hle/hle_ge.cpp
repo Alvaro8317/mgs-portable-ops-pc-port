@@ -127,7 +127,7 @@ bool GeManager::busy_drawing() {
 }
 
 std::uint32_t GeManager::enqueue(std::uint32_t list_pc, std::uint32_t stall, int callback_id,
-                                 std::uint32_t opt_param, bool head) {
+                                 std::uint32_t opt_param, bool head, bool interrupts) {
     if (((list_pc | stall) & 3u) != 0u || !memory_.IsValidRange(list_pc, 4u))
         return kErrInvalidPointer;
 
@@ -177,6 +177,7 @@ std::uint32_t GeManager::enqueue(std::uint32_t list_pc, std::uint32_t stall, int
     list.interrupted = false;
     list.wait_until_ticks = UINT64_MAX;
     list.started = false;
+    list.interrupts = interrupts;
     list.offset_addr = 0u;
     list.stack_addr = stack_addr;
     const std::uint32_t context = args_valid ? mem.read_u32(opt_param + 4u) : 0u;
@@ -421,9 +422,16 @@ void GeManager::finish_list(List &list) {
         list.started = false;
     }
     trace_list_event("finished", list);
-    // With the per-list interrupts off (only PPSSPP's debugger does that) the
-    // list would complete here and wake its ListSync waiters at the
-    // finishing tick; the interrupt does both instead.
+    // With the list's interrupts off (PPGe) it completes here and wakes its
+    // ListSync waiters at the finishing tick; otherwise the interrupt does
+    // both.
+    if (!list.interrupts) {
+        list.state = ListState::kCompleted;
+        list.wait_until_ticks = starting_ticks_ + cycles_executed_;
+        busy_ticks_ = std::max(busy_ticks_, list.wait_until_ticks);
+        trigger_sync(SyncType::kList, list.id, list.wait_until_ticks);
+        return;
+    }
     trigger_interrupt(list);
 }
 
