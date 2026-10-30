@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdio>
 #include <ctime>
+#include <filesystem>
 #include <iterator>
 #include <string_view>
 #include <vector>
@@ -509,9 +510,13 @@ void Utility::draw_save() {
     };
     const auto mtime = [](const sd::SaveFileInfo &info) {
         if (!info.modified) return std::tm{};
-        const auto system_time = std::chrono::file_clock::to_sys(*info.modified);
-        return local_time(std::chrono::system_clock::to_time_t(
-            std::chrono::time_point_cast<std::chrono::system_clock::duration>(system_time)));
+        // file_clock::to_sys is missing in MSVC's STL: go through now() of both
+        // clocks instead.
+        const auto system_time =
+            std::chrono::system_clock::now() +
+            std::chrono::duration_cast<std::chrono::system_clock::duration>(
+                *info.modified - std::filesystem::file_time_type::clock::now());
+        return local_time(std::chrono::system_clock::to_time_t(system_time));
     };
     const sd::SaveFileInfo *current =
         v.selected >= 0 && v.selected < static_cast<int>(v.entries.size())
