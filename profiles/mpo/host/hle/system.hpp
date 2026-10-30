@@ -17,10 +17,12 @@
 // it from the start (Display), and IO reads the user's ISO (IoManager).
 // The controller (F10b) is sampled at the end of each vblank (Ctrl). The GE
 // (F11b) runs the display lists of sceGe on mpo_ge (GeManager), and sceMpeg
-// plays the videos on the media engine of F17a without showing them (Mpeg).
+// plays the videos on the media engine of F17a (Mpeg).
 // The stage overlays (F13) install their recompiled corpus when the game loads
 // them (OverlayManager). sceAudio, sceSasCore and sceAtrac3plus (F16b) mix on
 // mpo_audio and hand every 64-sample block to Audio::set_output (Audio).
+// sceMpeg shows the videos and plays their sound, and sceLibFont draws text
+// with the firmware fonts of SystemConfig::font_dir (F17b, Fonts).
 
 #pragma once
 
@@ -35,6 +37,7 @@
 #include "hle/cpu_bridge.hpp"
 #include "hle/ctrl.hpp"
 #include "hle/display.hpp"
+#include "hle/font.hpp"
 #include "hle/game_clock.hpp"
 #include "hle/ge_manager.hpp"
 #include "hle/hle_table.hpp"
@@ -54,6 +57,9 @@ struct SystemConfig {
     // Host directory for ms0: (empty: no memory stick). F18b passes the
     // per-OS save folder; tests and traces use analysis/.
     std::filesystem::path ms0_root;
+    // Host directory with the firmware fonts, flash0:/font/*.pgf (F17b; empty:
+    // none, sceFontOpen fails). The user supplies them.
+    std::filesystem::path font_dir;
     std::size_t fiber_stack_size = 64u * 1024u * 1024u;
     std::uint64_t preemption_interval = 4096u;
     std::uint64_t us_per_preemption = 100u;
@@ -90,6 +96,7 @@ public:
     [[nodiscard]] GeManager &ge() noexcept { return *ge_; }
     [[nodiscard]] Mpeg &mpeg() noexcept { return *mpeg_; }
     [[nodiscard]] Audio &audio() noexcept { return *audio_; }
+    [[nodiscard]] Fonts &fonts() noexcept { return *fonts_; }
     [[nodiscard]] const SystemConfig &config() const noexcept { return config_; }
 
     // Mounts the ISO and the memory stick of the config (boot() does it too).
@@ -128,12 +135,13 @@ private:
     std::unique_ptr<GeManager> ge_;
     std::unique_ptr<Mpeg> mpeg_;
     std::unique_ptr<Audio> audio_;
+    std::unique_ptr<Fonts> fonts_;
     bool mounted_ = false;
     std::map<std::uint32_t, std::uint32_t> utility_modules_;
 };
 
 // The HLE groups (hle_kernel.cpp, hle_time.cpp, hle_system.cpp; IoManager,
-// Display, Interrupts, Ctrl, GeManager and Mpeg register their own).
+// Display, Interrupts, Ctrl, GeManager, Mpeg, Audio and Fonts register their own).
 void register_kernel_hle(System &system);
 void register_module_hle(System &system);
 void register_time_hle(System &system);

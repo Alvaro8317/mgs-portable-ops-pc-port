@@ -6,10 +6,10 @@
 //
 // The ring buffer, the streams, the access units, the timestamps and the end
 // of the stream are PPSSPP's: the data goes through the demuxer and the
-// decoder, so the game sees the video advance and end as on the PSP. What it
-// does not do yet is show it: sceMpegAvcDecode writes a black frame and
-// sceMpegAtracDecode silence. F17b writes the decoded image and the PCM, and
-// adds scePsmf.
+// decoder, so the game sees the video advance and end as on the PSP. F17b:
+// sceMpegAvcDecode writes the decoded image (swizzled on the swizzled VRAM
+// mirror) and sceMpegAtracDecode the ATRAC3plus PCM. No stage imports
+// scePsmf, so it is not registered.
 //
 // sceMpegRingbufferPut runs the game's read callback right away on the
 // calling thread (CpuBridge::call_guest), where PPSSPP queues it to run when
@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <utility>
 
 #include "media_engine.h"
 
@@ -37,6 +38,13 @@ public:
     void register_hle();
 
     [[nodiscard]] std::uint64_t frames() const noexcept { return frames_; }
+    // ATRAC3plus frames written by sceMpegAtracDecode.
+    [[nodiscard]] std::uint64_t audio_frames() const noexcept { return audio_frames_; }
+    // Replaces the ATRAC3plus decoder of the contexts created from now on
+    // (tests use a fake one; empty: the real one).
+    void set_audio_decoder_factory(audio::AtracDecoderFactory factory) {
+        audio_factory_ = std::move(factory);
+    }
 
 private:
     struct StreamInfo {
@@ -95,6 +103,7 @@ private:
     std::uint32_t avc_decode(std::uint32_t mpeg, std::uint32_t au, std::uint32_t frame_width,
                              std::uint32_t buffer_addr, std::uint32_t init_addr);
     std::uint32_t atrac_decode(std::uint32_t mpeg, std::uint32_t au, std::uint32_t buffer);
+    void write_video_image(Context &ctx, std::uint32_t buffer, std::uint32_t frame_width);
 
     System &system_;
     bool initialized_ = false;
@@ -103,6 +112,8 @@ private:
     std::int32_t put_packets_added_ = 0;
     std::map<std::uint32_t, std::unique_ptr<Context>> contexts_;
     std::uint64_t frames_ = 0;
+    std::uint64_t audio_frames_ = 0;
+    audio::AtracDecoderFactory audio_factory_;
 };
 
 } // namespace mpo::hle

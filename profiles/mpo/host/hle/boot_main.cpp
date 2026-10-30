@@ -12,7 +12,7 @@
 //            [--press <buttons>@<ms>[+<ms>]]... [--capture <dir>] [--capture-every N]
 //            [--window 0|1] [--scale N] [--input-map <input.toml>]
 //            [--overlays <dir>|none] [--renderer soft|vulkan] [--capture-window 0|1]
-//            [--audio 0|1] [--audio-wav <file>]
+//            [--audio 0|1] [--audio-wav <file>] [--fonts <dir>]
 //
 // It measures the start-up (registering the dispatch table: time and memory),
 // runs PSP threads until --until-us of virtual time (default 5 s), a runtime
@@ -23,6 +23,10 @@
 //
 // F11b: the report adds the GE (lists, commands, interrupts) and the video
 // frames sceMpeg played.
+//
+// F17b: --fonts is the folder with the firmware fonts (flash0:/font/*.pgf),
+// by default flash0/font next to the ISO (game/flash0/font). The report
+// adds the fonts loaded and the glyphs sceLibFont drew.
 //
 // F13: the stage overlay libraries in --overlays (default: <build>/overlays)
 // are loaded at start; the report lists every stage the game loaded, whether
@@ -316,6 +320,7 @@ int main(int argc, char **argv) {
     std::string elf_path;
     std::string iso;
     std::string ms0;
+    std::string fonts;
     std::string tables = MPO_DEFAULT_VFPU_TABLES;
     std::string nid_table;
     std::string trace_path;
@@ -402,6 +407,8 @@ int main(int argc, char **argv) {
             audio = value != "0" ? 1 : 0;
         } else if (option == "--audio-wav") {
             audio_wav = value;
+        } else if (option == "--fonts") {
+            fonts = value;
         } else {
             return fail("unknown option " + option);
         }
@@ -409,6 +416,14 @@ int main(int argc, char **argv) {
     if (elf_path.empty()) return fail("usage: see boot_main.cpp (--elf is required)");
     config.disc_iso = iso;
     config.ms0_root = ms0;
+    if (fonts.empty() && !iso.empty()) {
+        const std::filesystem::path guess =
+            std::filesystem::path(iso).parent_path() / "flash0" / "font";
+        if (std::filesystem::is_directory(guess)) fonts = guess.string();
+    }
+    config.font_dir = fonts;
+    if (fonts.empty())
+        std::printf("fonts: no firmware font folder (--fonts): the game's text will not show\n");
 #if !MPO_BOOT_SDL
     if (window) return fail("--window needs a build with the SDL frontend (mpo_frontend_sdl)");
 #endif
@@ -732,6 +747,7 @@ int main(int argc, char **argv) {
                 const std::string written =
                     mpo::ge::replay::WritePng(std::filesystem::path(capture_dir) / name, image);
                 if (written.empty()) ++captures;
+                system.hle().trace_event("display: captured %s", name);
             }
 #if MPO_BOOT_SDL
             if (presenter) {
@@ -779,7 +795,8 @@ int main(int argc, char **argv) {
                     static_cast<unsigned long long>(captures));
         const mpo::hle::GeManager::Stats &ge = system.ge().stats();
         std::printf("ge: %llu lists, %llu commands, %llu finishes, %llu signals, %llu interrupts "
-                    "(%llu with a handler), %llu errors; mpeg: %llu video frames\n",
+                    "(%llu with a handler), %llu errors; mpeg: %llu video frames, %llu audio "
+                    "frames\n",
                     static_cast<unsigned long long>(ge.lists),
                     static_cast<unsigned long long>(ge.commands),
                     static_cast<unsigned long long>(ge.finishes),
@@ -787,7 +804,22 @@ int main(int argc, char **argv) {
                     static_cast<unsigned long long>(ge.interrupts),
                     static_cast<unsigned long long>(ge.handlers),
                     static_cast<unsigned long long>(ge.errors),
-                    static_cast<unsigned long long>(system.mpeg().frames()));
+                    static_cast<unsigned long long>(system.mpeg().frames()),
+                    static_cast<unsigned long long>(system.mpeg().audio_frames()));
+        {
+            const mpo::hle::Fonts &fonts_hle = system.fonts();
+            std::string missing;
+            for (const std::string &name : fonts_hle.missing_fonts())
+                missing += (missing.empty() ? "" : " ") + name;
+            std::printf("fonts: %zu firmware fonts from %s%s%s, %llu glyphs drawn, %llu guest "
+                        "allocs, %llu frees\n",
+                        fonts_hle.internal_font_count(),
+                        config.font_dir.empty() ? "(none)" : config.font_dir.string().c_str(),
+                        missing.empty() ? "" : ", missing: ", missing.c_str(),
+                        static_cast<unsigned long long>(fonts_hle.stats().glyphs_drawn),
+                        static_cast<unsigned long long>(fonts_hle.stats().guest_allocs),
+                        static_cast<unsigned long long>(fonts_hle.stats().guest_frees));
+        }
         const mpo::hle::Audio::Stats &as = system.audio().stats();
         std::printf("audio: %llu blocks mixed from %llu us (%.1f s, %llu audible), %u channels "
                     "reserved, %llu blocking waits, %llu sas mixes, %llu atrac decodes\n",

@@ -23,11 +23,16 @@
 // a module loaded without recompiled code; F16b: sceAudio (a blocking output
 // that waits for the mixer, a busy channel, the samples in the mix),
 // sceSasCore (the delay after a mix) and sceAtrac3plus (no ID before
-// sceUtilityLoadAvModule loads the module).
+// sceUtilityLoadAvModule loads the module); F17b: sceMpegAvcDecode writes the
+// decoded picture into VRAM (linear and on the swizzled mirror) and
+// sceMpegAtracDecode the PCM, and sceLibFont opens synthetic firmware fonts
+// with the game's alloc and free callbacks (FindOptimumFont, reference
+// counts, the native struct, char info, glyph images, close and done).
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <iterator>
@@ -36,11 +41,14 @@
 #include <utility>
 #include <vector>
 
+#include "font_test_util.h"
 #include "hle/system.hpp"
+#include "media_engine.h"
 #include "psprecomp/interpreter.hpp"
 #include "psprecomp/runtime.hpp"
 #include "psprecomp/sha256.hpp"
 #include "synthetic_disc.hpp"
+#include "video_test_util.h"
 
 namespace {
 
@@ -157,6 +165,21 @@ enum Stub : std::uint32_t {
     kSasCoreWithMix,
     kUtilityLoadAvModule,
     kAtracGetAtracID,
+    // F17b.
+    kMpegMallocAvcEsBuf,
+    kMpegInitAu,
+    kMpegGetAvcAu,
+    kMpegAvcDecode,
+    kMpegGetAtracAu,
+    kMpegAtracDecode,
+    kFontNewLib,
+    kFontFindOptimumFont,
+    kFontOpen,
+    kFontGetFontInfo,
+    kFontGetCharInfo,
+    kFontGetCharGlyphImageClip,
+    kFontClose,
+    kFontDoneLib,
     kStubCount,
 };
 constexpr StubImport kStubImports[kStubCount] = {
@@ -191,7 +214,14 @@ constexpr StubImport kStubImports[kStubCount] = {
     {"sceAudio", 0x13F592BCu},         {"sceAudio", 0xE2D56B2Du},
     {"sceAudio", 0xB011922Fu},         {"sceSasCore", 0x42778A9Fu},
     {"sceSasCore", 0x50A14DFCu},       {"sceUtility", 0xC629AF26u},
-    {"sceAtrac3plus", 0x780F88D1u},
+    {"sceAtrac3plus", 0x780F88D1u},    {"sceMpeg", 0xA780CF7Eu},
+    {"sceMpeg", 0x167AFD9Eu},          {"sceMpeg", 0xFE246728u},
+    {"sceMpeg", 0x0E3C2E9Du},          {"sceMpeg", 0xE1CE83A7u},
+    {"sceMpeg", 0x800C44DFu},          {"sceLibFont", 0x67F17ED7u},
+    {"sceLibFont", 0x099EF33Cu},       {"sceLibFont", 0xA834319Du},
+    {"sceLibFont", 0x0DA7535Eu},       {"sceLibFont", 0xDCC80C2Fu},
+    {"sceLibFont", 0xCA1E6945u},       {"sceLibFont", 0x3AEA8CB6u},
+    {"sceLibFont", 0x574B6FBCu},
 };
 constexpr std::uint32_t stub(Stub s) {
     return kStubs + 8u * static_cast<std::uint32_t>(s);
@@ -250,6 +280,8 @@ public:
     void lw(int rt, std::int32_t offset, int base) {
         emit(i(0x23u, base, rt, static_cast<std::uint32_t>(offset)));
     }
+    void sll(int rd, int rt, std::uint32_t shift) { emit(r(zero, rt, rd, 0x00u) | (shift << 6u)); }
+    void srl(int rd, int rt, std::uint32_t shift) { emit(r(zero, rt, rd, 0x02u) | (shift << 6u)); }
     void call(std::uint32_t target) {
         emit((0x03u << 26u) | ((target >> 2u) & 0x03FFFFFFu)); // jal
         emit(0u);
@@ -1708,6 +1740,434 @@ void test_audio() {
     }
 }
 
+// F17b: sceMpegAvcDecode and sceMpegAtracDecode write the picture and the PCM
+// into guest memory. A synthetic PSMF (H.264 of I_PCM macroblocks, so the
+// pixels are known; ATRAC3plus frames for a fake decoder) is laid in the ring
+// buffer, put, and decoded into VRAM and onto its swizzled mirror.
+void test_mpeg_decode() {
+    namespace vt = mpo::video::test;
+    Fixture f;
+    psprecomp::Runtime &rt = f.runtime;
+    // The fake ATRAC3plus decoder: frame n fills its 2048 stereo samples with 0x100 + n.
+    struct FakeAtrac final : mpo::audio::AudioDecoder {
+        int frames = 0;
+        bool Decode(const std::uint8_t *, int inbytes, int *consumed, int channels,
+                    std::int16_t *out, int *samples) override {
+            *consumed = inbytes;
+            ++frames;
+            if (out != nullptr)
+                for (int i = 0; i < 2048 * channels; ++i)
+                    out[i] = static_cast<std::int16_t>(0x100 + frames);
+            *samples = 2048;
+            return true;
+        }
+        bool IsOK() const override { return true; }
+    };
+    f.system->mpeg().set_audio_decoder_factory([](std::uint32_t, int, int) {
+        return std::unique_ptr<mpo::audio::AudioDecoder>(new FakeAtrac());
+    });
+
+    // 32 x 16 pixels: two macroblocks of known colours, swapped in each picture.
+    constexpr std::int64_t kFirstTs = 90000;
+    const vt::PcmColor c0{81, 90, 240};
+    const vt::PcmColor c1{145, 54, 34};
+    std::vector<vt::EsPayload> payloads;
+    for (int i = 0; i < 3; ++i) {
+        const std::vector<vt::PcmColor> mbs =
+            i % 2 == 0 ? std::vector<vt::PcmColor>{c0, c1} : std::vector<vt::PcmColor>{c1, c0};
+        payloads.push_back({0xE0, 0, kFirstTs + i * 3003, vt::MakePcmAccessUnit(2, 1, mbs, i, i == 0)});
+        payloads.push_back({0xBD, 0, kFirstTs + i * 4180,
+                            vt::MakeAudioFrame(0x28, 0x5C, static_cast<std::uint8_t>(i * 16))});
+    }
+    const std::vector<std::uint8_t> ps = vt::BuildProgramStream(payloads);
+    const std::vector<std::uint8_t> header =
+        vt::BuildPsmfHeader(static_cast<std::uint32_t>(ps.size()), kFirstTs, kFirstTs + 2 * 3003,
+                            {{0xE0, 0, 32, 16, 2}, {0xBD, 0, 0, 0, 2}});
+    const auto packets = static_cast<std::uint32_t>(ps.size() / 2048u);
+    CHECK(packets >= 6u && packets <= 16u);
+
+    const std::uint32_t header_addr = kData + 0x8000u;
+    const std::uint32_t ring_data = kData + 0x10000u;
+    const std::uint32_t mpeg_data = kData + 0x30000u;
+    const std::uint32_t ring = kData + 0x500u;
+    const std::uint32_t mpeg = kData + 0x600u;
+    const std::uint32_t avc_au = kData + 0x700u;
+    const std::uint32_t atrac_au = kData + 0x740u;
+    const std::uint32_t buffer_ptr = kData + 0x780u;
+    const std::uint32_t init = kData + 0x784u;
+    const std::uint32_t attr = kData + 0x788u;
+    const std::uint32_t pcm = kData + 0x40000u;
+    for (std::uint32_t i = 0; i < header.size(); ++i) rt.memory().store8(header_addr + i, header[i]);
+    // The stream is already in the ring: the read callback only says so.
+    for (std::uint32_t i = 0; i < ps.size(); ++i) rt.memory().store8(ring_data + i, ps[i]);
+    for (std::uint32_t i = 0; i < 0x2000u; ++i) rt.memory().store8(pcm + i, 0xEEu);
+
+    Asm cb(rt, kCode + 0xA00u);
+    const std::uint32_t callback = cb.here();
+    cb.move(v0, a1);
+    cb.ret();
+
+    Asm main(rt, kCode);
+    const std::uint32_t entry = main.here();
+    main.enter();
+    main.li(s7, kData);
+    main.call(kMpegInit);
+    main.li(a0, ring);
+    main.li(a1, 16u);
+    main.li(a2, ring_data);
+    main.li(a3, 16u * 2152u);
+    main.li(t0, callback);
+    main.li(t1, 0u);
+    main.call(kMpegRingbufferConstruct);
+    main.li(a0, mpeg);
+    main.li(a1, mpeg_data);
+    main.li(a2, 0x10000u);
+    main.li(a3, ring);
+    main.li(t0, 64u); // frame width
+    main.li(t1, 0u);
+    main.li(t2, 0u);
+    main.call(kMpegCreate);
+    main.sw(v0, 0, s7);
+    main.li(a0, mpeg);
+    main.li(a1, header_addr);
+    main.li(a2, kData + 0x100u);
+    main.call(kMpegQueryStreamOffset);
+    main.sw(v0, 4, s7);
+    main.li(a0, mpeg);
+    main.li(a1, 0u); // AVC
+    main.li(a2, 0u);
+    main.call(kMpegRegistStream);
+    main.move(s0, v0);
+    main.li(a0, mpeg);
+    main.li(a1, 1u); // ATRAC
+    main.li(a2, 0u);
+    main.call(kMpegRegistStream);
+    main.move(s1, v0);
+    main.li(a0, mpeg);
+    main.call(kMpegMallocAvcEsBuf);
+    main.move(s2, v0);
+    main.li(a0, mpeg);
+    main.move(a1, s2);
+    main.li(a2, avc_au);
+    main.call(kMpegInitAu);
+    main.li(a0, mpeg);
+    main.li(a1, 0u);
+    main.li(a2, atrac_au);
+    main.call(kMpegInitAu);
+    main.li(a0, ring);
+    main.li(a1, packets);
+    main.li(a2, 16u);
+    main.call(kMpegRingbufferPut);
+    main.sw(v0, 8, s7);
+    // Picture 0 into VRAM, picture 1 onto the swizzled mirror.
+    const auto decode = [&](std::uint32_t destination, std::int32_t slot) {
+        main.li(a0, mpeg);
+        main.move(a1, s0);
+        main.li(a2, avc_au);
+        main.li(a3, attr);
+        main.call(kMpegGetAvcAu);
+        main.li(t0, destination);
+        main.li(t1, buffer_ptr);
+        main.sw(t0, 0, t1);
+        main.li(a0, mpeg);
+        main.li(a1, avc_au);
+        main.li(a2, 64u);
+        main.li(a3, buffer_ptr);
+        main.li(t0, init);
+        main.call(kMpegAvcDecode);
+        main.sw(v0, slot, s7);
+        main.li(t1, init);
+        main.lw(t0, 0, t1);
+        main.sw(t0, slot + 4, s7);
+    };
+    decode(0x04000000u, 12);
+    decode(0x04200000u + 0x8000u, 20);
+    main.li(a0, mpeg);
+    main.move(a1, s1);
+    main.li(a2, atrac_au);
+    main.li(a3, attr);
+    main.call(kMpegGetAtracAu);
+    main.sw(v0, 28, s7);
+    main.li(a0, mpeg);
+    main.li(a1, atrac_au);
+    main.li(a2, pcm);
+    main.li(a3, 1u);
+    main.call(kMpegAtracDecode);
+    main.sw(v0, 32, s7);
+    main.li(t0, 1u);
+    main.sw(t0, 36, s7);
+    main.leave();
+
+    (void)start_thread(*f.system, "mpeg", entry, 0x20u);
+    CHECK(f.system->run(2'000'000u) == mk::RunResult::kIdle);
+    CHECK(!rt.stopped());
+    CHECK_EQ(f.word(kData + 36u), 1u);
+    CHECK_EQ(f.word(kData), 0u);
+    CHECK_EQ(f.word(kData + 4u), 0u);
+    CHECK_EQ(f.word(kData + 8u), packets);
+    CHECK_EQ(f.word(kData + 12u), 0u);
+    CHECK_EQ(f.word(kData + 16u), 1u); // A frame came out.
+    CHECK_EQ(f.word(kData + 20u), 0u);
+    CHECK_EQ(f.word(kData + 24u), 1u);
+    CHECK_EQ(f.word(kData + 28u), 0u);
+    CHECK_EQ(f.word(kData + 32u), 0u);
+    CHECK_EQ(f.system->mpeg().frames(), 2u);
+    CHECK_EQ(f.system->mpeg().audio_frames(), 1u);
+
+    // The PCM: the fake decoder's first frame, all 0x2000 bytes.
+    CHECK_EQ(rt.memory().load16(pcm), 0x101u);
+    CHECK_EQ(rt.memory().load16(pcm + 0x1FFEu), 0x101u);
+
+    // The pictures: ABGR8888 with the alpha cleared, 64 pixels per line.
+    const auto close_to = [](std::uint32_t pixel, vt::PcmColor c) {
+        int r = 0, g = 0, b = 0;
+        vt::Bt601ToRgb(c, &r, &g, &b);
+        const auto channel = [pixel](int shift) { return static_cast<int>((pixel >> shift) & 0xFFu); };
+        return std::abs(channel(0) - r) <= 2 && std::abs(channel(8) - g) <= 2 &&
+               std::abs(channel(16) - b) <= 2 && (pixel >> 24) == 0u;
+    };
+    // Pixel (x, y) of a 64-pixel-wide 8888 image swizzled in 16-byte x 8-row blocks.
+    const auto swizzled = [](std::uint32_t x, std::uint32_t y) {
+        const std::uint32_t pitch_blocks = 64u * 4u / 16u;
+        return ((y / 8u) * pitch_blocks + (x * 4u) / 16u) * 128u + (y % 8u) * 16u + (x * 4u) % 16u;
+    };
+    if (mpo::video::HaveVideoDecoder()) {
+        for (std::uint32_t y = 0; y < 16u; y += 5u) {
+            CHECK(close_to(f.word(0x04000000u + (y * 64u + 3u) * 4u), c0));
+            CHECK(close_to(f.word(0x04000000u + (y * 64u + 20u) * 4u), c1));
+            CHECK(close_to(f.word(0x04008000u + swizzled(3u, y)), c1));
+            CHECK(close_to(f.word(0x04008000u + swizzled(20u, y)), c0));
+        }
+        // Nothing past the 32 pixels of a line, nor past the 16 lines.
+        CHECK_EQ(f.word(0x04000000u + 40u * 4u), 0u);
+        CHECK_EQ(f.word(0x04000000u + 16u * 64u * 4u), 0u);
+    } else {
+        // Without FFmpeg the picture is black, as before F17b.
+        CHECK_EQ(f.word(0x04000000u + 3u * 4u), 0u);
+    }
+}
+
+// F17b: sceLibFont over two synthetic "firmware fonts" (ltn0.pgf and
+// ltn4.pgf, the sans serif regular and bold), with the game's allocator as
+// Allegrex callbacks: a bump allocator and a free that only counts.
+void test_font() {
+    namespace ft = mpo::font::test;
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "mpo_hle_test_fonts";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const ft::Font font = ft::BuildFont(2);
+    for (const char *name : {"ltn0.pgf", "ltn4.pgf"}) {
+        std::FILE *file = std::fopen((dir / name).string().c_str(), "wb");
+        CHECK(file != nullptr);
+        if (file == nullptr) return;
+        CHECK_EQ(std::fwrite(font.bytes.data(), 1, font.bytes.size(), file), font.bytes.size());
+        std::fclose(file);
+    }
+    mh::SystemConfig config;
+    config.font_dir = dir;
+    Fixture f(config);
+    psprecomp::Runtime &rt = f.runtime;
+
+    constexpr std::uint32_t kLog = kData + 0x800u; // allocs, user data, size, frees, freed
+    constexpr std::uint32_t kHeapPtr = kLog + 0x20u;
+    constexpr std::uint32_t kHeap = kData + 0x20000u;
+    rt.memory().store32(kHeapPtr, kHeap);
+    Asm cb(rt, kCode + 0xA00u);
+    const std::uint32_t alloc = cb.here();
+    cb.li(t0, kLog);
+    cb.lw(t1, 0, t0);
+    cb.addiu(t1, t1, 1);
+    cb.sw(t1, 0, t0);
+    cb.sw(a0, 4, t0);
+    cb.sw(a1, 8, t0);
+    cb.lw(v0, 0x20, t0);
+    cb.addiu(t1, a1, 15); // 16-byte aligned blocks
+    cb.srl(t1, t1, 4u);
+    cb.sll(t1, t1, 4u);
+    cb.addu(t1, v0, t1);
+    cb.sw(t1, 0x20, t0);
+    cb.ret();
+    const std::uint32_t free_func = cb.here();
+    cb.li(t0, kLog);
+    cb.lw(t1, 12, t0);
+    cb.addiu(t1, t1, 1);
+    cb.sw(t1, 12, t0);
+    cb.sw(a1, 16, t0);
+    cb.ret();
+
+    // FontNewLibParams: user data, 4 fonts, no cache, alloc, free.
+    constexpr std::uint32_t kParams = kData + 0x100u;
+    const std::uint32_t params[11] = {0x1234u, 4u, 0u, alloc, free_func, 0u, 0u, 0u, 0u, 0u, 0u};
+    for (std::uint32_t i = 0; i < 11u; ++i) rt.memory().store32(kParams + 4u * i, params[i]);
+    // The style asked for: bold (fontStyle at 22), nothing else.
+    constexpr std::uint32_t kStyle = kData + 0x200u;
+    rt.memory().store16(kStyle + 22u, 5u);
+    // SceFontGlyphImage: 8 bpp, at (0, 0), 8 x 4, 8 bytes per line.
+    constexpr std::uint32_t kGlyph = kData + 0x300u;
+    constexpr std::uint32_t kBitmap = kData + 0x400u;
+    rt.memory().store32(kGlyph, 2u);
+    rt.memory().store16(kGlyph + 12u, 8u);
+    rt.memory().store16(kGlyph + 14u, 4u);
+    rt.memory().store16(kGlyph + 16u, 8u);
+    rt.memory().store32(kGlyph + 20u, kBitmap);
+    constexpr std::uint32_t kInfo = kData + 0x1000u;
+    constexpr std::uint32_t kCharInfo = kData + 0x1200u;
+    constexpr std::uint32_t kErrors = kData + 0x1300u;
+    constexpr std::uint32_t kResults = kData + 0x1400u;
+
+    Asm main(rt, kCode);
+    const std::uint32_t entry = main.here();
+    main.enter();
+    main.li(s7, kResults);
+    main.li(s2, kLog);
+    const auto log = [&](std::int32_t from, std::int32_t to) {
+        main.lw(t0, from, s2);
+        main.sw(t0, to, s7);
+    };
+    main.li(a0, kParams);
+    main.li(a1, kErrors);
+    main.call(kFontNewLib);
+    main.sw(v0, 0, s7);
+    main.move(s0, v0);
+    log(8, 4); // its allocation size
+    main.move(a0, s0);
+    main.li(a1, kStyle);
+    main.li(a2, kErrors + 4u);
+    main.call(kFontFindOptimumFont);
+    main.sw(v0, 8, s7);
+    main.move(a0, s0);
+    main.move(a1, v0);
+    main.li(a2, 1u); // FONT_OPEN_INTERNAL_FULL
+    main.li(a3, kErrors + 8u);
+    main.call(kFontOpen);
+    main.sw(v0, 12, s7);
+    main.move(s1, v0);
+    log(8, 16);
+    main.move(a0, s0);
+    main.li(a1, 1u);
+    main.li(a2, 1u);
+    main.li(a3, kErrors + 12u);
+    main.call(kFontOpen); // Again: one more reference, no allocation.
+    main.sw(v0, 20, s7);
+    log(0, 24);
+    main.li(a0, 0x5555u); // Not a library.
+    main.li(a1, 0u);
+    main.li(a2, 1u);
+    main.li(a3, kErrors + 16u);
+    main.call(kFontOpen);
+    main.sw(v0, 28, s7);
+    main.move(a0, s1);
+    main.li(a1, kInfo);
+    main.call(kFontGetFontInfo);
+    main.sw(v0, 32, s7);
+    main.move(a0, s1);
+    main.li(a1, 'A');
+    main.li(a2, kCharInfo);
+    main.call(kFontGetCharInfo);
+    main.sw(v0, 36, s7);
+    log(8, 40);
+    log(0x20, 44); // the heap pointer, right after the char bitmap
+    main.move(a0, s1);
+    main.li(a1, 'B');
+    main.li(a2, kCharInfo);
+    main.call(kFontGetCharInfo); // Frees the bitmap of 'A', allocates one for 'B'.
+    main.sw(v0, 48, s7);
+    log(8, 52);
+    log(12, 56);
+    log(16, 60);
+    main.move(a0, s1);
+    main.li(a1, 'A');
+    main.li(a2, kGlyph);
+    main.li(a3, 0u);
+    main.li(t0, 0u);
+    main.li(t1, 8u);
+    main.li(t2, 4u);
+    main.call(kFontGetCharGlyphImageClip);
+    main.sw(v0, 64, s7);
+    main.move(a0, s1);
+    main.call(kFontClose); // Two references to one: flushes the char bitmap.
+    main.sw(v0, 68, s7);
+    log(12, 72);
+    main.move(a0, s1);
+    main.call(kFontClose); // The last one: frees the font's allocation.
+    log(12, 76);
+    log(16, 80);
+    main.move(a0, s0);
+    main.call(kFontDoneLib);
+    main.sw(v0, 84, s7);
+    log(12, 88);
+    log(16, 92);
+    main.li(t0, 1u);
+    main.sw(t0, 96, s7);
+    main.leave();
+
+    (void)start_thread(*f.system, "font", entry, 0x20u);
+    CHECK(f.system->run(1'000'000u) == mk::RunResult::kIdle);
+    CHECK(!rt.stopped());
+    const auto result = [&f](std::uint32_t offset) { return f.word(kResults + offset); };
+    CHECK_EQ(result(96), 1u);
+    CHECK_EQ(f.system->fonts().internal_font_count(), 2u);
+    CHECK_EQ(f.system->fonts().missing_fonts().size(), 16u); // jpn0, ltn1-3, 5-15, kr0
+
+    // NewLib: the handle is the allocation, the native struct at its start.
+    const std::uint32_t lib = result(0);
+    CHECK_EQ(lib, kHeap);
+    CHECK_EQ(result(4), 0x4Cu + 4u * 0x4Cu + 4u * 0x230u + 2u * 0xA8u);
+    CHECK_EQ(f.word(kLog + 4u), 0x1234u); // The user data goes first.
+    CHECK_EQ(f.word(kErrors), 0u);
+    CHECK_EQ(f.word(lib + 12u), alloc);
+    CHECK_EQ(f.word(lib + 44u), lib + 0x4Cu);
+    CHECK_EQ(f.word(lib + 48u), lib + 0x4Cu + 4u * 0x4Cu);
+    CHECK_EQ(f.word(lib + 56u), 0x43000000u); // 128.0f
+    CHECK_EQ(f.word(lib + 64u), 2u);
+    CHECK_EQ(f.word(lib + 72u) & 0xFFFFu, 0x5Fu);
+    // FindOptimumFont: the bold one.
+    CHECK_EQ(result(8), 1u);
+    CHECK_EQ(f.word(kErrors + 4u), 0u);
+    // Open: the first font slot, with the registry's file size (+12) allocated.
+    CHECK_EQ(result(12), lib + 0x4Cu);
+    CHECK_EQ(f.word(kErrors + 8u), 0u);
+    CHECK_EQ(result(16), 12u + 72828u);
+    CHECK_EQ(result(20), lib + 0x4Cu);
+    CHECK_EQ(result(24), 2u); // Only the lib and the first open allocated.
+    CHECK_EQ(result(28), 0u);
+    CHECK_EQ(f.word(kErrors + 16u), 0x80460002u); // SCE_FONT_ERROR_INVALID_LIBID
+    // GetFontInfo: the PGF's numbers and the registry's style.
+    CHECK_EQ(result(32), 0u);
+    CHECK_EQ(f.word(kInfo + 84u), 3u); // numGlyphs
+    CHECK_EQ(rt.memory().load16(kInfo + 92u + 20u), 1u); // fontFamily
+    CHECK_EQ(rt.memory().load16(kInfo + 92u + 22u), 5u); // fontStyle
+    CHECK_EQ(rt.memory().load8(kInfo + 92u + 96u), static_cast<std::uint32_t>('l'));
+    CHECK_EQ(rt.memory().load8(kInfo + 92u + 99u), static_cast<std::uint32_t>('4'));
+    // GetCharInfo: the bitmap of the last character is allocated...
+    CHECK_EQ(result(36), 0u);
+    CHECK_EQ(result(40), 4u * 3u);
+    // ... and freed when the next one comes.
+    CHECK_EQ(result(48), 0u);
+    CHECK_EQ(f.word(kCharInfo), 2u); // 'B' is 2 x 3
+    CHECK_EQ(f.word(kCharInfo + 4u), 3u);
+    CHECK_EQ(result(52), 2u * 3u);
+    CHECK_EQ(result(56), 1u);
+    CHECK_EQ(result(60), result(44) - 16u); // The block of 'A'.
+    // The glyph of 'A', 8 bits per pixel.
+    CHECK_EQ(result(64), 0u);
+    for (std::uint32_t y = 0; y < 3u; ++y)
+        for (std::uint32_t x = 0; x < 4u; ++x)
+            CHECK_EQ(rt.memory().load8(kBitmap + y * 8u + x), ft::kGlyphA[y][x] * 0x11u);
+    // Close: the char bitmap goes with the first; the font's allocation with the last.
+    CHECK_EQ(result(68), 0u);
+    CHECK_EQ(result(72), 2u);
+    CHECK_EQ(result(76), 3u);
+    // The open allocation: right after the lib's (16-byte blocks).
+    CHECK_EQ(result(80), lib + ((result(4) + 15u) & ~15u));
+    // DoneLib frees the library.
+    CHECK_EQ(result(84), 0u);
+    CHECK_EQ(result(88), 4u);
+    CHECK_EQ(result(92), lib);
+    std::filesystem::remove_all(dir);
+}
+
 void run_test(const char *name, void (*test)()) {
     const int before = g_failures;
     std::fprintf(stderr, "%s...\n", name);
@@ -1735,6 +2195,8 @@ int main() {
     run_test("test_ge", &test_ge);
     run_test("test_mpeg", &test_mpeg);
     run_test("test_audio", &test_audio);
+    run_test("test_mpeg_decode", &test_mpeg_decode);
+    run_test("test_font", &test_font);
     std::printf("mpo_hle_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

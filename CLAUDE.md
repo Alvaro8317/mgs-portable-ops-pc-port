@@ -188,12 +188,14 @@ los hilos y fibras, en vez de depender de `ulimit`.
 
 **Audio y video:**
 - `sceAtrac` (ATRAC3) y `sceSas` (mezclador por voces, ADSR).
-- `sceMpeg`/`scePsmf`: los 30 PMF del disco (H.264 + ATRAC3plus). Son el título, las cinemáticas de
-  cómic y los créditos; las escenas en 3D son in-engine (F17a [V]).
+- `sceMpeg`: los 30 PMF del disco (H.264 + ATRAC3plus). Son el título, las cinemáticas de
+  cómic y los créditos; las escenas en 3D son in-engine (F17a [V]). Ninguna etapa importa
+  `scePsmf` (F17b [V]).
 
 **Sistema y diálogos:**
 - `sceFont`, con las **fuentes del firmware** (`flash0:/font/*.pgf`), que aporta el usuario. El
-  disco no trae ninguna fuente (F17a [V]).
+  disco no trae ninguna fuente (F17a [V]). El juego pide `ltn0` y `jpn0` (F17b [V]); `mpo_boot`
+  las busca en `--fonts`, por defecto `flash0/font` junto al ISO.
 - `sceUtility`: savedata (guardar, cargar y borrar) y OSK (nombres y contraseñas de reclutamiento).
   - MPO pide savedata **cifrado en modo 5** (clave propia, SDK `0x02080010`) y borra con
     `LISTALLDELETE` y `gameName` vacío, así que el borrado solo puede tocar el directorio elegido

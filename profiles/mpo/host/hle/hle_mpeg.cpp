@@ -6,10 +6,11 @@
 // access units with their timestamps, the end of the stream, the error codes
 // and the delays. Left out: the PMP video path, the compat flags (none is set
 // for MPO) and the ring buffer validation of libmpeg < 0x0105 (MPO uses the
-// firmware's 0x010A). The image and the PCM are not written yet (F17b).
+// firmware's 0x010A). F17b writes the decoded image and the PCM.
 
 #include <algorithm>
 #include <cstring>
+#include <span>
 #include <vector>
 
 #include "hle/hle_args.hpp"
@@ -287,6 +288,7 @@ std::uint32_t Mpeg::create(std::uint32_t mpeg_addr, std::uint32_t data, std::uin
     ctx->ringbuffer_addr = ring_addr;
     ctx->default_frame_width = frame_width;
     ctx->engine = std::make_unique<video::MediaEngine>();
+    if (audio_factory_) ctx->engine->setAudioDecoderFactory(audio_factory_);
     contexts_[handle] = std::move(ctx);
     return system_.kernel().delay_result(0u, 29000u);
 }
@@ -437,6 +439,30 @@ std::uint32_t Mpeg::get_atrac_au(std::uint32_t mpeg, std::uint32_t stream, std::
     return k.delay_result(result, 100u);
 }
 
+void Mpeg::write_video_image(Context &ctx, std::uint32_t buffer, std::uint32_t frame_width) {
+    // MediaEngine::writeVideoImage: frameWidth pixels per line, the video's
+    // height, swizzled when the destination is the swizzled VRAM mirror.
+    kernel::GuestMemory &m = system_.kernel().memory();
+    const bool swizzle = (buffer & 0x3F800000u) == 0x04000000u && (buffer & 0x00200000u) != 0u;
+    const int video_height = ctx.engine->VideoHeight() > 0 ? ctx.engine->VideoHeight()
+                                                           : ctx.avc_detail_frame_height;
+    const auto height = static_cast<std::uint32_t>(std::max(video_height, 0));
+    const std::uint32_t lines = swizzle ? (height + 7u) / 8u * 8u : height;
+    const std::uint32_t needed =
+        frame_width * static_cast<std::uint32_t>(video::VideoPixelModeBytes(ctx.video_pixel_mode)) *
+        lines;
+    const std::uint32_t valid = clamp_valid(m, buffer, needed);
+    std::uint8_t *dest = valid != 0u ? m.translate(buffer, valid) : nullptr;
+    if (dest == nullptr) return;
+    const int written = ctx.engine->writeVideoImage(std::span<std::uint8_t>(dest, valid), swizzle,
+                                                    static_cast<int>(frame_width),
+                                                    ctx.video_pixel_mode);
+    if (written == 0 && !video::HaveVideoDecoder()) {
+        // A build without FFmpeg has no image: black, as before F17b.
+        m.fill(buffer, 0u, valid);
+    }
+}
+
 std::uint32_t Mpeg::avc_decode(std::uint32_t mpeg, std::uint32_t au_addr, std::uint32_t frame_width,
                                std::uint32_t buffer_addr, std::uint32_t init_addr) {
     kernel::Kernel &k = system_.kernel();
@@ -457,13 +483,8 @@ std::uint32_t Mpeg::avc_decode(std::uint32_t mpeg, std::uint32_t au_addr, std::u
 
     const auto packets = static_cast<std::int32_t>(m.read_u32(ring_addr + ring::kPackets));
     (void)ctx->engine->setVideoStream(static_cast<int>(au.es_buffer));
-    // The image is not shown yet: skip its conversion and write black (F17b).
-    if (ctx->engine->stepVideo(ctx->video_pixel_mode, true)) {
-        const std::uint32_t bytes_per_pixel = ctx->video_pixel_mode == 3 ? 4u : 2u;
-        const std::uint32_t size = frame_width *
-                                   static_cast<std::uint32_t>(ctx->avc_detail_frame_height) *
-                                   bytes_per_pixel;
-        m.fill(buffer, 0u, clamp_valid(m, buffer, size));
+    if (ctx->engine->stepVideo(ctx->video_pixel_mode)) {
+        write_video_image(*ctx, buffer, frame_width);
         ctx->avc_frame_status = 1;
         ++ctx->video_frame_count;
         ++frames_;
@@ -475,6 +496,9 @@ std::uint32_t Mpeg::avc_decode(std::uint32_t mpeg, std::uint32_t au_addr, std::u
                 static_cast<std::uint32_t>(packets - ctx->engine->getRemainSize() / 2048));
     au.pts = ctx->engine->getVideoTimeStamp() + ctx->first_timestamp;
     write_au(m, au_addr, au);
+    if (ctx->avc_frame_status != 0)
+        system_.hle().trace_event("mpeg: video frame %d, pts %lld, to %08X", ctx->video_frame_count,
+                                  static_cast<long long>(au.pts), buffer);
     if (m.is_valid(init_addr, 4u)) {
         // Killzone - Liberation expects 1 here (#16727).
         const bool killzone = lib_version_ >= 0x0105 && lib_version_ < 0x010A;
@@ -492,12 +516,24 @@ std::uint32_t Mpeg::atrac_decode(std::uint32_t mpeg, std::uint32_t au_addr, std:
     if (!m.is_valid(buffer, 1u)) return kFailure;
     Au au = read_au(m, au_addr);
     (void)ctx->engine->setAudioStream(static_cast<int>(au.es_buffer));
-    // The samples are consumed, but the game gets silence for now (F17b).
     m.fill(buffer, 0u, clamp_valid(m, buffer, kMpegAtracEsOutputSize));
-    std::vector<std::int16_t> samples(kMpegAtracEsOutputSize / 2u);
-    (void)ctx->engine->getAudioSamples(samples);
+    // MediaEngine::getAudioSamples: 2048 stereo samples. The PCM goes through
+    // a host buffer (the guest one need not be 2-byte aligned), and is lost
+    // if the guest buffer is shorter than 0x2000 bytes, like upstream.
+    std::vector<std::int16_t> samples(kMpegAtracEsOutputSize / 2u, 0);
+    const bool decoded = ctx->engine->getAudioSamples(samples) != 0 &&
+                         m.is_valid(buffer, kMpegAtracEsOutputSize);
+    if (decoded) {
+        (void)m.write_bytes(buffer, std::span<const std::uint8_t>(
+                                        reinterpret_cast<const std::uint8_t *>(samples.data()),
+                                        kMpegAtracEsOutputSize));
+        ++audio_frames_;
+    }
     au.pts = ctx->engine->getAudioTimeStamp() + ctx->first_timestamp;
     write_au(m, au_addr, au);
+    if (decoded)
+        system_.hle().trace_event("mpeg: audio frame, pts %lld, to %08X",
+                                  static_cast<long long>(au.pts), buffer);
     return k.delay_result(0u, kAtracDecodeDelay);
 }
 

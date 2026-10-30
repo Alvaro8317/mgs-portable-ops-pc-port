@@ -13,7 +13,20 @@ PPSSPP, **[?]** sin verificar.
 - `mgp_main` importa de `sceLibFont` solo `NewLib`, `DoneLib`, `FindOptimumFont`, `Open`, `Close`,
   `GetFontInfo`, `GetCharInfo` y `GetCharGlyphImage_Clip`, sin `OpenUserFile` ni `OpenUserMemory`
   ([`mgp_main.md`](../analysis/mgp_main.md)). Por tanto **usa las fuentes del firmware**
-  (`flash0:/font/*.pgf`) [V]. Cuál elige `FindOptimumFont` se sabrá en F17b [?].
+  (`flash0:/font/*.pgf`) [V].
+- **Qué fuentes pide** (F17b, traza de `mpo_boot` con las 18 fuentes del firmware) [V]:
+  - `FindOptimumFont` con familia 1 (sans serif), idioma 2 (latín) y 10 × 10 puntos → `ltn0.pgf`;
+    con idioma 1 (japonés) → `jpn0.pgf`. El estilo va a 0 (no lo pide);
+  - al arrancar (2,4 s) abre `ltn0` en modo 1 (`FONT_OPEN_INTERNAL_FULL`) y `jpn0` en modo 0
+    (`STINGY`); al pasar por NEW GAME cierra las dos, hace `DoneLib` y crea otra librería;
+  - dibuja cada carácter en un búfer de 480 × 96 píxeles de 4 bits (formato 0, 240 bytes por línea),
+    con la esquina superior izquierda del glifo en `(xPos64, yPos64)`, y lo usa de textura. El
+    primer texto es "Checking Memory Stick™... Do not remove the Memory Stick™ or turn off power."
+    (74 caracteres), que coincide al píxel en posición con la grabación de PPSSPP.
+- Las fuentes que aportó el usuario no son las mismas versiones que la tabla de PPSSPP: `ltn0.pgf`
+  pesa 38 236 bytes y tiene 341 glifos (el registro dice 69 108 bytes), y `jpn0.pgf` pesa 4 316 284
+  (registro: 1 581 700) [V]. Como en PPSSPP, la memoria que se le pide al juego al abrir una fuente
+  sale del registro y no del archivo.
 - Las fuentes del firmware tienen copyright (Sony/Fontworks) y no van al repo. PPSSPP las distribuye en
   `assets/flash0/font/` (`ltn0`–`ltn15`, `jpn0` y `kr0`). Son las originales [V]:
   - `ltn0` es "FTT-NewRodin Pro Latin";

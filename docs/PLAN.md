@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b → F18b → F15b → F19 → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b → F15b → F19 → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -108,7 +108,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F16a | Audio autónomo: SAS, ATRAC3 y salida SDL3 | M4 | ✅ hecha (ola 1) |
 | F16b | Audio en el juego: `sceAudio`, `sceSas` y `sceAtrac` | M4 | ✅ hecha (Windows y la música de misión: pendientes) |
 | F17a | Decodificador de PMF y fuente PGF (autónomos) | M4 | ✅ hecha (ola 2) |
-| F17b | Video del título y fuentes en el juego | M4 | ⬜ pendiente |
+| F17b | Video del título y fuentes en el juego | M4 | ✅ hecha (Windows y la sincronía contra PPSSPP: pendientes) |
 | F18a | Savedata, OSK y diálogos (autónomo) | M4 | ✅ hecha (ola 4) |
 | F18b | Savedata, OSK y diálogos en el juego | M4 | ⬜ pendiente |
 | F19 | Primera misión y repetición de input | M5 | ⬜ pendiente |
@@ -1088,6 +1088,18 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - La intro y el "Press Start" se muestran en tres framebuffers 8888 en `0x04000000`, `0x04088000`
     y `0x04110000`, sin draws del GE.
   - El bucle del título es probablemente `MPO_OP_LOOP.pmf` o `MPO_loop.pmf` [?].
+- **Hecha (F17b)**: ver `docs/sessions/F17b.md`.
+  - `sceMpegAvcDecode` escribe la imagen y `sceMpegAtracDecode` el PCM. En el juego, las capturas
+    son idénticas a `mpo_pmf_decode` y el audio, idéntico muestra a muestra, con `MPO_OP_LONG` (la
+    intro) y `MPO_OP_LOOP` (el fondo del "Press Start" al volver con Cruz) [V]. La música del título
+    coincide con PPSSPP (forma de onda 1,000).
+  - El vídeo sale unos 57 ms después de su audio, constante y sin deriva. Viene del juego (decodifica
+    dos frames antes de enseñarlos). Falta compararlo con PPSSPP: hace falta una grabación con audio
+    y vídeo en el mismo reloj, porque el AVI de PPSSPP graba un frame por flip.
+  - `scePsmf` no se implementó: no lo importa nadie [V].
+  - `sceLibFont` (`host/hle/hle_font.cpp`): los 8 NIDs de `mgp_main`. El juego pide `ltn0` y `jpn0`,
+    y "Checking Memory Stick…" coincide en posición con PPSSPP. `mpo_boot --fonts`, por defecto
+    `flash0/font` junto al ISO.
 
 ### F18a — Savedata, OSK y diálogos, autónomo (ola 4)
 
@@ -1171,6 +1183,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   reclutamiento y se borra un save desde el menú del juego (`LISTALLDELETE`), comprobando con
   hashes que el resto de `SAVEDATA` no cambia. Los saves de prueba se hashean antes y después.
   **M4 cerrado.**
+- **Notas (F17b)**: `sceFont` ya dibuja "Checking Memory Stick…", pero hoy solo se ve 8 flips
+  porque `sceUtilitySavedata*` es un stub. Con F18b tiene que quedarse lo que dure la comprobación.
+  Volver a comparar el recorrido Start → menú → Círculo contra `extra2` (el fondo a −45 dB de F16b).
 - **Notas (F13)**: al pasar el OSK se entra a la primera etapa jugable. Hay que recompilarla
   (`build_overlays.py --stages <s>`) y comprobar en el reporte de `mpo_boot` que su overlay sale
   "verified" (si sale con un aviso de base, añadirla a `config/stages.toml`).
