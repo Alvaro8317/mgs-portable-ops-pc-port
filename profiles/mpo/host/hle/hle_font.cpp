@@ -23,13 +23,13 @@ namespace {
 
 constexpr int kMaxFontRefs = 4;
 
-constexpr std::uint32_t kErrIllegalAddr = 0x800200D3u;       // SCE_KERNEL_ERROR_ILLEGAL_ADDR
-constexpr std::uint32_t kErrInvalidArgument = 0x800001FFu;   // SCE_KERNEL_ERROR_INVALID_ARGUMENT
-constexpr std::uint32_t kErrOutOfMemory = 0x80460001u;       // SCE_FONT_ERROR_OUT_OF_MEMORY
-constexpr std::uint32_t kErrInvalidLibId = 0x80460002u;      // SCE_FONT_ERROR_INVALID_LIBID
-constexpr std::uint32_t kErrInvalidParameter = 0x80460003u;  // SCE_FONT_ERROR_INVALID_PARAMETER
-constexpr std::uint32_t kErrTooManyOpenFonts = 0x80460009u;  // SCE_FONT_ERROR_TOO_MANY_OPEN_FONTS
-constexpr std::uint32_t kErrInvalidFontData = 0x8046000Au;   // SCE_FONT_ERROR_INVALID_FONT_DATA
+constexpr std::uint32_t kErrIllegalAddr = 0x800200D3u;      // SCE_KERNEL_ERROR_ILLEGAL_ADDR
+constexpr std::uint32_t kErrInvalidArgument = 0x800001FFu;  // SCE_KERNEL_ERROR_INVALID_ARGUMENT
+constexpr std::uint32_t kErrOutOfMemory = 0x80460001u;      // SCE_FONT_ERROR_OUT_OF_MEMORY
+constexpr std::uint32_t kErrInvalidLibId = 0x80460002u;     // SCE_FONT_ERROR_INVALID_LIBID
+constexpr std::uint32_t kErrInvalidParameter = 0x80460003u; // SCE_FONT_ERROR_INVALID_PARAMETER
+constexpr std::uint32_t kErrTooManyOpenFonts = 0x80460009u; // SCE_FONT_ERROR_TOO_MANY_OPEN_FONTS
+constexpr std::uint32_t kErrInvalidFontData = 0x8046000Au;  // SCE_FONT_ERROR_INVALID_FONT_DATA
 
 // Guest layouts.
 constexpr std::uint32_t kLibParamsSize = 11u * 4u; // FontNewLibParams
@@ -55,14 +55,16 @@ std::uint32_t clamp_valid(kernel::GuestMemory &m, std::uint32_t address, std::ui
 
 // A guest struct as PSPPointer sees it: read what is mapped (the rest is
 // zero), write back what is mapped.
-template <typename T> T read_struct(kernel::GuestMemory &m, std::uint32_t address) {
+template <typename T>
+T read_struct(kernel::GuestMemory &m, std::uint32_t address) {
     T value{};
     const std::uint32_t valid = clamp_valid(m, address, sizeof(T));
     if (valid != 0u) std::memcpy(&value, m.translate(address, valid), valid);
     return value;
 }
 
-template <typename T> void write_struct(kernel::GuestMemory &m, std::uint32_t address, const T &v) {
+template <typename T>
+void write_struct(kernel::GuestMemory &m, std::uint32_t address, const T &v) {
     const std::uint32_t valid = clamp_valid(m, address, sizeof(T));
     if (valid != 0u) std::memcpy(m.translate(address, valid), &v, valid);
 }
@@ -251,13 +253,13 @@ void Fonts::alloc_done(FontLib &lib, std::uint32_t address) {
     kernel::GuestMemory &m = system_.kernel().memory();
     if (!m.is_valid(address, kNativeFontLibSize)) return;
     const LibParams &p = lib.params;
-    const std::uint32_t params[11] = {p.user_data,  p.num_fonts,  p.cache_data, p.alloc_func,
-                                      p.free_func,  p.open_func,  p.close_func, p.read_func,
-                                      p.seek_func,  p.error_func, p.io_finish_func};
+    const std::uint32_t params[11] = {p.user_data, p.num_fonts,  p.cache_data,    p.alloc_func,
+                                      p.free_func, p.open_func,  p.close_func,    p.read_func,
+                                      p.seek_func, p.error_func, p.io_finish_func};
     for (std::uint32_t i = 0; i < 11u; ++i) m.write_u32(address + 4u * i, params[i]);
-    m.write_u32(address + 44u, address + kNativeFontLibSize);              // fontInfo1
-    m.write_u32(address + 48u, address + kNativeFontLibSize + n * 0x4Cu);  // fontInfo2
-    m.write_u32(address + 52u, 0u);                                        // unk1, unk2
+    m.write_u32(address + 44u, address + kNativeFontLibSize);             // fontInfo1
+    m.write_u32(address + 48u, address + kNativeFontLibSize + n * 0x4Cu); // fontInfo2
+    m.write_u32(address + 52u, 0u);                                       // unk1, unk2
     write_float(m, address + 56u, lib.h_res);
     write_float(m, address + 60u, lib.v_res);
     m.write_u32(address + 64u, static_cast<std::uint32_t>(internal_.size()));
@@ -294,8 +296,8 @@ std::uint32_t Fonts::new_lib(std::uint32_t params_addr, std::uint32_t error_addr
     }
     auto lib = std::make_unique<FontLib>();
     LibParams &p = lib->params;
-    std::uint32_t *fields[11] = {&p.user_data, &p.num_fonts,  &p.cache_data, &p.alloc_func,
-                                 &p.free_func, &p.open_func,  &p.close_func, &p.read_func,
+    std::uint32_t *fields[11] = {&p.user_data, &p.num_fonts,  &p.cache_data,    &p.alloc_func,
+                                 &p.free_func, &p.open_func,  &p.close_func,    &p.read_func,
                                  &p.seek_func, &p.error_func, &p.io_finish_func};
     for (std::uint32_t i = 0; i < 11u; ++i) *fields[i] = m.read_u32(params_addr + 4u * i);
     if (!m.is_valid(p.alloc_func) || !m.is_valid(p.free_func)) {
@@ -490,7 +492,8 @@ std::uint32_t Fonts::find_optimum_font(std::uint32_t lib_handle, std::uint32_t s
         if (q != kMatchNone) {
             const font::PgfFontStyle &match = internal_[i]->style;
             if (requested.fontH > 0.0f) {
-                const float h_dist = std::fabs(match.fontHRes * match.fontH - h_res * requested.fontH);
+                const float h_dist =
+                    std::fabs(match.fontHRes * match.fontH - h_res * requested.fontH);
                 if (h_dist < nearest_dist) {
                     nearest_dist = h_dist;
                     nearest = static_cast<int>(i);
@@ -498,7 +501,8 @@ std::uint32_t Fonts::find_optimum_font(std::uint32_t lib_handle, std::uint32_t s
             }
             if (requested.fontV > 0.0f) {
                 // Appears to be a bug? It seems to match H instead of V.
-                const float v_dist = std::fabs(match.fontVRes * match.fontV - v_res * requested.fontH);
+                const float v_dist =
+                    std::fabs(match.fontVRes * match.fontV - v_res * requested.fontH);
                 if (v_dist < nearest_dist) {
                     nearest_dist = v_dist;
                     nearest = static_cast<int>(i);
@@ -570,8 +574,8 @@ std::uint32_t Fonts::get_char_glyph_image_clip(std::uint32_t font_handle, std::u
     const LoadedFont *font = loaded_font(font_handle, true);
     if (font == nullptr) return kErrInvalidParameter;
     const auto image = read_struct<font::GlyphImage>(m, glyph_addr);
-    const std::uint32_t size =
-        static_cast<std::uint32_t>(image.bytesPerLine) * static_cast<std::uint32_t>(image.bufHeight);
+    const std::uint32_t size = static_cast<std::uint32_t>(image.bytesPerLine) *
+                               static_cast<std::uint32_t>(image.bufHeight);
     const std::uint32_t valid = clamp_valid(m, image.bufferPtr, size);
     std::uint8_t *buffer = valid != 0u ? m.translate(image.bufferPtr, valid) : nullptr;
     const FontLib &fl = *libs_[static_cast<std::size_t>(font->lib)];

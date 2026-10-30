@@ -107,7 +107,7 @@ private:
 
     // LoadedFont: kept after close, as some queries are allowed on it.
     struct LoadedFont {
-        int lib = -1; // Index in libs_.
+        int lib = -1;  // Index in libs_.
         int font = -1; // Index in internal_.
         std::uint32_t handle = 0;
         OpenMode mode = OpenMode::kInternalStingy;

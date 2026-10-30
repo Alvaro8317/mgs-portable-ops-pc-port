@@ -70,7 +70,7 @@ inline void putLiterals(Bits &b, const std::vector<int> &values) {
 }
 
 inline void putGlyphHeader(Bits &b, int sizeField, int w, int h, int left, int top, int flags,
-                    int shadowFlags, int shadowId) {
+                           int shadowFlags, int shadowId) {
     b.put(static_cast<uint32_t>(sizeField), 14);
     b.put(static_cast<uint32_t>(w), 7);
     b.put(static_cast<uint32_t>(h), 7);

@@ -35,6 +35,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <map>
 #include <string>
@@ -1775,7 +1776,8 @@ void test_mpeg_decode() {
     for (int i = 0; i < 3; ++i) {
         const std::vector<vt::PcmColor> mbs =
             i % 2 == 0 ? std::vector<vt::PcmColor>{c0, c1} : std::vector<vt::PcmColor>{c1, c0};
-        payloads.push_back({0xE0, 0, kFirstTs + i * 3003, vt::MakePcmAccessUnit(2, 1, mbs, i, i == 0)});
+        payloads.push_back(
+            {0xE0, 0, kFirstTs + i * 3003, vt::MakePcmAccessUnit(2, 1, mbs, i, i == 0)});
         payloads.push_back({0xBD, 0, kFirstTs + i * 4180,
                             vt::MakeAudioFrame(0x28, 0x5C, static_cast<std::uint8_t>(i * 16))});
     }
@@ -1797,7 +1799,8 @@ void test_mpeg_decode() {
     const std::uint32_t init = kData + 0x784u;
     const std::uint32_t attr = kData + 0x788u;
     const std::uint32_t pcm = kData + 0x40000u;
-    for (std::uint32_t i = 0; i < header.size(); ++i) rt.memory().store8(header_addr + i, header[i]);
+    for (std::uint32_t i = 0; i < header.size(); ++i)
+        rt.memory().store8(header_addr + i, header[i]);
     // The stream is already in the ring: the read callback only says so.
     for (std::uint32_t i = 0; i < ps.size(); ++i) rt.memory().store8(ring_data + i, ps[i]);
     for (std::uint32_t i = 0; i < 0x2000u; ++i) rt.memory().store8(pcm + i, 0xEEu);
@@ -1922,7 +1925,9 @@ void test_mpeg_decode() {
     const auto close_to = [](std::uint32_t pixel, vt::PcmColor c) {
         int r = 0, g = 0, b = 0;
         vt::Bt601ToRgb(c, &r, &g, &b);
-        const auto channel = [pixel](int shift) { return static_cast<int>((pixel >> shift) & 0xFFu); };
+        const auto channel = [pixel](int shift) {
+            return static_cast<int>((pixel >> shift) & 0xFFu);
+        };
         return std::abs(channel(0) - r) <= 2 && std::abs(channel(8) - g) <= 2 &&
                std::abs(channel(16) - b) <= 2 && (pixel >> 24) == 0u;
     };
@@ -1952,17 +1957,16 @@ void test_mpeg_decode() {
 // Allegrex callbacks: a bump allocator and a free that only counts.
 void test_font() {
     namespace ft = mpo::font::test;
-    const std::filesystem::path dir =
-        std::filesystem::temp_directory_path() / "mpo_hle_test_fonts";
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "mpo_hle_test_fonts";
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     const ft::Font font = ft::BuildFont(2);
     for (const char *name : {"ltn0.pgf", "ltn4.pgf"}) {
-        std::FILE *file = std::fopen((dir / name).string().c_str(), "wb");
-        CHECK(file != nullptr);
-        if (file == nullptr) return;
-        CHECK_EQ(std::fwrite(font.bytes.data(), 1, font.bytes.size(), file), font.bytes.size());
-        std::fclose(file);
+        std::ofstream out(dir / name, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char *>(font.bytes.data()),
+                  static_cast<std::streamsize>(font.bytes.size()));
+        CHECK(out.good());
+        if (!out.good()) return;
     }
     mh::SystemConfig config;
     config.font_dir = dir;
@@ -2135,7 +2139,7 @@ void test_font() {
     CHECK_EQ(f.word(kErrors + 16u), 0x80460002u); // SCE_FONT_ERROR_INVALID_LIBID
     // GetFontInfo: the PGF's numbers and the registry's style.
     CHECK_EQ(result(32), 0u);
-    CHECK_EQ(f.word(kInfo + 84u), 3u); // numGlyphs
+    CHECK_EQ(f.word(kInfo + 84u), 3u);                   // numGlyphs
     CHECK_EQ(rt.memory().load16(kInfo + 92u + 20u), 1u); // fontFamily
     CHECK_EQ(rt.memory().load16(kInfo + 92u + 22u), 5u); // fontStyle
     CHECK_EQ(rt.memory().load8(kInfo + 92u + 96u), static_cast<std::uint32_t>('l'));

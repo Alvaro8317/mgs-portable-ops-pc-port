@@ -444,8 +444,8 @@ void Mpeg::write_video_image(Context &ctx, std::uint32_t buffer, std::uint32_t f
     // height, swizzled when the destination is the swizzled VRAM mirror.
     kernel::GuestMemory &m = system_.kernel().memory();
     const bool swizzle = (buffer & 0x3F800000u) == 0x04000000u && (buffer & 0x00200000u) != 0u;
-    const int video_height = ctx.engine->VideoHeight() > 0 ? ctx.engine->VideoHeight()
-                                                           : ctx.avc_detail_frame_height;
+    const int video_height =
+        ctx.engine->VideoHeight() > 0 ? ctx.engine->VideoHeight() : ctx.avc_detail_frame_height;
     const auto height = static_cast<std::uint32_t>(std::max(video_height, 0));
     const std::uint32_t lines = swizzle ? (height + 7u) / 8u * 8u : height;
     const std::uint32_t needed =
@@ -454,9 +454,9 @@ void Mpeg::write_video_image(Context &ctx, std::uint32_t buffer, std::uint32_t f
     const std::uint32_t valid = clamp_valid(m, buffer, needed);
     std::uint8_t *dest = valid != 0u ? m.translate(buffer, valid) : nullptr;
     if (dest == nullptr) return;
-    const int written = ctx.engine->writeVideoImage(std::span<std::uint8_t>(dest, valid), swizzle,
-                                                    static_cast<int>(frame_width),
-                                                    ctx.video_pixel_mode);
+    const int written =
+        ctx.engine->writeVideoImage(std::span<std::uint8_t>(dest, valid), swizzle,
+                                    static_cast<int>(frame_width), ctx.video_pixel_mode);
     if (written == 0 && !video::HaveVideoDecoder()) {
         // A build without FFmpeg has no image: black, as before F17b.
         m.fill(buffer, 0u, valid);
@@ -521,8 +521,8 @@ std::uint32_t Mpeg::atrac_decode(std::uint32_t mpeg, std::uint32_t au_addr, std:
     // a host buffer (the guest one need not be 2-byte aligned), and is lost
     // if the guest buffer is shorter than 0x2000 bytes, like upstream.
     std::vector<std::int16_t> samples(kMpegAtracEsOutputSize / 2u, 0);
-    const bool decoded = ctx->engine->getAudioSamples(samples) != 0 &&
-                         m.is_valid(buffer, kMpegAtracEsOutputSize);
+    const bool decoded =
+        ctx->engine->getAudioSamples(samples) != 0 && m.is_valid(buffer, kMpegAtracEsOutputSize);
     if (decoded) {
         (void)m.write_bytes(buffer, std::span<const std::uint8_t>(
                                         reinterpret_cast<const std::uint8_t *>(samples.data()),
