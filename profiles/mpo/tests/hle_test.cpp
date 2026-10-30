@@ -52,6 +52,11 @@
 #include "synthetic_disc.hpp"
 #include "video_test_util.h"
 
+#ifdef _WIN32
+#include <crtdbg.h>
+#include <stdlib.h>
+#endif
+
 namespace {
 
 int g_failures = 0;
@@ -2218,6 +2223,10 @@ void test_utility() {
     mh::SystemConfig config;
     config.ms0_root = ms0;
     Fixture f(config);
+#ifdef _WIN32
+    // Diagnostics for the Windows CI, where this test failed without a message.
+    f.system->hle().set_trace(stdout, 4000u);
+#endif
     psprecomp::Runtime &rt = f.runtime;
     const auto put = [&rt](std::uint32_t address, const void *data, std::size_t size) {
         const auto *bytes = static_cast<const std::uint8_t *>(data);
@@ -2468,7 +2477,28 @@ void test_utility() {
     std::filesystem::remove_all(ms0);
 }
 
+#ifdef _WIN32
+// The CRT's invalid parameter handler: print where instead of a dialog
+// (Debug) or a silent fast fail (Release).
+void invalid_parameter(const wchar_t *expression, const wchar_t *function, const wchar_t *file,
+                       unsigned int line, std::uintptr_t) {
+    std::fprintf(stdout, "CRT invalid parameter: %ls in %ls (%ls:%u)\n",
+                 expression != nullptr ? expression : L"?", function != nullptr ? function : L"?",
+                 file != nullptr ? file : L"?", line);
+    std::fflush(stdout);
+    std::abort();
+}
+#endif
+
 int main() {
+#ifdef _WIN32
+    _set_invalid_parameter_handler(&invalid_parameter);
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+#endif
     // Every test assembles real Allegrex code, which only the interpreter runs.
     psprecomp::set_interpreter_fallback_enabled(true);
     run_test("test_threads_and_semaphores", &test_threads_and_semaphores);
