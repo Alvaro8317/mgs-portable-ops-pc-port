@@ -283,6 +283,27 @@ void Rasterizer::ApplyTexturing(const RasterizerState &state, const Sampler &sam
     }
 }
 
+TriangleSetup SetUpTriangle(const VertexData &v0, const VertexData &v1, const VertexData &v2) {
+    TriangleSetup out;
+    const ScreenCoords *p[3] = {&v0.screenpos, &v1.screenpos, &v2.screenpos};
+    std::int64_t sum = 0;
+    for (int i = 0; i < 3; ++i) {
+        // Edge i goes from vertex i + 1 to vertex i + 2 (TriangleEdge::Start).
+        const ScreenCoords &a = *p[(i + 1) % 3];
+        const ScreenCoords &b = *p[(i + 2) % 3];
+        const std::int64_t c =
+            static_cast<std::int64_t>(b.y) * a.x - static_cast<std::int64_t>(b.x) * a.y;
+        out.xf[i] = Wrap32(static_cast<std::int64_t>(a.y) - b.y);
+        out.yf[i] = Wrap32(static_cast<std::int64_t>(b.x) - a.x);
+        out.c[i] = Wrap32(c);
+        out.bias[i] = IsRightSideOrFlatBottomLine(*p[i], a, b) ? -1 : 0;
+        sum += c; // the x and y factors add up to 0
+    }
+    out.wsum_recip = 1.0f / static_cast<float>(Wrap32(sum));
+    out.zero_area = Wrap32(sum) == 0;
+    return out;
+}
+
 void Rasterizer::DrawTriangle(const VertexData &v0, const VertexData &v1, const VertexData &v2,
                               const BinCoords &range, const RasterizerState &state) const {
     const PixelState &ps = state.pixel;
@@ -527,11 +548,8 @@ void Rasterizer::DrawTriangle(const VertexData &v0, const VertexData &v1, const 
     }
 }
 
-void Rasterizer::DrawRectangle(const VertexData &v0, const VertexData &v1, const BinCoords &range,
-                               const RasterizerState &state) const {
-    const PixelState &ps = state.pixel;
-    const RenderTarget rt(mem_, ps);
-    const Sampler sampler(mem_, state.sampler);
+RectangleSetup SetUpRectangle(const VertexData &v0, const VertexData &v1, const BinCoords &range,
+                              const RasterizerState &state) {
 
     const int entire_x1 = std::min(v0.screenpos.x, v1.screenpos.x);
     const int entire_y1 = std::min(v0.screenpos.y, v1.screenpos.y);
@@ -539,8 +557,6 @@ void Rasterizer::DrawRectangle(const VertexData &v0, const VertexData &v1, const
     const int entire_y2 = std::max(v0.screenpos.y, v1.screenpos.y) - 1;
     int min_x = std::max(entire_x1 & ~(kScreenScale - 1), range.x1) | (kScreenScale / 2 - 1);
     int min_y = std::max(entire_y1 & ~(kScreenScale - 1), range.y1) | (kScreenScale / 2 - 1);
-    const int max_x = std::min(entire_x2, range.x2);
-    const int max_y = std::min(entire_y2, range.y2);
     if (min_x < entire_x1 - 1) min_x += kScreenScale;
     if (min_y < entire_y1 - 1) min_y += kScreenScale;
 
@@ -602,6 +618,38 @@ void Rasterizer::DrawRectangle(const VertexData &v0, const VertexData &v1, const
         row_s += (sty_s * inv) * ky;
         row_t += (sty_t * inv) * ky;
     }
+
+    RectangleSetup out;
+    out.min_x = min_x;
+    out.min_y = min_y;
+    out.row_s = row_s;
+    out.row_t = row_t;
+    out.stx_s = stx_s;
+    out.stx_t = stx_t;
+    out.sty_s = sty_s;
+    out.sty_t = sty_t;
+    return out;
+}
+
+void Rasterizer::DrawRectangle(const VertexData &v0, const VertexData &v1, const BinCoords &range,
+                               const RasterizerState &state) const {
+    const PixelState &ps = state.pixel;
+    const RenderTarget rt(mem_, ps);
+    const Sampler sampler(mem_, state.sampler);
+
+    const int entire_x2 = std::max(v0.screenpos.x, v1.screenpos.x) - 1;
+    const int entire_y2 = std::max(v0.screenpos.y, v1.screenpos.y) - 1;
+    const RectangleSetup setup = SetUpRectangle(v0, v1, range, state);
+    const int min_x = setup.min_x;
+    const int min_y = setup.min_y;
+    const int max_x = std::min(entire_x2, range.x2);
+    const int max_y = std::min(entire_y2, range.y2);
+    float row_s = setup.row_s;
+    float row_t = setup.row_t;
+    const float stx_s = setup.stx_s;
+    const float stx_t = setup.stx_t;
+    const float sty_s = setup.sty_s;
+    const float sty_t = setup.sty_t;
 
     const float sto4[4] = {0.0f, 0.5f * stx_s, 0.5f * sty_s, 0.5f * stx_s + 0.5f * sty_s};
     const float tto4[4] = {0.0f, 0.5f * stx_t, 0.5f * sty_t, 0.5f * stx_t + 0.5f * sty_t};

@@ -64,7 +64,7 @@ endif()
 # Python tools in profiles/mpo/tools: tests with synthetic data only.
 if(Python3_FOUND)
     foreach(mpo_tool_test IN ITEMS tools_test zstd_lite_test ge_usage_test ge_frame_diff_test
-                                   overlay_scripts_test)
+                                   overlay_scripts_test capture_compare_test)
         add_test(NAME mpo_${mpo_tool_test}
                  COMMAND Python3::Interpreter -I ${CMAKE_CURRENT_SOURCE_DIR}/${mpo_tool_test}.py)
     endforeach()
@@ -330,6 +330,12 @@ if(TARGET mpo_vulkan)
     mpo_target_warnings(mpo_vulkan_vram_sync_test)
     add_test(NAME mpo_vulkan_vram_sync_test COMMAND mpo_vulkan_vram_sync_test)
     set_tests_properties(mpo_vulkan_vram_sync_test PROPERTIES SKIP_RETURN_CODE 77)
+    # F15b: reads and writes of VRAM a target drew, inside one list run.
+    add_executable(mpo_vulkan_hazard_test vulkan_hazard_test.cpp)
+    target_link_libraries(mpo_vulkan_hazard_test PRIVATE mpo_vulkan)
+    mpo_target_warnings(mpo_vulkan_hazard_test)
+    add_test(NAME mpo_vulkan_hazard_test COMMAND mpo_vulkan_hazard_test)
+    set_tests_properties(mpo_vulkan_hazard_test PROPERTIES SKIP_RETURN_CODE 77)
     # F15a: the soft-vs-Vulkan comparison tool needs dumps; without
     # arguments it prints its usage and fails.
     add_test(NAME mpo_vulkan_compare_usage COMMAND mpo_vulkan_compare)

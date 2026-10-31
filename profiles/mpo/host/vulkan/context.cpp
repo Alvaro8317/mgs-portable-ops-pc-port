@@ -377,6 +377,8 @@ bool VulkanContext::Init(const ContextOptions &options, Status *status, std::str
     caps_.device_api_version = chosen.props.apiVersion;
     caps_.min_uniform_buffer_offset_alignment =
         std::max<VkDeviceSize>(chosen.props.limits.minUniformBufferOffsetAlignment, 16);
+    caps_.min_storage_buffer_offset_alignment =
+        std::max<VkDeviceSize>(chosen.props.limits.minStorageBufferOffsetAlignment, 16);
     caps_.max_image_dimension_2d = chosen.props.limits.maxImageDimension2D;
     caps_.max_viewport_dimension = std::min(chosen.props.limits.maxViewportDimensions[0],
                                             chosen.props.limits.maxViewportDimensions[1]);

@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ge_state.hpp"
 #include "rasterizer.hpp"
 
@@ -39,6 +41,19 @@ public:
                            const RasterizerState &state) = 0;
     virtual void DrawLine(const VertexData &v0, const VertexData &v1, const BinCoords &range,
                           const RasterizerState &state) = 0;
+
+    // F15b: called before the GE reads (`write` false) or writes (`write`
+    // true) memory outside a draw: a CLUT load reads the palette, a block
+    // transfer reads its source and writes its destination. `addr` is a PSP
+    // address (with or without the VRAM base) and `size` may span several
+    // rows. A backend that keeps framebuffers away from memory (the GPU)
+    // brings memory up to date first, and after a write takes it again from
+    // memory. softgpu draws in memory, so it has nothing to do.
+    virtual void SyncMemory(std::uint32_t addr, std::uint32_t size, bool write) {
+        (void)addr;
+        (void)size;
+        (void)write;
+    }
 };
 
 // softgpu: draws into the VRAM framebuffer through Rasterizer.

@@ -10,6 +10,9 @@
 // [0, w], so Vulkan never has to clip: the GE semantics (clip only against
 // -Z, guard band, depth clamp) were applied on the CPU by mpo_ge, and no
 // clipper-made vertex changes the interpolation.
+//
+// F15b: v_tri is the triangle's index in the batch (each triangle has its own
+// three vertices); the GE_EXACT build of ge.frag reads its GpuTriangle.
 
 #version 450
 
@@ -40,6 +43,7 @@ layout(location = 0) noperspective out vec4 v_color0;
 layout(location = 1) noperspective out vec3 v_color1;
 layout(location = 2) out vec3 v_uvq;
 layout(location = 3) noperspective out float v_fog;
+layout(location = 4) flat out uint v_tri;
 
 void main() {
     const float w = in_pos.w;
@@ -50,4 +54,5 @@ void main() {
     v_color1 = in_color1.rgb;
     v_uvq = in_uvq;
     v_fog = in_fog;
+    v_tri = uint(gl_VertexIndex) / 3u;
 }

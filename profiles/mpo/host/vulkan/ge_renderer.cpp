@@ -7,10 +7,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <numeric>
 #include <type_traits>
 
 #include "color.hpp"
@@ -310,6 +312,174 @@ GpuVertex MakeVertex(const ge::VertexData &v, int bias, float w, std::uint32_t c
     return g;
 }
 
+// F15b: the exact path decides coverage in the shader (softgpu's edge
+// functions) and discards the rest, but it can only discard fragments the GPU
+// generates. A pixel whose sample point lies exactly on an edge is covered by
+// softgpu's top-left rule, while Vulkan leaves the tie-breaking rule to the
+// implementation; so the GPU triangle is grown around its centroid until
+// every edge has moved out by at least 1/8 pixel (more than the 1/16 between
+// softgpu's grid points, which keeps the GPU's subpixel snapping on the
+// outside). Needle triangles grow at most 8 times; the shader gets their
+// values from the GpuTriangle, not from these positions.
+void GrowForExactCoverage(GpuVertex *v) {
+    const float cx = (v[0].x + v[1].x + v[2].x) / 3.0f;
+    const float cy = (v[0].y + v[1].y + v[2].y) / 3.0f;
+    const float ax = v[1].x - v[0].x;
+    const float ay = v[1].y - v[0].y;
+    const float bx = v[2].x - v[0].x;
+    const float by = v[2].y - v[0].y;
+    const float area2 = std::abs(ax * by - ay * bx); // twice the area
+    if (!(area2 > 0.0f)) return;
+    float longest = 0.0f;
+    for (int i = 0; i < 3; ++i) {
+        const GpuVertex &p = v[i];
+        const GpuVertex &q = v[(i + 1) % 3];
+        longest = std::max(longest, std::hypot(q.x - p.x, q.y - p.y));
+    }
+    // The centroid is at a third of each edge's height (area2 / length).
+    const float nearest_edge = area2 / (3.0f * longest);
+    const float grow = std::min(0.125f / nearest_edge, 8.0f);
+    for (int i = 0; i < 3; ++i) {
+        v[i].x = cx + (v[i].x - cx) * (1.0f + grow);
+        v[i].y = cy + (v[i].y - cy) * (1.0f + grow);
+    }
+}
+
+// Whether softgpu draws any pixel of a triangle without area. Its three edge
+// functions are 0 on the whole line through the vertices and of opposite
+// signs off it, so a pixel is covered only when its sample point (16x + 7,
+// 16y + 7) lies exactly on the line and no edge has the -1 bias. The line
+// a X + b Y + c = 0 has such points only when 16 gcd(a, b) divides
+// c + 7a + 7b. When softgpu's 32-bit arithmetic could wrap, the answer is
+// "maybe" (the quad is drawn and the shader decides).
+bool ZeroAreaMayCover(const ge::VertexData &v0, const ge::VertexData &v1, const ge::VertexData &v2,
+                      std::int32_t flags) {
+    if ((flags & 7) != 0) return false;
+    const ge::ScreenCoords *p[3] = {&v0.screenpos, &v1.screenpos, &v2.screenpos};
+    // The longest edge defines the line (the others lie on it or are points).
+    std::int64_t a = 0;
+    std::int64_t b = 0;
+    std::int64_t c = 0;
+    for (int i = 0; i < 3; ++i) {
+        const ge::ScreenCoords &s = *p[i];
+        const ge::ScreenCoords &e = *p[(i + 1) % 3];
+        const std::int64_t ea = static_cast<std::int64_t>(s.y) - e.y;
+        const std::int64_t eb = static_cast<std::int64_t>(e.x) - s.x;
+        if (std::abs(ea) + std::abs(eb) > std::abs(a) + std::abs(b)) {
+            a = ea;
+            b = eb;
+            c = static_cast<std::int64_t>(e.y) * s.x - static_cast<std::int64_t>(e.x) * s.y;
+        }
+    }
+    if (a == 0 && b == 0) return true;
+    constexpr std::int64_t kWrap = std::int64_t{1} << 31;
+    if ((std::abs(a) + std::abs(b)) * 65536 + std::abs(c) >= kWrap) return true;
+    const std::int64_t g = std::gcd(std::abs(a), std::abs(b));
+    return (c + 7 * a + 7 * b) % (16 * g) == 0;
+}
+
+// Turns the three (collinear) vertices at v[0..2] into a quad around the
+// segment they span, one pixel wider on every side: v[0..5], two triangles.
+// Only the positions matter (the exact shader takes the rest from the
+// GpuTriangle).
+void CoverSegment(GpuVertex *v) {
+    int a = 0;
+    int b = 1;
+    float longest = -1.0f;
+    for (int i = 0; i < 3; ++i) {
+        for (int j = i + 1; j < 3; ++j) {
+            const float d = std::hypot(v[j].x - v[i].x, v[j].y - v[i].y);
+            if (d > longest) {
+                longest = d;
+                a = i;
+                b = j;
+            }
+        }
+    }
+    float dx = 1.0f;
+    float dy = 0.0f;
+    if (longest > 0.0f) {
+        dx = (v[b].x - v[a].x) / longest;
+        dy = (v[b].y - v[a].y) / longest;
+    }
+    const GpuVertex base = v[0];
+    const float ax = v[a].x - dx;
+    const float ay = v[a].y - dy;
+    const float bx = v[b].x + dx;
+    const float by = v[b].y + dy;
+    const float corners[4][2] = {
+        {ax + dy, ay - dx}, {bx + dy, by - dx}, {bx - dy, by + dx}, {ax - dy, ay + dx}};
+    const int order[6] = {0, 1, 2, 0, 2, 3};
+    for (int i = 0; i < 6; ++i) {
+        v[i] = base;
+        v[i].x = corners[order[i]][0];
+        v[i].y = corners[order[i]][1];
+    }
+}
+
+// F15b: the GpuTriangle the exact fragment shader interpolates from, with
+// softgpu's set-up (ge::SetUpTriangle) and the flags DrawTriangle computes.
+GpuTriangle MakeTriangle(const ge::VertexData &v0, const ge::VertexData &v1,
+                         const ge::VertexData &v2, const ge::BinCoords &range,
+                         const ge::RasterizerState &state) {
+    const ge::TriangleSetup setup = ge::SetUpTriangle(v0, v1, v2);
+    GpuTriangle g;
+    g.quad_x = range.x1 / kScreenScale;
+    g.quad_y = range.y1 / kScreenScale;
+    g.last_x = range.x2 / kScreenScale;
+    g.last_y = range.y2 / kScreenScale;
+    g.clipw0 = v0.clipw;
+    g.clipw1 = v1.clipw;
+    g.clipw2 = v2.clipw;
+    const ge::VertexData *vs[3] = {&v0, &v1, &v2};
+    for (int i = 0; i < 3; ++i) {
+        const ge::VertexData &v = *vs[i];
+        g.xf[i] = setup.xf[i];
+        g.yf[i] = setup.yf[i];
+        g.c[i] = setup.c[i];
+        if (setup.bias[i] != 0) g.flags |= 1 << i;
+        g.q_recip[i] = 1.0f / v.clipw;
+        g.s[i] = v.s;
+        g.t[i] = v.t;
+        g.q[i] = v.q;
+        g.fog[i] = v.fogdepth;
+        g.z[i] = v.screenpos.z;
+        g.color0[i] = v.color0;
+        g.color1[i] = v.color1 & 0x00FFFFFF;
+    }
+    g.wsum_recip = setup.wsum_recip;
+    const bool flat_all = !state.shade_gouraud;
+    if (v0.screenpos.z == v1.screenpos.z && v0.screenpos.z == v2.screenpos.z) g.flags |= kTriFlatZ;
+    if (flat_all || (v0.color0 == v1.color0 && v0.color0 == v2.color0)) g.flags |= kTriFlatColor0;
+    if (flat_all || (v0.color1 == v1.color1 && v0.color1 == v2.color1)) g.flags |= kTriFlatColor1;
+    if (v0.fogdepth >= 1.0f && v1.fogdepth >= 1.0f && v2.fogdepth >= 1.0f) g.flags |= kTriNoFog;
+    if (state.through_mode) g.flags |= kTriThrough;
+    if (setup.zero_area) g.flags |= kTriZeroArea;
+    return g;
+}
+
+// The same for a rectangle (ge::RectangleSetup; kTriRect in pipelines.hpp).
+GpuTriangle MakeRectangle(const ge::VertexData &v0, const ge::VertexData &v1,
+                          const ge::BinCoords &range, const ge::RasterizerState &state) {
+    const ge::RectangleSetup setup = ge::SetUpRectangle(v0, v1, range, state);
+    GpuTriangle g;
+    g.flags = kTriRect | kTriFlatZ | kTriFlatColor0 | kTriFlatColor1 | kTriFlatFog;
+    g.xf[0] = setup.min_x / kScreenScale;
+    g.xf[1] = setup.min_y / kScreenScale;
+    g.s[0] = setup.row_s;
+    g.s[1] = setup.stx_s;
+    g.s[2] = setup.sty_s;
+    g.t[0] = setup.row_t;
+    g.t[1] = setup.stx_t;
+    g.t[2] = setup.sty_t;
+    g.clipw0 = v1.clipw;
+    g.z[2] = v1.screenpos.z;
+    g.color0[2] = v1.color0;
+    g.color1[2] = v1.color1 & 0x00FFFFFF;
+    g.fog[2] = v1.fogdepth;
+    return g;
+}
+
 } // namespace
 
 const char *BlendPathName(BlendPath path) {
@@ -342,6 +512,8 @@ RendererOptions RendererOptions::FromEnv() {
     }
     o.batching = GetEnv("MPO_VK_NO_BATCH") != "1";
     o.texture_cache = GetEnv("MPO_VK_NO_TEX_CACHE") != "1";
+    o.hazard_flush = GetEnv("MPO_VK_NO_HAZARD_FLUSH") != "1";
+    o.exact = GetEnv("MPO_VK_NO_EXACT") != "1";
     return o;
 }
 
@@ -465,6 +637,12 @@ bool GeRenderer::Init(std::string *error) {
     }
     std::memset(dummy_ubo_.mapped, 0, 1024);
     FlushBuffer(*ctx_, dummy_ubo_, 0, VK_WHOLE_SIZE);
+    if (!CreateBuffer(*ctx_, sizeof(GpuTriangle), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                      HostAccess::kSequential, "dummy triangles", &dummy_ssbo_, error)) {
+        return false;
+    }
+    std::memset(dummy_ssbo_.mapped, 0, sizeof(GpuTriangle));
+    FlushBuffer(*ctx_, dummy_ssbo_, 0, VK_WHOLE_SIZE);
 
     for (Frame &f : frames_) {
         VkCommandPoolCreateInfo pci{};
@@ -501,6 +679,7 @@ bool GeRenderer::Init(std::string *error) {
         f.vertices.Init(ctx_, 1u << 20, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, "ge vertices");
         f.uniforms.Init(ctx_, 256u << 10, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, "ge cluts");
         f.staging.Init(ctx_, 4u << 20, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "ge staging");
+        f.triangles.Init(ctx_, 2u << 20, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "ge triangles");
     }
     return true;
 }
@@ -514,6 +693,7 @@ GeRenderer::~GeRenderer() {
         f.vertices.Destroy();
         f.uniforms.Destroy();
         f.staging.Destroy();
+        f.triangles.Destroy();
         if (f.fence) vkDestroyFence(dev, f.fence, nullptr);
         if (f.pool) vkDestroyCommandPool(dev, f.pool, nullptr);
     }
@@ -530,6 +710,7 @@ GeRenderer::~GeRenderer() {
         DestroyBuffer(*ctx_, &t.readback);
     }
     DestroyBuffer(*ctx_, &dummy_ubo_);
+    DestroyBuffer(*ctx_, &dummy_ssbo_);
     DestroyImage(*ctx_, &dummy_rgba_);
     DestroyImage(*ctx_, &dummy_index_);
     if (sampler_) vkDestroySampler(dev, sampler_, nullptr);
@@ -564,6 +745,7 @@ bool GeRenderer::EnsureFrame() {
     f.vertices.Reset();
     f.uniforms.Reset();
     f.staging.Reset();
+    f.triangles.Reset();
     for (VkDescriptorPool p : f.desc_pools) vkResetDescriptorPool(dev, p, 0);
     f.desc_pool_index = 0;
     f.sets.clear();
@@ -596,6 +778,7 @@ bool GeRenderer::EnsureFrame() {
     state_ = DrawState{};
     pending_ = DrawState{};
     vertices_.clear();
+    triangles_.clear();
 
     if (!dummies_ready_) {
         const VkClearColorValue zero{};
@@ -635,12 +818,9 @@ int GeRenderer::GetColorTarget(std::uint32_t offset, int stride, ge::BufferForma
         if (t.offset == offset && t.stride == stride && t.format == format)
             return SyncColorTarget(t) ? static_cast<int>(i) : -1;
     }
-    for (const ColorTarget &t : color_targets_) {
-        if (t.offset == offset) {
-            stats_.Approximate("framebuffer reused with another format or stride (F15)");
-            break;
-        }
-    }
+    // Another target may share this VRAM (with another format or stride):
+    // CheckDrawHazards already read back what it drew, so the upload below
+    // takes it from VRAM (F15b).
     ColorTarget t;
     t.offset = offset;
     t.stride = stride;
@@ -865,6 +1045,119 @@ bool GeRenderer::SyncDepthTarget(DepthTarget &t) {
     return true;
 }
 
+bool GeRenderer::OverlapsDrawn(std::uint64_t begin, std::uint64_t end, int skip_color,
+                               int skip_depth) const {
+    auto drawn = [&](std::uint32_t offset, int stride_bytes, const DirtyRect &dirty) {
+        if (dirty.Empty()) return false;
+        const std::uint64_t first = offset + static_cast<std::uint64_t>(std::max(dirty.y1, 0)) *
+                                                 static_cast<std::uint64_t>(stride_bytes);
+        const std::uint64_t last = offset + (static_cast<std::uint64_t>(dirty.y2) + 1) *
+                                                static_cast<std::uint64_t>(stride_bytes);
+        return begin < last && first < end;
+    };
+    for (std::size_t i = 0; i < color_targets_.size(); ++i) {
+        const ColorTarget &t = color_targets_[i];
+        if (static_cast<int>(i) != skip_color &&
+            drawn(t.offset, t.stride * BytesPerPixel(t.format), t.dirty))
+            return true;
+    }
+    for (std::size_t i = 0; i < depth_targets_.size(); ++i) {
+        const DepthTarget &t = depth_targets_[i];
+        if (static_cast<int>(i) != skip_depth && drawn(t.offset, t.stride * 2, t.dirty))
+            return true;
+    }
+    return false;
+}
+
+bool GeRenderer::OverlapsUsed(std::uint64_t begin, std::uint64_t end) const {
+    constexpr std::uint64_t kRows = 272;
+    auto used = [&](std::uint32_t offset, int stride_bytes, const VramShadow &shadow) {
+        if (shadow.checked_frame != frame_serial_) return false;
+        const std::uint64_t last = offset + kRows * static_cast<std::uint64_t>(stride_bytes);
+        return begin < last && offset < end;
+    };
+    for (const ColorTarget &t : color_targets_)
+        if (used(t.offset, t.stride * BytesPerPixel(t.format), t.shadow)) return true;
+    for (const DepthTarget &t : depth_targets_)
+        if (used(t.offset, t.stride * 2, t.shadow)) return true;
+    return false;
+}
+
+void GeRenderer::HazardFlush(std::string_view why) {
+    auto it = stats_.hazard_flushes.find(why);
+    if (it == stats_.hazard_flushes.end()) {
+        stats_.hazard_flushes.emplace(std::string(why), 1);
+        if (stats_.log) stats_.log(std::string("readback before ") + std::string(why));
+    } else {
+        ++it->second;
+    }
+    std::string err;
+    (void)EndFrame(true, &err); // on failure, failed_ and error_ hold it
+}
+
+void GeRenderer::CheckDrawHazards(const ge::GeState &gs, const ge::RasterizerState &rs) {
+    const ge::PixelState &ps = rs.pixel;
+    constexpr std::uint32_t kMask = ge::MemoryView::kVramSize - 1;
+    // The rows this draw can touch in its colour and depth buffers.
+    const int y1 = std::max(gs.ScissorY1(), 0);
+    const int y2 = std::min({gs.ScissorY2(), gs.RegionY2(), kTargetHeight - 1});
+    if (y2 >= y1) {
+        const std::uint32_t fb = ps.fb_offset & kMask;
+        const std::uint32_t zb = ps.depth_offset & kMask;
+        int own_color = -1;
+        for (std::size_t i = 0; i < color_targets_.size(); ++i) {
+            const ColorTarget &t = color_targets_[i];
+            if (t.offset == fb && t.stride == ps.fb_stride && t.format == ps.fb_format)
+                own_color = static_cast<int>(i);
+        }
+        int own_depth = -1;
+        for (std::size_t i = 0; i < depth_targets_.size(); ++i) {
+            const DepthTarget &t = depth_targets_[i];
+            if (t.offset == zb && t.stride == ps.depth_stride &&
+                t.width == TargetWidth(ps.fb_stride))
+                own_depth = static_cast<int>(i);
+        }
+        const auto rows = [&](std::uint32_t offset, int stride_bytes) {
+            return std::pair<std::uint64_t, std::uint64_t>{
+                offset + static_cast<std::uint64_t>(y1) * static_cast<std::uint64_t>(stride_bytes),
+                offset + (static_cast<std::uint64_t>(y2) + 1) *
+                             static_cast<std::uint64_t>(stride_bytes)};
+        };
+        const auto [cb, ce] = rows(fb, ps.fb_stride * BytesPerPixel(ps.fb_format));
+        if (OverlapsDrawn(cb, ce, own_color, -1)) {
+            HazardFlush("a target over rows another one drew");
+            return;
+        }
+        const auto [db, de] = rows(zb, ps.depth_stride * 2);
+        if (OverlapsDrawn(db, de, -1, own_depth)) {
+            HazardFlush("a depth buffer over rows another target drew");
+            return;
+        }
+    }
+    if (rs.enable_textures && !ps.clear_mode &&
+        ge::MemoryView::IsVramAddress(rs.sampler.texaddr[0])) {
+        const std::uint32_t begin = rs.sampler.texaddr[0] & kMask;
+        const std::uint32_t bytes = TextureSourceBytes(rs.sampler);
+        if (bytes != 0 && OverlapsDrawn(begin, static_cast<std::uint64_t>(begin) + bytes, -1, -1))
+            HazardFlush("a texture from rows a target drew");
+    }
+}
+
+void GeRenderer::SyncMemory(std::uint32_t addr, std::uint32_t size, bool write) {
+    if (!frame_open_ || failed_ || !options_.hazard_flush || size == 0 ||
+        !ge::MemoryView::IsVramAddress(addr))
+        return;
+    const std::uint64_t begin = addr & (ge::MemoryView::kVramSize - 1);
+    const std::uint64_t end = begin + size;
+    if (OverlapsDrawn(begin, end, -1, -1)) {
+        HazardFlush(write ? "a block transfer onto rows a target drew"
+                          : "a CLUT load or block transfer from rows a target drew");
+    } else if (write && OverlapsUsed(begin, end)) {
+        // The targets in use would not see the new bytes until a new frame.
+        HazardFlush("a block transfer onto a target in use");
+    }
+}
+
 bool GeRenderer::ResolveTexture(const ge::SamplerState &st, VkImageView *rgba, VkImageView *index) {
     *rgba = dummy_rgba_.view;
     *index = dummy_index_.view;
@@ -989,10 +1282,12 @@ bool GeRenderer::UploadClut(const std::uint8_t *clut, std::uint32_t *offset, VkB
 }
 
 VkDescriptorSet GeRenderer::GetDescriptorSet(VkImageView rgba, VkImageView index,
-                                             VkBuffer clut_buffer) {
+                                             VkBuffer clut_buffer, VkBuffer tri_buffer,
+                                             VkDeviceSize tri_offset, VkDeviceSize tri_range) {
     Frame &f = frame();
-    const std::array<std::uint64_t, 3> key = {HandleBits(rgba), HandleBits(index),
-                                              HandleBits(clut_buffer)};
+    const std::array<std::uint64_t, 5> key = {HandleBits(rgba), HandleBits(index),
+                                              HandleBits(clut_buffer), HandleBits(tri_buffer),
+                                              tri_offset};
     if (auto it = f.sets.find(key); it != f.sets.end()) return it->second;
 
     VkDevice dev = ctx_->device();
@@ -1000,9 +1295,10 @@ VkDescriptorSet GeRenderer::GetDescriptorSet(VkImageView rgba, VkImageView index
     VkDescriptorSet set = VK_NULL_HANDLE;
     for (;;) {
         if (f.desc_pool_index >= f.desc_pools.size()) {
-            const std::array<VkDescriptorPoolSize, 2> sizes = {{
+            const std::array<VkDescriptorPoolSize, 3> sizes = {{
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 512},
+                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 512},
             }};
             VkDescriptorPoolCreateInfo pci{};
             pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1036,8 +1332,9 @@ VkDescriptorSet GeRenderer::GetDescriptorSet(VkImageView rgba, VkImageView index
         {sampler_, index, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
     };
     VkDescriptorBufferInfo ubo{clut_buffer, 0, 1024};
-    VkWriteDescriptorSet writes[3]{};
-    for (std::uint32_t i = 0; i < 3; ++i) {
+    VkDescriptorBufferInfo ssbo{tri_buffer, tri_offset, tri_range};
+    VkWriteDescriptorSet writes[4]{};
+    for (std::uint32_t i = 0; i < 4; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = set;
         writes[i].dstBinding = i;
@@ -1049,12 +1346,15 @@ VkDescriptorSet GeRenderer::GetDescriptorSet(VkImageView rgba, VkImageView index
     writes[1].pImageInfo = &images[1];
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     writes[2].pBufferInfo = &ubo;
-    vkUpdateDescriptorSets(dev, 3, writes, 0, nullptr);
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[3].pBufferInfo = &ssbo;
+    vkUpdateDescriptorSets(dev, 4, writes, 0, nullptr);
     f.sets.emplace(key, set);
     return set;
 }
 
 void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs) {
+    if (frame_open_ && !failed_ && options_.hazard_flush) CheckDrawHazards(gs, rs);
     if (!EnsureFrame()) return;
     // MPO_VK_NO_BATCH: every GE draw is its own vkCmdDraw.
     if (!options_.batching) FlushBatch();
@@ -1186,18 +1486,6 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
             }
             if (rs.max_tex_level > 0) stats_.Approximate("mipmaps: level 0 only (F15)");
             if (!st.use_shared_clut) stats_.Approximate("CLUT4 palettes per mip level (F15)");
-            if (ge::MemoryView::IsVramAddress(st.texaddr[0])) {
-                const std::uint32_t taddr = st.texaddr[0] & (ge::MemoryView::kVramSize - 1);
-                for (const ColorTarget &t : color_targets_) {
-                    const std::uint32_t end =
-                        t.offset +
-                        static_cast<std::uint32_t>(t.stride * 272 * BytesPerPixel(t.format));
-                    if (taddr >= t.offset && taddr < end) {
-                        stats_.Approximate("texture from a render target (F15)");
-                        break;
-                    }
-                }
-            }
         }
 
         k.alpha_func = static_cast<std::uint8_t>(ps.alpha_test_func);
@@ -1341,8 +1629,12 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
         }
     }
 
-    ds.set = GetDescriptorSet(rgba_view, index_view, clut_buffer);
+    ds.set = GetDescriptorSet(rgba_view, index_view, clut_buffer, dummy_ssbo_.buffer, 0,
+                              sizeof(GpuTriangle));
     if (ds.set == VK_NULL_HANDLE) return;
+    ds.rgba_view = rgba_view;
+    ds.index_view = index_view;
+    ds.clut_buffer = clut_buffer;
     if (trace_draws_) {
         char line[512];
         std::snprintf(
@@ -1400,8 +1692,14 @@ void GeRenderer::DrawTriangle(const ge::VertexData &v0, const ge::VertexData &v1
                               const ge::VertexData &v2, const ge::BinCoords &range,
                               const ge::RasterizerState &state) {
     if (failed_ || pending_.skip) return;
-    SetTopology(Topology::kTriangles);
+    {
+        DrawState want = pending_;
+        want.key.topology = Topology::kTriangles;
+        want.key.exact = options_.exact ? 1 : 0;
+        UseState(want);
+    }
     AddTriangle(range, v0, v1, v2);
+    if (state_.key.exact) triangles_.push_back(MakeTriangle(v0, v1, v2, range, state));
     // Perspective-correct texture coordinates use the clip w; through mode
     // and degenerate w (a vertex behind the camera that the -Z clipper kept)
     // interpolate linearly, as on screen.
@@ -1421,6 +1719,27 @@ void GeRenderer::DrawTriangle(const ge::VertexData &v0, const ge::VertexData &v1
                 static_cast<double>(g.w), static_cast<double>(g.s), static_cast<double>(g.t),
                 static_cast<double>(g.q), g.color0);
             ctx_->Log(line);
+        }
+    }
+    if (state_.key.exact) {
+        if ((triangles_.back().flags & kTriZeroArea) != 0) {
+            // The GPU draws nothing for a triangle without area, softgpu the
+            // pixels on its segment: a quad one pixel wider than the segment
+            // all around (two triangles, so the record goes twice), and the
+            // shader keeps softgpu's pixels. Most such triangles have none.
+            if (!ZeroAreaMayCover(v0, v1, v2, triangles_.back().flags)) {
+                vertices_.resize(vertices_.size() - 3);
+                triangles_.pop_back();
+                ++stats_.zero_area_skipped;
+                ++stats_.triangles;
+                return;
+            }
+            for (int i = 0; i < 3; ++i) vertices_.push_back(vertices_[vertices_.size() - 3]);
+            CoverSegment(&vertices_[vertices_.size() - 6]);
+            triangles_.push_back(triangles_.back());
+            ++stats_.zero_area_triangles;
+        } else {
+            GrowForExactCoverage(&vertices_[vertices_.size() - 3]);
         }
     }
     MarkDirty(range);
@@ -1472,9 +1791,22 @@ void GeRenderer::EmitQuad(const ge::VertexData &v0, const ge::VertexData &v1,
 void GeRenderer::DrawRectangle(const ge::VertexData &v0, const ge::VertexData &v1,
                                const ge::BinCoords &range, const ge::RasterizerState &state) {
     if (failed_ || pending_.skip) return;
-    SetTopology(Topology::kTriangles);
+    {
+        // Only the texture coordinates of a rectangle are interpolated (its
+        // colour, z and fog are v1's), so only textured ones need the exact
+        // path (F15b).
+        DrawState want = pending_;
+        want.key.topology = Topology::kTriangles;
+        want.key.exact = options_.exact && state.enable_textures && !state.pixel.clear_mode ? 1 : 0;
+        UseState(want);
+    }
     AddRectangle(range, v0, v1);
     EmitQuad(v0, v1, state);
+    if (state_.key.exact) {
+        const GpuTriangle g = MakeRectangle(v0, v1, range, state);
+        triangles_.push_back(g); // one per half of the quad
+        triangles_.push_back(g);
+    }
     MarkDirty(range);
     ++stats_.rectangles;
 }
@@ -2014,6 +2346,7 @@ void GeRenderer::FlushBatch() {
     if (vertices_.empty()) return;
     if (failed_ || state_.skip || state_.color_target < 0 || state_.depth_target < 0) {
         vertices_.clear();
+        triangles_.clear();
         return;
     }
     const bool reads = state_.key.read_dst != 0;
@@ -2038,6 +2371,25 @@ void GeRenderer::FlushBatch() {
         return;
     }
     std::memcpy(a.ptr, vertices_.data(), bytes);
+    VkDescriptorSet set = state_.set;
+    if (state_.key.exact) {
+        // F15b: the batch's triangles, in a set of their own.
+        if (triangles_.size() * 3 != vertices_.size()) {
+            Fail("exact batch: triangles and vertices out of step");
+            return;
+        }
+        UploadArena::Allocation ta;
+        const std::size_t tbytes = triangles_.size() * sizeof(GpuTriangle);
+        if (!f.triangles.Allocate(tbytes, ctx_->caps().min_storage_buffer_offset_alignment, &ta,
+                                  &err)) {
+            Fail(err);
+            return;
+        }
+        std::memcpy(ta.ptr, triangles_.data(), tbytes);
+        set = GetDescriptorSet(state_.rgba_view, state_.index_view, state_.clut_buffer, ta.buffer,
+                               ta.offset, tbytes);
+        if (set == VK_NULL_HANDLE) return;
+    }
     BeginPass(state_.color_target, state_.depth_target);
     if (failed_) return;
     VkCommandBuffer cmd = f.draw_cmd;
@@ -2050,13 +2402,13 @@ void GeRenderer::FlushBatch() {
     }
     if (reads) {
         const VkDescriptorSet sets[2] = {
-            state_.set, color_targets_[static_cast<std::size_t>(state_.color_target)].dst_set};
+            set, color_targets_[static_cast<std::size_t>(state_.color_target)].dst_set};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_.dst_layout(), 0, 2,
                                 sets, 1, &state_.clut_offset);
         ++stats_.dst_batches;
     } else {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_.layout(), 0, 1,
-                                &state_.set, 1, &state_.clut_offset);
+                                &set, 1, &state_.clut_offset);
         if (state_.key.blend) ++stats_.fixed_blend_batches;
     }
     vkCmdBindVertexBuffers(cmd, 0, 1, &a.buffer, &a.offset);
@@ -2074,6 +2426,7 @@ void GeRenderer::FlushBatch() {
     if (reads) pass_read_ = true;
     ++stats_.batches;
     vertices_.clear();
+    triangles_.clear();
 }
 
 bool GeRenderer::EndFrame(bool readback, std::string *error) {
@@ -2152,6 +2505,7 @@ bool GeRenderer::EndFrame(bool readback, std::string *error) {
     f.vertices.FlushAll();
     f.uniforms.FlushAll();
     f.staging.FlushAll();
+    f.triangles.FlushAll();
 
     const VkCommandBuffer cmds[2] = {f.init_cmd, f.draw_cmd};
     VkSubmitInfo si{};
@@ -2170,7 +2524,15 @@ bool GeRenderer::EndFrame(bool readback, std::string *error) {
     frame_index_ = (frame_index_ + 1) % kFramesInFlight;
 
     if (readback) {
+        using Clock = std::chrono::steady_clock;
+        const auto micros = [](Clock::duration d) {
+            return static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(d).count());
+        };
+        const Clock::time_point wait_start = Clock::now();
         r = vkWaitForFences(ctx_->device(), 1, &f.fence, VK_TRUE, UINT64_MAX);
+        const Clock::time_point write_start = Clock::now();
+        stats_.readback_wait_us += micros(write_start - wait_start);
         if (r != VK_SUCCESS) {
             Fail(ResultError("vkWaitForFences", r));
             if (error) *error = error_;
@@ -2228,6 +2590,7 @@ bool GeRenderer::EndFrame(bool readback, std::string *error) {
             t.dirty = DirtyRect{};
             ++stats_.readbacks;
         }
+        stats_.readback_write_us += micros(Clock::now() - write_start);
     }
     return true;
 }
@@ -2236,6 +2599,22 @@ bool GeRenderer::FindTarget(std::uint32_t fb_address, TargetInfo *out) const {
     const std::uint32_t offset = fb_address & (ge::MemoryView::kVramSize - 1);
     for (const ColorTarget &t : color_targets_) {
         if (t.offset != offset) continue;
+        out->image = t.image.image;
+        out->view = t.image.view;
+        out->width = t.image.width;
+        out->height = t.image.height;
+        out->stride = t.stride;
+        out->format = t.format;
+        return true;
+    }
+    return false;
+}
+
+bool GeRenderer::FindTarget(std::uint32_t fb_address, int stride, ge::BufferFormat format,
+                            TargetInfo *out) const {
+    const std::uint32_t offset = fb_address & (ge::MemoryView::kVramSize - 1);
+    for (const ColorTarget &t : color_targets_) {
+        if (t.offset != offset || t.stride != stride || t.format != format) continue;
         out->image = t.image.image;
         out->view = t.image.view;
         out->width = t.image.width;

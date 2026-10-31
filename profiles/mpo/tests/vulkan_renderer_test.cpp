@@ -115,6 +115,9 @@ struct Scene {
     // The scene must change at least this many pixels of the first one
     // (softgpu), so a case cannot pass by drawing nothing.
     int min_drawn = 1;
+    // F15b: only the exact interpolation makes it identical; on lavapipe it
+    // must differ with RendererOptions::exact off (or it tests nothing).
+    bool needs_exact = false;
 };
 
 struct FrameDiff {
@@ -591,8 +594,138 @@ Scene LowAlphaPerspectiveOverlay() {
     // differed by one step here; the shader blend is exact, F15a).
     s.max_differing = 2000;
     s.max_delta = 9;
-    // lavapipe: 3 pixels, one step (perspective UVs vs softgpu's weights).
-    s.exact_on_lavapipe = false;
+    // lavapipe: identical since F15b's exact interpolation (3 pixels before,
+    // one step: perspective UVs vs softgpu's weights).
+    s.needs_exact = true;
+    return s;
+}
+
+// F15b: triangles without area. softgpu draws the pixels whose sample point
+// lies on their line (every edge weight is 0 there), with each interpolated
+// value NaN (INT_MIN colours: black) or, flat shaded, the last vertex's
+// colour; and nothing when no sample point lies on the line.
+Scene CollinearTriangles() {
+    Scene s;
+    s.name = "triangles without area (softgpu's line of pixels)";
+    s.list = Setup2d(1);
+    auto c = ClearCmds(&s, kVertexAddr, 0xFF404040, 0);
+    s.list.insert(s.list.end(), c.begin(), c.end());
+    std::vector<std::uint8_t> v;
+    auto vert = [&](std::uint32_t col, int x, int y) {
+        put32(v, col);
+        put16(v, static_cast<std::uint16_t>(x));
+        put16(v, static_cast<std::uint16_t>(y));
+        put16(v, 0);
+        put16(v, 0);
+    };
+    // Gouraud: the diagonal goes black.
+    vert(0xFF0000FF, 10, 10);
+    vert(0xFF00FF00, 110, 110);
+    vert(0xFFFF0000, 60, 60);
+    // A slope of 1/2 through pixel corners: no sample point on it.
+    vert(0xFF0000FF, 20, 200);
+    vert(0xFF00FF00, 120, 250);
+    vert(0xFFFF0000, 70, 225);
+    s.data.emplace_back(kVertexAddr + 0x100, v);
+    std::vector<std::uint8_t> f;
+    v.swap(f);
+    // Flat: the last vertex's colour (cyan) on the other diagonal.
+    vert(0xFFFFFFFF, 300, 20);
+    vert(0xFFFFFFFF, 400, 120);
+    vert(0xFFFFFF00, 350, 70);
+    s.data.emplace_back(kVertexAddr + 0x200, v);
+    s.list.insert(s.list.end(),
+                  {op(kCmdVaddr, (kVertexAddr + 0x100) & 0xFFFFFF), op(kCmdVertexType, 0x80011C),
+                   op(kCmdPrim, (3u << 16) | 6), op(kCmdShadeMode, 0),
+                   op(kCmdVaddr, (kVertexAddr + 0x200) & 0xFFFFFF), op(kCmdPrim, (3u << 16) | 3),
+                   op(kCmdShadeMode, 1)});
+    s.min_drawn = 150; // the two diagonals
+    s.max_differing = 0;
+    s.needs_exact = true;
+    return s;
+}
+
+// F15b: a scaled rectangle with NEAREST (PPGe's text): softgpu steps the UV
+// by repeated additions from its first pixel, which a GPU's interpolation
+// does not round the same way at texel edges.
+Scene ScaledNearestRect() {
+    Scene s;
+    s.name = "scaled nearest CLUT8 rectangle (stepped UV)";
+    s.list = Setup2d(1);
+    auto c = ClearCmds(&s, kVertexAddr, 0xFF000000, 0);
+    s.list.insert(s.list.end(), c.begin(), c.end());
+    auto t = Clut8Texture(&s, 32, 32, 5, 5, false);
+    s.list.insert(s.list.end(), t.begin(), t.end());
+    // Glyph-like rectangles of many sizes (PPGe scales its text by
+    // arbitrary factors), some mirrored.
+    std::vector<std::uint8_t> v;
+    int count = 0;
+    for (int i = 0; i < 48; ++i) {
+        const int x = 4 + (i % 12) * 39 + (i % 3);
+        const int y = 4 + (i / 12) * 66 + (i % 5);
+        const int w = 7 + (i * 7) % 31;
+        const int h = 9 + (i * 11) % 53;
+        const int u0 = (i * 3) % 9;
+        const int v0 = (i * 5) % 7;
+        const bool mirror = i % 4 == 3;
+        VertexTc(v, mirror ? 32 : u0, v0, 0xFFFFFFFF, x, y);
+        VertexTc(v, mirror ? u0 : 32, 32, 0xFFFFFFFF, x + w, y + h);
+        count += 2;
+    }
+    s.data.emplace_back(kVertexAddr + 0x100, v);
+    s.list.insert(s.list.end(), {
+                                    op(kCmdVaddr, (kVertexAddr + 0x100) & 0xFFFFFF),
+                                    op(kCmdVertexType, 0x80011E),
+                                    op(kCmdTexFunc, 0x103), // REPLACE, rgba
+                                    op(kCmdTexFilter, 0x000),
+                                    op(kCmdTexWrap, 0x000),
+                                    op(kCmdPrim, (6u << 16) | static_cast<std::uint32_t>(count)),
+                                });
+    s.max_differing = 200;
+    s.max_delta = 255;
+    s.needs_exact = true;
+    return s;
+}
+
+// F15b: minification linear, magnification nearest, on a floor in
+// perspective: the filter changes inside the triangles, per softgpu's 2x2
+// quads (which start at the triangle's first pixel, not at an even one).
+Scene PerspectiveFilterSwitch() {
+    Scene s;
+    s.name = "perspective floor, min linear / mag nearest";
+    s.depth = true;
+    s.list = Setup3d(1);
+    auto c = ClearCmds(&s, kVertexAddr, 0xFF000000, 0);
+    s.list.insert(s.list.end(), c.begin(), c.end());
+    auto t = Clut8Texture(&s, 64, 64, 6, 6, true);
+    s.list.insert(s.list.end(), t.begin(), t.end());
+    const float proj[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0.1f, -1, 0, 0, 0, 0};
+    s.list.push_back(op(kCmdProjMatrixNumber, 0));
+    for (float f : proj) s.list.push_back(op(kCmdProjMatrixData, float24(f)));
+    std::vector<std::uint8_t> v;
+    VertexTcf(v, 0, 0, 0xFFFFFFFF, -1.03f, -0.8f, -1.2f);
+    VertexTcf(v, 4, 0, 0xFFFFFFFF, 0.97f, -0.8f, -1.2f);
+    VertexTcf(v, 0, 8, 0xFFFFFFFF, -1.03f, -0.8f, -8.0f);
+    VertexTcf(v, 4, 8, 0xFFFFFFFF, 0.97f, -0.8f, -8.0f);
+    s.data.emplace_back(kVertexAddr + 0x100, v);
+    s.list.insert(s.list.end(), {
+                                    op(kCmdZTestEnable, 0),
+                                    op(kCmdDepthClampEnable, 1),
+                                    op(kCmdVaddr, (kVertexAddr + 0x100) & 0xFFFFFF),
+                                    op(kCmdVertexType, kVtypeTcf),
+                                    op(kCmdTexFunc, 0x103),
+                                    op(kCmdTexFilter, 0x001), // min linear, mag nearest
+                                    op(kCmdTexWrap, 0x000),
+                                    op(kCmdTexScaleU, float24(1.0f)),
+                                    op(kCmdTexScaleV, float24(1.0f)),
+                                    op(kCmdPrim, (4u << 16) | 4),
+                                });
+    // Another GPU's float operations should give the same bits (Vulkan
+    // rounds add, multiply and conversions correctly); the margin is for
+    // the cases a driver flushes or fuses anyway.
+    s.max_differing = 2000;
+    s.max_delta = 255;
+    s.needs_exact = true;
     return s;
 }
 
@@ -1018,6 +1151,9 @@ int RunAll(const RunConfig &config) {
         LowAlphaPerspectiveOverlay,
         RadarLines,
         Spline,
+        CollinearTriangles,
+        ScaledNearestRect,
+        PerspectiveFilterSwitch,
         DepthClampScene,
         GuardBandScene,
     };
@@ -1083,6 +1219,16 @@ int RunAll(const RunConfig &config) {
                    s.name + " (" + mpo::vk::DstReadName(o.dst_read) + ", blend " +
                        mpo::vk::BlendPathName(o.blend) + "): " + std::to_string(c.differing) +
                        " pixels differ (max delta " + std::to_string(c.max_delta) + ")");
+        }
+        if (s.needs_exact && strict && !config.depth_scenes_only) {
+            mpo::vk::RendererOptions inexact = runs.front();
+            inexact.exact = false;
+            auto gpu = std::make_unique<Machine>();
+            expect(RunVulkan(ctx.get(), inexact, s, *gpu), s.name + ": inexact list finishes");
+            const FrameDiff c = Compare(*soft, *gpu, s.fb_format, s.raw);
+            std::printf("    %-41s differing %6d, max delta %3d (expected > 0)\n",
+                        "without the exact path (F14a-F15a)", c.differing, c.max_delta);
+            expect(c.differing > 0, s.name + ": differs without the exact interpolation");
         }
     }
     if (!config.depth_scenes_only) {

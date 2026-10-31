@@ -27,8 +27,14 @@
 //   from or read back to; at its first use in a frame, the rows of VRAM that
 //   no longer match (the CPU wrote them: video frames, memcpy) are uploaded
 //   again. With EndFrame(true) after every list run (mpo_boot), the game sees
-//   VRAM as softgpu would leave it between runs. Render-to-texture and
-//   texturing from a target within one frame are F15b.
+//   VRAM as softgpu would leave it between runs.
+// - Within a frame (F15b): before something reads or overwrites VRAM rows
+//   that a target drew and has not read back yet, the frame ends there with a
+//   readback (stats().hazard_flushes), so VRAM is again what softgpu would
+//   hold at that point. That covers a texture or a CLUT taken from a target
+//   (render-to-texture, texturing from the current target), block transfers
+//   from or onto a target (SyncMemory) and a target that overlaps rows
+//   another one drew (the same VRAM seen with another format or stride).
 // - Textures: level 0, decoded on the CPU (unswizzled; CLUT formats keep the
 //   raw index) and cached by address, format, size and a hash of the source
 //   bytes. The palette goes to the shader in a uniform buffer.
@@ -69,6 +75,11 @@ struct RendererStats {
     std::uint64_t points = 0;
     std::uint64_t lines = 0;
     std::uint64_t line_pixels = 0;
+    // F15b: triangles without area that softgpu still draws (the exact
+    // path covers their range).
+    std::uint64_t zero_area_triangles = 0;
+    // ... and those with no pixel to draw (not sent to the GPU).
+    std::uint64_t zero_area_skipped = 0;
     std::uint64_t texture_uploads = 0;
     std::uint64_t texture_hits = 0;
     std::uint64_t clut_uploads = 0;
@@ -78,12 +89,19 @@ struct RendererStats {
     std::uint64_t target_resyncs = 0;
     std::uint64_t target_resync_rows = 0;
     std::uint64_t readbacks = 0;
+    // F15b: host time EndFrame(true) spends waiting for the GPU and writing
+    // the targets back into VRAM (microseconds).
+    std::uint64_t readback_wait_us = 0;
+    std::uint64_t readback_write_us = 0;
     // Destination reads (F15a): batches that read it, barriers inside a
     // render pass between groups of primitives, target copies.
     std::uint64_t dst_batches = 0;
     std::uint64_t dst_barriers = 0;
     std::uint64_t dst_copies = 0;
     std::uint64_t fixed_blend_batches = 0;
+    // F15b: frames ended early, with a readback, because something was about
+    // to read or overwrite VRAM a target had drawn (reason -> count).
+    std::map<std::string, std::uint64_t, std::less<>> hazard_flushes;
     // What is drawn but not exactly as softgpu would (name -> draws).
     std::map<std::string, std::uint64_t, std::less<>> approximations;
     // Optional sink, one line the first time each approximation appears.
@@ -114,6 +132,13 @@ const char *BlendPathName(BlendPath path);
 //                                       of consecutive draws with one state)
 //   MPO_VK_NO_TEX_CACHE=1               decode and upload every texture on
 //                                       every use
+//   MPO_VK_NO_EXACT=1                   F15b: triangles interpolated by the
+//                                       GPU (as before F15b) instead of
+//                                       softgpu's integer edge weights
+//   MPO_VK_NO_HAZARD_FLUSH=1            F15b: no early readback when a list
+//                                       reads or overwrites what a target
+//                                       drew (VRAM is then stale until the
+//                                       end of the run, as before F15b)
 // (the device toggles MPO_VK_NO_13, MPO_VK_NO_DEPTH_CLAMP,
 // MPO_VK_NO_RASTER_ORDER and MPO_VK_NO_LOCAL_READ are read by the context).
 struct RendererOptions {
@@ -121,6 +146,8 @@ struct RendererOptions {
     DstRead dst_read = DstRead::kAuto;
     bool batching = true;
     bool texture_cache = true;
+    bool hazard_flush = true;
+    bool exact = true;
     // Seed for the VkPipelineCache (GeRenderer::PipelineCacheData of an
     // earlier renderer on the same device); not read from the environment.
     std::vector<std::uint8_t> pipeline_cache_data;
@@ -159,6 +186,10 @@ public:
                    const ge::RasterizerState &state) override;
     void DrawLine(const ge::VertexData &v0, const ge::VertexData &v1, const ge::BinCoords &range,
                   const ge::RasterizerState &state) override;
+    // F15b: a CLUT load or a block transfer is about to read (or write)
+    // memory; ends the frame with a readback first when that memory holds
+    // rows a target drew (or, for a write, rows of a target in use).
+    void SyncMemory(std::uint32_t addr, std::uint32_t size, bool write) override;
 
     // Submits what was recorded since the last call (nothing to do if no
     // draw came). With `readback`, waits for the GPU and writes every target
@@ -179,6 +210,10 @@ public:
     // VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; a user (the presenter) that
     // reads one must transition it and put it back, on the same queue.
     bool FindTarget(std::uint32_t fb_address, TargetInfo *out) const;
+    // The one with this stride and format (several targets can share an
+    // address, F15b).
+    bool FindTarget(std::uint32_t fb_address, int stride, ge::BufferFormat format,
+                    TargetInfo *out) const;
     // Whether the colour target of the framebuffer at `fb_address` (this
     // stride and format) holds what VRAM holds in the first `width` x `rows`
     // pixels: no frame open, nothing drawn since the last readback and no CPU
@@ -278,6 +313,11 @@ private:
         int color_target = -1;
         int depth_target = -1;
         VkDescriptorSet set = VK_NULL_HANDLE;
+        // What `set` was made of (an exact batch makes its own set with its
+        // triangles, F15b).
+        VkImageView rgba_view = VK_NULL_HANDLE;
+        VkImageView index_view = VK_NULL_HANDLE;
+        VkBuffer clut_buffer = VK_NULL_HANDLE;
         std::uint32_t clut_offset = 0;
         VkRect2D scissor{};
         std::uint32_t blend_constant = 0;
@@ -293,9 +333,10 @@ private:
         UploadArena vertices;
         UploadArena uniforms;
         UploadArena staging;
+        UploadArena triangles; // GpuTriangle records of exact batches (F15b)
         std::vector<VkDescriptorPool> desc_pools;
         std::size_t desc_pool_index = 0;
-        std::map<std::array<std::uint64_t, 3>, VkDescriptorSet> sets;
+        std::map<std::array<std::uint64_t, 5>, VkDescriptorSet> sets;
         std::vector<Image> dead_images;
         std::uint64_t serial = 0;
     };
@@ -327,8 +368,23 @@ private:
     ChangedRows(const VramShadow &shadow, std::uint32_t offset, int stride_bytes, int rows) const;
     bool ResolveTexture(const ge::SamplerState &st, VkImageView *rgba, VkImageView *index);
     bool UploadClut(const std::uint8_t *clut, std::uint32_t *offset, VkBuffer *buffer);
-    VkDescriptorSet GetDescriptorSet(VkImageView rgba, VkImageView index, VkBuffer clut_buffer);
+    // `tri_buffer` (with the bytes at `tri_offset`, `tri_range` long): the
+    // batch's GpuTriangle records; the dummy buffer for other batches.
+    VkDescriptorSet GetDescriptorSet(VkImageView rgba, VkImageView index, VkBuffer clut_buffer,
+                                     VkBuffer tri_buffer, VkDeviceSize tri_offset,
+                                     VkDeviceSize tri_range);
     bool StageUpload(const void *data, std::size_t size, UploadArena::Allocation *out);
+    // F15b hazards. VRAM offsets [begin, end) against the rows each target
+    // drew since its last readback (skipping one colour and one depth
+    // target), or against rows 0-271 of the targets used in the open frame.
+    [[nodiscard]] bool OverlapsDrawn(std::uint64_t begin, std::uint64_t end, int skip_color,
+                                     int skip_depth) const;
+    [[nodiscard]] bool OverlapsUsed(std::uint64_t begin, std::uint64_t end) const;
+    // Before a draw: its texture, or its targets' rows, overlap what another
+    // target drew in the open frame.
+    void CheckDrawHazards(const ge::GeState &gs, const ge::RasterizerState &rs);
+    // Ends the open frame with a readback, counted under `why`.
+    void HazardFlush(std::string_view why);
 
     void SetTopology(Topology topology);
     // Starts a new batch unless `want` matches the current one.
@@ -374,6 +430,7 @@ private:
     Image dummy_rgba_;
     Image dummy_index_;
     Buffer dummy_ubo_;
+    Buffer dummy_ssbo_; // one GpuTriangle, for the non-exact batches
     bool dummies_ready_ = false;
 
     std::vector<ColorTarget> color_targets_;
@@ -390,6 +447,7 @@ private:
     DrawState state_;   // of the current batch
     DrawState pending_; // from the last BeginDraw
     std::vector<GpuVertex> vertices_;
+    std::vector<GpuTriangle> triangles_; // one per 3 vertices in exact batches
 
     // Command buffer state inside the frame.
     bool in_pass_ = false;

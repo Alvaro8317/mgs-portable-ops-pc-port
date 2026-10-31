@@ -78,6 +78,45 @@ struct RasterizerState {
 RasterizerState ComputeRasterizerState(const GeState &gs, const MemoryView &mem,
                                        const std::uint8_t *clut);
 
+// F15b: what Rasterizer::DrawTriangle derives from the three vertices before
+// its pixel loop, for a renderer that interpolates the same way elsewhere
+// (the Vulkan renderer's exact path). At the sample point (X, Y) = (16x + 7,
+// 16y + 7) of pixel (x, y), in 12.4 drawing units, edge i weighs
+// w_i = Wrap32(xf[i] * X + yf[i] * Y + c[i]); the pixel is covered when every
+// w_i + bias[i] is >= 0, and the values are interpolated with the w_i and
+// wsum_recip (InterpolateF).
+struct TriangleSetup {
+    int xf[3] = {0, 0, 0};
+    int yf[3] = {0, 0, 0};
+    int c[3] = {0, 0, 0};
+    int bias[3] = {0, 0, 0}; // 0 or -1
+    float wsum_recip = 0.0f;
+    // w0 + w1 + w2 is 0: softgpu still draws the pixels whose sample point
+    // lies on the segment (every w_i is 0 there), and everything it
+    // interpolates for them is 0 * inf = NaN (x86's default NaN, negative).
+    bool zero_area = false;
+};
+TriangleSetup SetUpTriangle(const VertexData &v0, const VertexData &v1, const VertexData &v2);
+
+// F15b: the same for Rasterizer::DrawRectangle. Its first pixel is
+// (min_x / 16, min_y / 16) (12.4 units); it walks 2x2 quads from there, the
+// texture coordinates of quad (qx, qy) being row_* plus sty_* added qy times,
+// plus stx_* added qx times (float additions, in that order), plus the
+// quad's lane offset (0, stx / 2, sty / 2 or stx / 2 + sty / 2). Through mode
+// coordinates are already divided by the texture size.
+struct RectangleSetup {
+    int min_x = 0;
+    int min_y = 0;
+    float row_s = 0.0f;
+    float row_t = 0.0f;
+    float stx_s = 0.0f;
+    float stx_t = 0.0f;
+    float sty_s = 0.0f;
+    float sty_t = 0.0f;
+};
+RectangleSetup SetUpRectangle(const VertexData &v0, const VertexData &v1, const BinCoords &range,
+                              const RasterizerState &state);
+
 // Draws into the colour/depth buffers described by `state.pixel`.
 class Rasterizer {
 public:

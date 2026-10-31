@@ -775,7 +775,8 @@ int main(int argc, char **argv) {
                     !force_upload && gpu_error.empty() &&
                     gpu->TargetMatchesVram(framebuffer.top_address,
                                            static_cast<int>(framebuffer.stride), format, sw, sh) &&
-                    gpu->FindTarget(framebuffer.top_address, &target);
+                    gpu->FindTarget(framebuffer.top_address, static_cast<int>(framebuffer.stride),
+                                    format, &target);
                 std::string present_error;
                 const bool ok =
                     from_target
@@ -879,6 +880,25 @@ int main(int argc, char **argv) {
                     static_cast<unsigned long long>(system.mpeg().frames()),
                     static_cast<unsigned long long>(system.mpeg().audio_frames()));
         {
+            // F15b: what the lists drew, and the block transfers (which move
+            // VRAM behind the renderer's back).
+            const mpo::ge::Stats &gs = system.ge().ge().stats();
+            std::printf("ge draws: %llu draw commands, %llu triangles, %llu rectangles, %llu "
+                        "lines, %llu points, %llu patches, %llu clut loads, %llu block "
+                        "transfers\n",
+                        static_cast<unsigned long long>(gs.draw_commands),
+                        static_cast<unsigned long long>(gs.triangles),
+                        static_cast<unsigned long long>(gs.rectangles + gs.sprites),
+                        static_cast<unsigned long long>(gs.lines),
+                        static_cast<unsigned long long>(gs.points),
+                        static_cast<unsigned long long>(gs.patches),
+                        static_cast<unsigned long long>(gs.clut_loads),
+                        static_cast<unsigned long long>(gs.block_transfers));
+            for (const auto &[what, count] : gs.unsupported)
+                std::printf("ge: unsupported: %s (%llu)\n", what.c_str(),
+                            static_cast<unsigned long long>(count));
+        }
+        {
             const mpo::hle::Fonts &fonts_hle = system.fonts();
             std::string missing;
             for (const std::string &name : fonts_hle.missing_fonts())
@@ -977,6 +997,16 @@ int main(int argc, char **argv) {
                         "VRAM\n",
                         static_cast<unsigned long long>(presented_targets),
                         static_cast<unsigned long long>(presented_uploads));
+            std::printf("vulkan: triangles without area (F15b): %llu drawn as softgpu does, %llu "
+                        "without pixels\n",
+                        static_cast<unsigned long long>(vs.zero_area_triangles),
+                        static_cast<unsigned long long>(vs.zero_area_skipped));
+            std::printf("vulkan: readbacks: %.1f ms waiting for the GPU, %.1f ms writing VRAM\n",
+                        static_cast<double>(vs.readback_wait_us) / 1000.0,
+                        static_cast<double>(vs.readback_write_us) / 1000.0);
+            for (const auto &[why, count] : vs.hazard_flushes)
+                std::printf("vulkan: early readback before %s (%llu)\n", why.c_str(),
+                            static_cast<unsigned long long>(count));
             for (const auto &[what, draws] : vs.approximations)
                 std::printf("vulkan: approximated: %s (%llu draws)\n", what.c_str(),
                             static_cast<unsigned long long>(draws));

@@ -437,6 +437,15 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
   - **[V]** Los splines son el 49 % de las draws, sin skinning y siempre con depth clamp.
   - **[V]** Las texturas son siempre CLUT4/8 con swizzle.
   - **[V]** No se vieron render-to-texture, logic ops, stencil, beziers ni mipmaps.
+- **Medición en el juego** (F15b, 360 s desde el arranque hasta el gameplay de la celda de
+  `st04vo`, con el renderer Vulkan; ver `docs/sessions/F15b.md`):
+  - **[V]** 0 transferencias de bloque del GE, 0 texturas o CLUT leídas de filas que un target
+    acababa de dibujar y 0 targets solapados dentro de una ejecución de lista. Tampoco hubo
+    stencil ni mipmaps.
+  - **[V]** El 71-74 % de los triángulos que llegan al rasterizador **no tienen área** (vértices
+    colineales que el ensamblador de softgpu deja pasar, como `BinManager`). softgpu dibuja los
+    píxeles cuyo punto de muestreo cae sobre su recta, con los valores interpolados en NaN (en la
+    celda, un píxel con el color de la niebla). Solo el 3 % tiene algún píxel así.
 - **Borrado de saves**: el diálogo de borrar save podía vaciar SAVEDATA
   ([#6600](https://github.com/hrydgard/ppsspp/issues/6600)). Hay que implementar bien el modo delete.
   **[V]** MPO borra con `LISTALLDELETE` y `gameName` vacío, justo el caso del bug

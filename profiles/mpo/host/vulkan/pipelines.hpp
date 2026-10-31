@@ -42,6 +42,55 @@ struct GpuVertex {
 };
 static_assert(sizeof(GpuVertex) == 40);
 
+// F15b: what the exact fragment shader (ge.frag built with GE_EXACT) needs to
+// interpolate one triangle as softgpu does (Rasterizer::DrawTriangle): the
+// three edge functions in 12.4 integers (w_i = xf_i * X + yf_i * Y + c_i at
+// the sample point X = 16x + 7, Y = 16y + 7, wrapping like softgpu's
+// Wrap32), the reciprocals softgpu computes once per triangle, the first
+// pixel of its 2x2 quads (for the texture detail) and its last one (a
+// triangle without area covers its whole line, softgpu stops at the range),
+// and the values of the three vertices. std430, one per triangle (ge.frag Tri).
+//
+// A rectangle (kTriRect, Rasterizer::DrawRectangle; two records, one per
+// half) uses it differently: xf[0], xf[1] are its first pixel, s and t hold
+// (row, x step, y step) of ge::RectangleSetup, clipw[0] is v1's clip w and
+// the colours, z and fog are v1's (index 2, with the flat flags).
+struct GpuTriangle {
+    std::int32_t xf[3] = {0, 0, 0};
+    std::int32_t flags = 0; // kTri* below
+    std::int32_t yf[3] = {0, 0, 0};
+    std::int32_t quad_x = 0; // first pixel of the quads (range.x1 / 16)
+    std::int32_t c[3] = {0, 0, 0};
+    std::int32_t quad_y = 0;
+    float wsum_recip = 0;         // 1 / (w0 + w1 + w2)
+    float q_recip[3] = {0, 0, 0}; // 1 / clip w of each vertex
+    float s[3] = {0, 0, 0};
+    float clipw0 = 0;
+    float t[3] = {0, 0, 0};
+    float clipw1 = 0;
+    float q[3] = {0, 0, 0}; // the texture q (projection mapping)
+    float clipw2 = 0;
+    float fog[3] = {0, 0, 0};
+    float pad5 = 0;
+    std::int32_t z[3] = {0, 0, 0};
+    std::int32_t last_x = 0; // last pixel of the range (range.x2 / 16)
+    std::uint32_t color0[3] = {0, 0, 0};
+    std::int32_t last_y = 0;
+    std::uint32_t color1[3] = {0, 0, 0};
+    std::uint32_t pad8 = 0;
+};
+static_assert(sizeof(GpuTriangle) == 176);
+// GpuTriangle::flags: edge i excludes its own pixels (softgpu's bias -1)
+// in bit i; the rest as named.
+constexpr std::int32_t kTriFlatZ = 1 << 3;
+constexpr std::int32_t kTriFlatColor0 = 1 << 4;
+constexpr std::int32_t kTriFlatColor1 = 1 << 5;
+constexpr std::int32_t kTriNoFog = 1 << 6;
+constexpr std::int32_t kTriThrough = 1 << 7;
+constexpr std::int32_t kTriRect = 1 << 8;
+constexpr std::int32_t kTriFlatFog = 1 << 9;
+constexpr std::int32_t kTriZeroArea = 1 << 10; // ge::TriangleSetup::zero_area
+
 // Push constants (shaders/ge.vert and ge.frag, same block in both).
 struct PushConstants {
     float ndc_scale[2] = {0, 0};
@@ -117,6 +166,9 @@ struct PipelineKey {
     std::uint8_t logic_op = 3;   // ge::LogicOp; COPY = none
     std::uint8_t write_mask = 0; // per-bit colour mask in the shader
     std::uint8_t read_dst = 0;   // the ge.frag build with a destination read
+    // F15b: the ge.frag build with GE_EXACT (triangles only; not a
+    // specialization constant).
+    std::uint8_t exact = 0;
     // Fixed function (Vulkan enum values).
     std::uint8_t blend = 0;
     std::uint8_t blend_op = 0;
@@ -127,7 +179,7 @@ struct PipelineKey {
     std::uint8_t depth_write = 0;
     std::uint8_t color_write_mask = 0xF;
     Topology topology = Topology::kTriangles;
-    std::uint8_t reserved[4] = {0, 0, 0, 0};
+    std::uint8_t reserved[3] = {0, 0, 0};
 
     bool operator==(const PipelineKey &o) const {
         return std::memcmp(this, &o, sizeof(*this)) == 0;
@@ -183,6 +235,8 @@ private:
     VkShaderModule vert_ = VK_NULL_HANDLE;
     VkShaderModule frag_ = VK_NULL_HANDLE;
     VkShaderModule frag_dst_ = VK_NULL_HANDLE;
+    VkShaderModule frag_exact_ = VK_NULL_HANDLE;
+    VkShaderModule frag_exact_dst_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout dst_set_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;

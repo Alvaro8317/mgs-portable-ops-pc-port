@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b → F19 → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) puede ir en paralelo, en su worktree. |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) puede ir en paralelo, en su worktree. |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -104,7 +104,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F14a | Renderer Vulkan: base sobre los dumps | M3 | ✅ hecha (ola 3) |
 | F14b | Renderer Vulkan en el juego | M3 | ✅ hecha (Windows: pendiente del usuario) |
 | F15a | Renderer Vulkan: blending por shader y efectos (autónomo) | M3 | ✅ hecha (ola 4) |
-| F15b | Renderer Vulkan: framebuffers en el juego | M3 | ⬜ pendiente |
+| F15b | Renderer Vulkan: framebuffers en el juego | M3 | ✅ hecha (M3 cerrado; Windows con GPU: pendiente del usuario) |
 | F16a | Audio autónomo: SAS, ATRAC3 y salida SDL3 | M4 | ✅ hecha (ola 1) |
 | F16b | Audio en el juego: `sceAudio`, `sceSas` y `sceAtrac` | M4 | ✅ hecha (Windows y la música de misión: pendientes) |
 | F17a | Decodificador de PMF y fuente PGF (autónomos) | M4 | ✅ hecha (ola 2) |
@@ -945,6 +945,26 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Notas (ola 3)**: todas las diferencias que midió F14a son de blending, con un escalón de 5 bits
   en hasta el 35 % de los píxeles de las cinemáticas. La prioridad es el blending por shader con el
   dither después. Las líneas ya salen idénticas (DDA en la CPU), así que se quitan de esta fase.
+- **Hecha (2026-10-31)**: ver `docs/sessions/F15b.md`. **M3 cerrado.**
+  - En el juego, Vulkan sale **idéntico a softgpu**:
+    - 599 de 599 frames hasta la celda de `st04vo` y 1078 de 1078 hasta su gameplay con HUD y
+      radar (360 s);
+    - la traza HLE idéntica;
+    - 0 errores de validación hasta los 100 s.
+  - En los 11 dumps de F05 también es 0 píxeles, en los caminos 1.3 y 1.2.
+  - Lo que lo hizo:
+    - un readback anticipado cuando una textura, una CLUT, una transferencia o otro target toca
+      filas dibujadas sin leer (`DrawBackend::SyncMemory`, `MPO_VK_NO_HAZARD_FLUSH`);
+    - la **interpolación exacta de softgpu** en el fragment shader para triángulos y rectángulos
+      texturizados (`GE_EXACT`, `MPO_VK_NO_EXACT`), incluidos los triángulos sin área, que softgpu
+      sí dibuja (el 71-74 % de los triángulos del juego).
+  - **Medido en el juego**: 0 render-to-texture, 0 transferencias de bloque y 0 stencil. Los splines
+    en la CPU alcanzan (Vulkan va más rápido que softgpu en lavapipe). El stencil se queda sin
+    hacer y el readback por ejecución se mantiene (ver la nota).
+  - `profiles/mpo/tools/capture_compare.py` compara capturas del juego con el umbral de F15a.
+  - **Pendiente del usuario**: la prueba en Windows con la GPU (procedimiento en la nota).
+  - **Para F19**: `analysis/f15b/walk_dialog.txt` llega al gameplay de la celda. Hay un uso de
+    vértices inmediatos (VAP) que `mpo_ge` no implementa.
 - **Notas (F14b)**: ver "Pendiente" y "Para la próxima sesión" en `docs/sessions/F14b.md`.
   - **Ya está**: subir desde la VRAM los framebuffers que no dibuja el GE (`PresentRgba`) y la
     resincronización de los targets cuando la CPU escribe en la VRAM (por filas, contra una
@@ -1244,6 +1264,14 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     saltar el cómic.
   - **Criterio que viene de F18b**: ingresar una contraseña de reclutamiento en `briefing` (OSK con
     límite de 10).
+- **Notas (F15b)**: ver `docs/sessions/F15b.md`.
+  - `analysis/f15b/walk_dialog.txt` (Círculo cada 3 s desde los 120 s) pasa la cinemática de la
+    celda y deja el gameplay en `st04vo` a los ~200 s. Es un buen punto de partida para la
+    repetición de input.
+  - Para comparar los dos renderers en el juego: `analysis/f15b/walk.sh` con
+    `capture_compare.py`. Hoy dan 0 píxeles de diferencia.
+  - `mpo_boot` informa `ge: unsupported: immediate vertices (VAP)` una vez por recorrido: hay que
+    ver qué dibuja.
 - **Notas (F13)**: el criterio de F13 "entrar a la primera etapa sin código interpretado" se
   comprueba aquí con el reporte de `mpo_boot` (tabla "stage overlays"). Las etapas de la misión y
   su transición tienen que estar en `build_overlays.py --stages`.

@@ -21,6 +21,21 @@
 // times (compile_shaders.py): without destination reads, with GE_DST_INPUT
 // (an input attachment: the colour target itself) and with GE_DST_COPY (a
 // sampled copy of the target).
+//
+// GE_EXACT (F15b, triangles and rectangles): the values are not the GPU's
+// interpolation but softgpu's (Rasterizer::DrawTriangle and DrawRectangle).
+// For a triangle the shader evaluates the three integer edge functions at
+// softgpu's sample point (16x + 7, 16y + 7 in 12.4), discards what softgpu
+// would not cover, and interpolates the colours, z, fog and UV with the same
+// float operations in the same order (precise: no fused multiply-add), from
+// the per-triangle data in u_tris (GpuTriangle in pipelines.hpp). A rectangle
+// steps its UV by repeated additions, as softgpu does. Vulkan's add, multiply
+// and int-to-float conversion are correctly rounded, so they give the CPU's
+// bits; the per-pixel reciprocal of the perspective UV is not (2.5 ulp), so
+// ExactRecip rounds it exactly. The texture detail (filter choice) comes from
+// the UV of softgpu's 2x2 quads, which start at the primitive's first pixel
+// (not at even pixels like the GPU's). z goes to gl_FragDepth, so the
+// fixed-function depth test sees softgpu's z.
 
 #version 450
 
@@ -90,6 +105,43 @@ layout(location = 0) noperspective in vec4 v_color0;
 layout(location = 1) noperspective in vec3 v_color1;
 layout(location = 2) in vec3 v_uvq;
 layout(location = 3) noperspective in float v_fog;
+// The triangle's index in the batch (ge.vert); only GE_EXACT reads it.
+layout(location = 4) flat in uint v_tri;
+
+#if defined(GE_EXACT)
+// GpuTriangle (pipelines.hpp).
+struct Tri {
+    ivec4 xf;   // edge x factors, .w flags (rectangle: first pixel in .xy)
+    ivec4 yf;   // edge y factors, .w first pixel x of the quads
+    ivec4 c;    // edge constants, .w first pixel y of the quads
+    vec4 k;     // 1 / (w0 + w1 + w2), then 1 / clip w of each vertex
+    vec4 s;     // rectangle: row, x step, y step; .w clip w 0
+    vec4 t;     // .w clip w 1
+    vec4 q;     // .w clip w 2
+    vec4 fog;
+    ivec4 z;    // .w last pixel x of the range
+    uvec4 col0; // 0xAABBGGRR; .w last pixel y of the range
+    uvec4 col1;
+};
+layout(set = 0, binding = 3, std430) readonly buffer Tris {
+    Tri tris[];
+} u_tris;
+const int kTriFlatZ = 1 << 3;
+const int kTriFlatColor0 = 1 << 4;
+const int kTriFlatColor1 = 1 << 5;
+const int kTriNoFog = 1 << 6;
+const int kTriThrough = 1 << 7;
+const int kTriRect = 1 << 8;
+const int kTriFlatFog = 1 << 9;
+// ge::TriangleSetup::zero_area: every w_i is 0 on the pixels softgpu covers,
+// so each interpolated value is 0 * inf = NaN (x86's default NaN, sign bit
+// set). Its effects: RoundToInt and TruncToInt give INT_MIN, ClampFogDepth 0
+// and TexLog2 2056.
+const int kTriZeroArea = 1 << 10;
+const int kIntMin = int(0x80000000u);
+const float kNanCoordinate = 1e30; // what makes the samplers see INT_MIN
+const int kNanDetail = 2056;
+#endif
 
 layout(location = 0) out vec4 out_color;
 
@@ -455,15 +507,193 @@ void WritePixel(ivec4 prim) {
     out_color = vec4(StorePixel(FromRGBA(c), dst)) / 255.0;
 }
 
+#if defined(GE_EXACT)
+// rasterizer.cpp InterpolateF: ((c0 * w0 + c1 * w1) + c2 * w2) * wsum, each
+// operation rounded on its own.
+float InterpolateF(vec3 c, vec3 w, float wsum) {
+    precise float v = c.x * w.x;
+    v = v + c.y * w.y;
+    v = v + c.z * w.z;
+    precise float r = v * wsum;
+    return r;
+}
+
+// 1 / x rounded to nearest, as the CPU's division gives it. The GPU's 1 / x
+// may be a few ulp off, so the floats around it are checked with the exact
+// product of the mantissas (24 x 24 bits): the nearest one makes x * r
+// closest to 1. Zero, denormals, infinities and NaN keep the GPU's value.
+float ExactRecip(float x) {
+    precise float r = 1.0 / x;
+    const uint xb = floatBitsToUint(x);
+    const uint rb = floatBitsToUint(r);
+    const uint ex = (xb >> 23) & 0xFFu;
+    const uint er = (rb >> 23) & 0xFFu;
+    if (ex == 0u || ex == 255u || er <= 4u || er >= 251u) return r;
+    const uint mx = (xb & 0x7FFFFFu) | 0x800000u;
+    uint best = rb;
+    uint best_hi = 0xFFFFFFFFu;
+    uint best_lo = 0xFFFFFFFFu;
+    for (int d = -3; d <= 3; ++d) {
+        const uint cb = uint(int(rb) + d); // the neighbours in magnitude
+        const uint ec = (cb >> 23) & 0xFFu;
+        const uint mc = (cb & 0x7FFFFFu) | 0x800000u;
+        // x * c = mx * mc * 2^(ex + ec - 300), and 1 is 2^k in those units.
+        const int k = 300 - int(ex) - int(ec);
+        if (k < 45 || k > 49) continue;
+        uint hi;
+        uint lo;
+        umulExtended(mx, mc, hi, lo);
+        const uint thi = 1u << uint(k - 32);
+        uint dhi;
+        uint dlo;
+        if (hi >= thi) {
+            dhi = hi - thi;
+            dlo = lo;
+        } else {
+            dhi = thi - hi - (lo != 0u ? 1u : 0u);
+            dlo = 0u - lo;
+        }
+        if (dhi < best_hi || (dhi == best_hi && dlo < best_lo)) {
+            best = cb;
+            best_hi = dhi;
+            best_lo = dlo;
+        }
+    }
+    return uintBitsToFloat(best);
+}
+
+// Edge weights of a triangle at pixel p, as floats.
+vec3 EdgeWeights(Tri tri, ivec2 p) {
+    const ivec2 sp = p * 16 + 7;
+    return vec3(tri.xf.xyz * sp.x + tri.yf.xyz * sp.y + tri.c.xyz);
+}
+
+// The texture coordinates softgpu computes at pixel p (scaled to the texture
+// in through mode).
+vec2 ExactUV(Tri tri, ivec2 p) {
+    const int flags = tri.xf.w;
+    if ((flags & kTriRect) != 0) {
+        // DrawRectangle: the row's coordinates step once per two rows, then
+        // once per two columns, then the lane's offset within the quad.
+        const ivec2 rel = p - tri.xf.xy;
+        const ivec2 q = rel >> 1;
+        precise float s = tri.s.x;
+        precise float t = tri.t.x;
+        for (int j = 0; j < q.y; ++j) {
+            s = s + tri.s.z;
+            t = t + tri.t.z;
+        }
+        for (int i = 0; i < q.x; ++i) {
+            s = s + tri.s.y;
+            t = t + tri.t.y;
+        }
+        const int lane = (rel.x & 1) | ((rel.y & 1) << 1);
+        precise float hxs = 0.5 * tri.s.y;
+        precise float hys = 0.5 * tri.s.z;
+        precise float hxt = 0.5 * tri.t.y;
+        precise float hyt = 0.5 * tri.t.z;
+        precise float os = lane == 0 ? 0.0 : (lane == 1 ? hxs : (lane == 2 ? hys : hxs + hys));
+        precise float ot = lane == 0 ? 0.0 : (lane == 1 ? hxt : (lane == 2 ? hyt : hxt + hyt));
+        precise float rs = s + os;
+        precise float rt = t + ot;
+        return vec2(rs, rt);
+    }
+    if ((flags & kTriZeroArea) != 0) return vec2(kNanCoordinate);
+    const vec3 fw = EdgeWeights(tri, p);
+    if ((flags & kTriThrough) != 0) {
+        precise float s = InterpolateF(tri.s.xyz, fw, tri.k.x) * pc.uv_scale.x;
+        precise float t = InterpolateF(tri.t.xyz, fw, tri.k.x) * pc.uv_scale.y;
+        return vec2(s, t);
+    }
+    // GetTextureCoordinates(Proj): perspective with the clip w.
+    precise vec3 wq = fw * tri.k.yzw;
+    float q_recip;
+    if (kTexProj) {
+        precise float qv = wq.x * tri.q.x;
+        qv = qv + wq.y * tri.q.y;
+        qv = qv + wq.z * tri.q.z;
+        q_recip = ExactRecip(qv);
+    } else {
+        precise float sum = wq.x + wq.y;
+        sum = sum + wq.z;
+        q_recip = ExactRecip(sum);
+    }
+    precise float sv = wq.x * tri.s.x;
+    sv = sv + wq.y * tri.s.y;
+    sv = sv + wq.z * tri.s.z;
+    precise float tv = wq.x * tri.t.x;
+    tv = tv + wq.y * tri.t.y;
+    tv = tv + wq.z * tri.t.z;
+    precise float s = sv * q_recip;
+    precise float t = tv * q_recip;
+    return vec2(s, t);
+}
+
+// The top-left pixel of softgpu's 2x2 quad holding p.
+ivec2 QuadOrigin(Tri tri, ivec2 p) {
+    const ivec2 o = (tri.xf.w & kTriRect) != 0 ? tri.xf.xy : ivec2(tri.yf.w, tri.c.w);
+    return o + (((p - o) >> 1) << 1);
+}
+
+// The clip w softgpu's slope-based detail uses: the quad's first lane.
+float ExactClipW(Tri tri, ivec2 quad) {
+    if ((tri.xf.w & kTriRect) != 0) return tri.s.w;
+    return InterpolateF(vec3(tri.s.w, tri.t.w, tri.q.w), EdgeWeights(tri, quad), tri.k.x);
+}
+#endif
+
 void main() {
+#if defined(GE_EXACT)
+    // softgpu's interpolation (Rasterizer::DrawTriangle), see the top.
+    const Tri tri = u_tris.tris[v_tri];
+    const ivec2 pixel = ivec2(gl_FragCoord.xy);
+    const ivec2 sp = pixel * 16 + 7;
+    const ivec3 w = tri.xf.xyz * sp.x + tri.yf.xyz * sp.y + tri.c.xyz; // wraps
+    const int flags = tri.xf.w;
+    const ivec3 bias = -((ivec3(flags) >> ivec3(0, 1, 2)) & 1);
+    // A rectangle covers what the GPU rasterizes (its coverage is exact). A
+    // triangle covers its pixels inside the range (only one without area
+    // reaches past it: its weights are 0 along the whole line).
+    const bool in_range = all(greaterThanEqual(pixel, ivec2(tri.yf.w, tri.c.w))) &&
+                          all(lessThanEqual(pixel, ivec2(tri.z.w, int(tri.col0.w))));
+    const bool covered = (flags & kTriRect) != 0 ||
+                         (in_range && ((w.x + bias.x) | (w.y + bias.y) | (w.z + bias.z)) >= 0);
+    const vec3 fw = vec3(w);
+    const float wsum = tri.k.x;
+    const bool zero_area = (flags & kTriZeroArea) != 0;
+    int ez = tri.z.z;
+    if ((flags & kTriFlatZ) == 0)
+        ez = zero_area ? kIntMin : RoundToInt(InterpolateF(vec3(tri.z.xyz), fw, wsum));
+    // +0.25: the D16 conversion gives ez whether it rounds or truncates.
+    gl_FragDepth = (float(clamp(ez, 0, 65535)) + 0.25) / 65535.0;
+    ivec4 prim;
+    if ((flags & kTriFlatColor0) != 0) {
+        prim = FromRGBA(tri.col0.z);
+    } else if (zero_area) {
+        prim = ivec4(kIntMin);
+    } else {
+        const ivec4 c0 = FromRGBA(tri.col0.x);
+        const ivec4 c1 = FromRGBA(tri.col0.y);
+        const ivec4 c2 = FromRGBA(tri.col0.z);
+        for (int i = 0; i < 4; ++i)
+            prim[i] = RoundToInt(InterpolateF(vec3(c0[i], c1[i], c2[i]), fw, wsum));
+    }
+#else
     ivec4 prim = ivec4(RoundToInt(v_color0.r * 255.0), RoundToInt(v_color0.g * 255.0),
                        RoundToInt(v_color0.b * 255.0), RoundToInt(v_color0.a * 255.0));
+#endif
 
     if (kClear && kReadDst) {
+#if defined(GE_EXACT)
+        if (!covered) discard;
+#endif
         WritePixel(prim);
         return;
     }
     if (kClear) {
+#if defined(GE_EXACT)
+        if (!covered) discard;
+#endif
         // Clear mode: the vertex colour, dithered (softgpu dithers clears too).
         ivec3 rgb = prim.rgb;
         if (kDither) rgb += DitherValue();
@@ -476,6 +706,11 @@ void main() {
     if (kTexMode != 0) {
         const int width = int(pc.tex_size & 0xFFFFu);
         const int height = int(pc.tex_size >> 16);
+#if defined(GE_EXACT)
+        const vec2 uv = ExactUV(tri, pixel);
+        const float s = uv.x;
+        const float t = uv.y;
+#else
         float s = v_uvq.x;
         float t = v_uvq.y;
         if (kTexProj) {
@@ -484,17 +719,43 @@ void main() {
         }
         s *= pc.uv_scale.x;
         t *= pc.uv_scale.y;
+#endif
         bool linear = kMagLinear;
         if (kMagLinear != kMinLinear) {
             // CalculateSamplingParams without mipmaps: the level is always 0,
             // the filter is the minification one when the detail is > 0.
             int detail;
             if (kLodMode == 0) {
+#if defined(GE_EXACT)
+                // ApplyTexturing: s[1] - s[0] and t[2] - t[0] of the quad.
+                if ((tri.xf.w & kTriZeroArea) != 0) {
+                    detail = kNanDetail;
+                } else {
+                const ivec2 quad = QuadOrigin(tri, pixel);
+                const vec2 uv0 = ExactUV(tri, quad);
+                precise float ds = ExactUV(tri, quad + ivec2(1, 0)).x - uv0.x;
+                precise float dt = ExactUV(tri, quad + ivec2(0, 1)).y - uv0.y;
+                precise float ads = abs(ds * float(width));
+                precise float adt = abs(dt * float(height));
+                detail = TexLog2(max(ads, adt));
+                }
+#else
                 const float ds = dFdxFine(s) * float(width);
                 const float dt = dFdyFine(t) * float(height);
                 detail = TexLog2(max(abs(ds), abs(dt)));
+#endif
             } else if (kLodMode == 2) {
+#if defined(GE_EXACT)
+                if ((tri.xf.w & kTriZeroArea) != 0) {
+                    detail = kNanDetail;
+                } else {
+                    precise float x = 2.0 * ExactClipW(tri, QuadOrigin(tri, pixel));
+                    x = x * pc.lod_slope;
+                    detail = TexLog2(x);
+                }
+#else
                 detail = TexLog2(2.0 * (1.0 / gl_FragCoord.w) * pc.lod_slope);
+#endif
             } else {
                 detail = 0;
             }
@@ -507,13 +768,37 @@ void main() {
     }
 
     if (kSecondary) {
+#if defined(GE_EXACT)
+        if ((flags & kTriFlatColor1) != 0) {
+            prim.rgb += FromRGBA(tri.col1.z).rgb;
+        } else if (zero_area) {
+            prim.rgb += ivec3(kIntMin);
+        } else {
+            const ivec4 c0 = FromRGBA(tri.col1.x);
+            const ivec4 c1 = FromRGBA(tri.col1.y);
+            const ivec4 c2 = FromRGBA(tri.col1.z);
+            for (int i = 0; i < 3; ++i)
+                prim[i] += RoundToInt(InterpolateF(vec3(c0[i], c1[i], c2[i]), fw, wsum));
+        }
+#else
         prim.rgb += ivec3(RoundToInt(v_color1.r * 255.0), RoundToInt(v_color1.g * 255.0),
                           RoundToInt(v_color1.b * 255.0));
+#endif
     }
     prim = clamp(prim, 0, 255);
 
+#if defined(GE_EXACT)
+    // After the texturing, so that every pixel of a quad computed its
+    // derivatives.
+    if (!covered) discard;
+#endif
+
     if (kDepthRange) {
+#if defined(GE_EXACT)
+        const int z = ez;
+#else
         const int z = RoundToInt(gl_FragCoord.z * 65535.0);
+#endif
         if (z < int(pc.depth_range & 0xFFFFu) || z > int(pc.depth_range >> 16)) discard;
     }
 
@@ -523,7 +808,16 @@ void main() {
     }
 
     if (kFog) {
+#if defined(GE_EXACT)
+        int fog = 255;
+        if ((flags & kTriFlatFog) != 0) {
+            fog = ClampFogDepth(tri.fog.z);
+        } else if ((flags & kTriNoFog) == 0) {
+            fog = zero_area ? 0 : ClampFogDepth(InterpolateF(tri.fog.xyz, fw, wsum));
+        }
+#else
         const int fog = ClampFogDepth(v_fog);
+#endif
         const ivec3 fc = FromRGBA(pc.fog_color).rgb;
         prim.rgb = (prim.rgb * fog + fc * (255 - fog) + 255) / 256;
     }

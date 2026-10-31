@@ -70,12 +70,28 @@ bool PipelineCache::Init(VulkanContext *ctx, DstRead dst_read,
     } else if (!CreateModule(dev, kGeFragCopySpv, std::size(kGeFragCopySpv), &frag_dst_, error)) {
         return false;
     }
+    // F15b: the GE_EXACT builds (triangles interpolated as softgpu).
+    if (!CreateModule(dev, kGeFragExactSpv, std::size(kGeFragExactSpv), &frag_exact_, error))
+        return false;
+    if (input) {
+        if (!CreateModule(dev, kGeFragExactInputSpv, std::size(kGeFragExactInputSpv),
+                          &frag_exact_dst_, error))
+            return false;
+    } else if (!CreateModule(dev, kGeFragExactCopySpv, std::size(kGeFragExactCopySpv),
+                             &frag_exact_dst_, error)) {
+        return false;
+    }
     ctx->SetName(VK_OBJECT_TYPE_SHADER_MODULE, vert_, "ge.vert");
     ctx->SetName(VK_OBJECT_TYPE_SHADER_MODULE, frag_, "ge.frag");
     ctx->SetName(VK_OBJECT_TYPE_SHADER_MODULE, frag_dst_,
                  input ? "ge.frag (input attachment)" : "ge.frag (copy)");
+    ctx->SetName(VK_OBJECT_TYPE_SHADER_MODULE, frag_exact_, "ge.frag (exact)");
+    ctx->SetName(VK_OBJECT_TYPE_SHADER_MODULE, frag_exact_dst_,
+                 input ? "ge.frag (exact, input attachment)" : "ge.frag (exact, copy)");
 
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+    // Set 0: the texture (two views), the CLUT and, for the exact builds, the
+    // batch's triangles (GpuTriangle).
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[0].descriptorCount = 1;
@@ -86,6 +102,10 @@ bool PipelineCache::Init(VulkanContext *ctx, DstRead dst_read,
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo dl{};
     dl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     dl.bindingCount = static_cast<std::uint32_t>(bindings.size());
@@ -243,6 +263,8 @@ void PipelineCache::Destroy() {
     if (dst_set_layout_) vkDestroyDescriptorSetLayout(dev, dst_set_layout_, nullptr);
     if (frag_) vkDestroyShaderModule(dev, frag_, nullptr);
     if (frag_dst_) vkDestroyShaderModule(dev, frag_dst_, nullptr);
+    if (frag_exact_) vkDestroyShaderModule(dev, frag_exact_, nullptr);
+    if (frag_exact_dst_) vkDestroyShaderModule(dev, frag_exact_dst_, nullptr);
     if (vert_) vkDestroyShaderModule(dev, vert_, nullptr);
     cache_ = VK_NULL_HANDLE;
     render_pass_ = VK_NULL_HANDLE;
@@ -252,6 +274,8 @@ void PipelineCache::Destroy() {
     dst_set_layout_ = VK_NULL_HANDLE;
     frag_ = VK_NULL_HANDLE;
     frag_dst_ = VK_NULL_HANDLE;
+    frag_exact_ = VK_NULL_HANDLE;
+    frag_exact_dst_ = VK_NULL_HANDLE;
     vert_ = VK_NULL_HANDLE;
     ctx_ = nullptr;
 }
@@ -283,7 +307,11 @@ VkPipeline PipelineCache::Get(const PipelineKey &key, std::string *error) {
     stages[0].pName = "main";
     stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = key.read_dst ? frag_dst_ : frag_;
+    if (key.exact) {
+        stages[1].module = key.read_dst ? frag_exact_dst_ : frag_exact_;
+    } else {
+        stages[1].module = key.read_dst ? frag_dst_ : frag_;
+    }
     stages[1].pName = "main";
     stages[1].pSpecializationInfo = &spec;
 

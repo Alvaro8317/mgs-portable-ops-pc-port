@@ -465,6 +465,7 @@ void Ge::ExecuteLoadClut() {
     const std::uint32_t addr = state_.ClutAddress();
     std::uint32_t bytes = static_cast<std::uint32_t>(state_.ClutLoadBlocks() & 0x3F) * 32;
     if (bytes > 1024) bytes = 1024;
+    if (bytes != 0) assembler_.backend().SyncMemory(addr, bytes, false);
     if (mem_.IsValidRange(addr, 1)) {
         const std::uint32_t valid = mem_.ClampValidSize(addr, bytes);
         std::memcpy(clut_.data(), mem_.Translate(addr, valid), valid);
@@ -500,6 +501,16 @@ void Ge::ExecuteBlockTransfer(RunResult *result) {
     if ((src_base & 0x04800000) == 0x04800000) src_base &= ~0x00800000u;
     if ((dst_base & 0x04800000) == 0x04800000) dst_base &= ~0x00800000u;
     const std::uint32_t row_bytes = width * bpp;
+    if (row_bytes != 0 && height != 0) {
+        // The rectangles' spans, first byte to last (a renderer that keeps
+        // framebuffers on the GPU reads them back first, F15b).
+        const std::uint32_t src_first = src_base + (src_y * src_stride + src_x) * bpp;
+        const std::uint32_t dst_first = dst_base + (dst_y * dst_stride + dst_x) * bpp;
+        const std::uint32_t src_span = ((height - 1) * src_stride) * bpp + row_bytes;
+        const std::uint32_t dst_span = ((height - 1) * dst_stride) * bpp + row_bytes;
+        assembler_.backend().SyncMemory(src_first, src_span, false);
+        assembler_.backend().SyncMemory(dst_first, dst_span, true);
+    }
     for (std::uint32_t y = 0; y < height; ++y) {
         std::uint32_t src = src_base + ((y + src_y) * src_stride + src_x) * bpp;
         std::uint32_t dst = dst_base + ((y + dst_y) * dst_stride + dst_x) * bpp;

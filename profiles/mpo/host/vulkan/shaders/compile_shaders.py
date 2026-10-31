@@ -27,12 +27,16 @@ import tempfile
 
 # (source, symbol, preprocessor defines). ge.frag is built three times: with
 # no destination reads, reading the destination as an input attachment and
-# reading it from a sampled copy of the target (F15a).
+# reading it from a sampled copy of the target (F15a); and the three again
+# with GE_EXACT, for triangles interpolated as softgpu does (F15b).
 SHADERS = (
     ('ge.vert', 'kGeVertSpv', ()),
     ('ge.frag', 'kGeFragSpv', ()),
     ('ge.frag', 'kGeFragInputSpv', ('GE_DST_INPUT',)),
     ('ge.frag', 'kGeFragCopySpv', ('GE_DST_COPY',)),
+    ('ge.frag', 'kGeFragExactSpv', ('GE_EXACT',)),
+    ('ge.frag', 'kGeFragExactInputSpv', ('GE_EXACT', 'GE_DST_INPUT')),
+    ('ge.frag', 'kGeFragExactCopySpv', ('GE_EXACT', 'GE_DST_COPY')),
 )
 TARGET_ENV = 'vulkan1.2'
 OUTPUT = 'ge_shaders_spv.inc'

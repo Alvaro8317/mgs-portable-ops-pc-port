@@ -77,6 +77,7 @@ public:
     // Sends the primitives to `backend` instead of the software rasterizer
     // (nullptr restores it). The backend must outlive its use here.
     void SetBackend(DrawBackend *backend) { backend_ = backend ? backend : &soft_; }
+    [[nodiscard]] DrawBackend &backend() const { return *backend_; }
 
     // Submits `count` vertices of `prim` (PRIM command). `vertex_addr` and
     // `index_addr` are absolute PSP addresses. Returns the bytes of vertex data

@@ -86,6 +86,7 @@ struct DeviceCaps {
     bool sync_validation_active = false;
     bool debug_utils = false;
     VkDeviceSize min_uniform_buffer_offset_alignment = 256;
+    VkDeviceSize min_storage_buffer_offset_alignment = 256;
     std::uint32_t max_image_dimension_2d = 4096;
     std::uint32_t max_viewport_dimension = 4096; // min of the two maxViewportDimensions
     float viewport_bounds_min = -8192.0f;
