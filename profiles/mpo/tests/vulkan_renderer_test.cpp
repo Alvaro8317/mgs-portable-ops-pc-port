@@ -102,11 +102,11 @@ struct Scene {
     bool depth = false;
     // Has draws that read the destination (shader blending, logic ops,
     // masks): runs with every destination-read method (the four-format
-    // scenes only in 5551, MPO's format, and 8888; the others with the
-    // default method, to keep the test short under ASan).
+    // scenes only in 5551, MPO's format; the others with the default
+    // method, to keep the test under the CI's 300 s with ASan, F15b).
     bool reads_dst = false;
     // Has blends the fixed-function fast path takes: also runs with
-    // MPO_VK_BLEND=shader.
+    // MPO_VK_BLEND=shader (the blend matrix only in 5551).
     bool fixed_fast_path = false;
     // On lavapipe (strict) the scene must be identical. Off for scenes whose
     // perspective interpolation lavapipe rounds differently from softgpu on
@@ -860,8 +860,8 @@ struct BlendCase {
 Scene BlendMatrix(int fmt) {
     Scene s;
     s.name = std::string("blend matrix ") + FormatName(fmt);
-    s.reads_dst = fmt == 1 || fmt == 3;
-    s.fixed_fast_path = true;
+    s.reads_dst = fmt == 1;
+    s.fixed_fast_path = fmt == 1;
     s.fb_format = fmt;
     s.raw = true;
     s.list = Setup2d(fmt);
@@ -943,7 +943,7 @@ Scene BlendMatrix(int fmt) {
 Scene LogicOps(int fmt) {
     Scene s;
     s.name = std::string("logic ops ") + FormatName(fmt);
-    s.reads_dst = fmt == 1 || fmt == 3;
+    s.reads_dst = fmt == 1;
     s.fb_format = fmt;
     s.raw = true;
     s.list = Setup2d(fmt);
@@ -977,7 +977,7 @@ Scene LogicOps(int fmt) {
 Scene WriteMasks(int fmt) {
     Scene s;
     s.name = std::string("write masks ") + FormatName(fmt);
-    s.reads_dst = fmt == 1 || fmt == 3;
+    s.reads_dst = fmt == 1;
     s.fb_format = fmt;
     s.raw = true;
     s.list = Setup2d(fmt);
