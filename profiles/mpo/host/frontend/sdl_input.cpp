@@ -13,6 +13,14 @@ static_assert(scancode::kA == SDL_SCANCODE_A && scancode::kZ == SDL_SCANCODE_Z);
 static_assert(scancode::kI == SDL_SCANCODE_I && scancode::kL == SDL_SCANCODE_L);
 static_assert(scancode::kReturn == SDL_SCANCODE_RETURN && scancode::kSpace == SDL_SCANCODE_SPACE);
 static_assert(scancode::kUp == SDL_SCANCODE_UP && scancode::kRight == SDL_SCANCODE_RIGHT);
+static_assert(scancode::kD == SDL_SCANCODE_D && scancode::kE == SDL_SCANCODE_E);
+static_assert(scancode::kEscape == SDL_SCANCODE_ESCAPE && scancode::kTab == SDL_SCANCODE_TAB);
+static_assert(scancode::kLeftCtrl == SDL_SCANCODE_LCTRL &&
+              scancode::kRightCtrl == SDL_SCANCODE_RCTRL);
+static_assert(static_cast<int>(MouseButton::kLeft) == SDL_BUTTON_LEFT);
+static_assert(static_cast<int>(MouseButton::kMiddle) == SDL_BUTTON_MIDDLE);
+static_assert(static_cast<int>(MouseButton::kRight) == SDL_BUTTON_RIGHT);
+static_assert(static_cast<int>(MouseButton::kX2) == SDL_BUTTON_X2);
 static_assert(kPadButtonCount == SDL_GAMEPAD_BUTTON_COUNT);
 static_assert(static_cast<int>(PadButton::kSouth) == SDL_GAMEPAD_BUTTON_SOUTH);
 static_assert(static_cast<int>(PadButton::kBack) == SDL_GAMEPAD_BUTTON_BACK);
@@ -21,6 +29,30 @@ static_assert(static_cast<int>(PadButton::kDpadRight) == SDL_GAMEPAD_BUTTON_DPAD
 static_assert(kPadAxisCount == SDL_GAMEPAD_AXIS_COUNT);
 static_assert(static_cast<int>(PadAxis::kLeftY) == SDL_GAMEPAD_AXIS_LEFTY);
 static_assert(static_cast<int>(PadAxis::kRightTrigger) == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+
+const char *MouseButtonName(int button) {
+    switch (button) {
+    case SDL_BUTTON_LEFT:
+        return "left";
+    case SDL_BUTTON_MIDDLE:
+        return "middle";
+    case SDL_BUTTON_RIGHT:
+        return "right";
+    case SDL_BUTTON_X1:
+        return "x1";
+    case SDL_BUTTON_X2:
+        return "x2";
+    default:
+        return "?";
+    }
+}
+
+int MouseButtonFromName(std::string_view name) {
+    for (int button = SDL_BUTTON_LEFT; button <= SDL_BUTTON_X2; ++button) {
+        if (name == MouseButtonName(button)) return button;
+    }
+    return 0;
+}
 
 float AxisValueFromSdl(Sint16 value) {
     if (value < 0) return static_cast<float>(value) / 32768.0f;
@@ -51,6 +83,21 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
         if (observer_) {
             const char *name = SDL_GetScancodeName(event.key.scancode);
             Note(std::string("key ") + (name && *name ? name : "?") + (down ? " down" : " up"));
+        }
+        return true;
+    }
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP: {
+        // Taps on a touch screen (Steam Deck) also arrive as mouse clicks;
+        // they are not the player's mouse.
+        if (event.button.which == SDL_TOUCH_MOUSEID) return false;
+        const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+        if (event.button.button < kMouseButtonCount) {
+            translator_->OnMouseButton(static_cast<MouseButton>(event.button.button), down);
+        }
+        if (observer_) {
+            Note("mouse " + std::string(MouseButtonName(event.button.button)) +
+                 (down ? " down" : " up"));
         }
         return true;
     }
@@ -107,8 +154,9 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
         return true;
     }
     case SDL_EVENT_WINDOW_FOCUS_LOST:
-        // Keys released while unfocused never arrive.
+        // Keys and buttons released while unfocused never arrive.
         translator_->ReleaseKeyboard();
+        translator_->ReleaseMouse();
         Note("focus lost");
         return true;
     default:

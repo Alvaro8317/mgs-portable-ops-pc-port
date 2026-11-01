@@ -3,7 +3,8 @@
 // - Core/ControlMapper.cpp: MapAxisValue, ConvertAnalogStick and the way
 //   virtual axis keys add up (UpdatePSPState: sum, clamp to 0..1, max - min);
 // - Core/HLE/sceCtrl.cpp: __CtrlSetAnalogX/Y scaling;
-// - Core/KeyMapDefaults.cpp: defaultQwertyKeyboardKeyMap, defaultXInputKeyMap.
+// - Core/KeyMapDefaults.cpp: defaultXInputKeyMap (the keyboard default was
+//   defaultQwertyKeyboardKeyMap until F22, which chose a PC layout).
 
 #include "input.h"
 
@@ -57,26 +58,29 @@ InputMapping InputMapping::Default() {
     using ctrl::kAxisY;
     using ctrl::kStickLeft;
     InputMapping m;
-    // defaultQwertyKeyboardKeyMap. PPSSPP's I/K are AXIS_Y_MAX/MIN with Y up;
-    // here Y grows downwards, so I is -1.
+    // The PC layout (F22). The menus move with the d-pad, not the stick
+    // (F19), so the arrows stay on the d-pad. Y grows downwards: W is -1.
     m.keys = {
-        {scancode::kA, Target::Button(ctrl::kSquare)},
-        {scancode::kS, Target::Button(ctrl::kTriangle)},
-        {scancode::kX, Target::Button(ctrl::kCircle)},
-        {scancode::kZ, Target::Button(ctrl::kCross)},
-        {scancode::kQ, Target::Button(ctrl::kLTrigger)},
-        {scancode::kW, Target::Button(ctrl::kRTrigger)},
-        {scancode::kSpace, Target::Button(ctrl::kStart)},
-        {scancode::kV, Target::Button(ctrl::kSelect)},
-        {scancode::kReturn, Target::Button(ctrl::kSelect)},
+        {scancode::kW, Target::Analog(kStickLeft, kAxisY, -1)},
+        {scancode::kS, Target::Analog(kStickLeft, kAxisY, +1)},
+        {scancode::kA, Target::Analog(kStickLeft, kAxisX, -1)},
+        {scancode::kD, Target::Analog(kStickLeft, kAxisX, +1)},
         {scancode::kUp, Target::Button(ctrl::kUp)},
         {scancode::kDown, Target::Button(ctrl::kDown)},
         {scancode::kLeft, Target::Button(ctrl::kLeft)},
         {scancode::kRight, Target::Button(ctrl::kRight)},
-        {scancode::kI, Target::Analog(kStickLeft, kAxisY, -1)},
-        {scancode::kK, Target::Analog(kStickLeft, kAxisY, +1)},
-        {scancode::kJ, Target::Analog(kStickLeft, kAxisX, -1)},
-        {scancode::kL, Target::Analog(kStickLeft, kAxisX, +1)},
+        {scancode::kSpace, Target::Button(ctrl::kCross)},
+        {scancode::kLeftCtrl, Target::Button(ctrl::kTriangle)},
+        {scancode::kRightCtrl, Target::Button(ctrl::kTriangle)},
+        {scancode::kQ, Target::Button(ctrl::kLTrigger)},
+        {scancode::kE, Target::Button(ctrl::kRTrigger)},
+        {scancode::kEscape, Target::Button(ctrl::kStart)},
+        {scancode::kReturn, Target::Button(ctrl::kStart)},
+        {scancode::kTab, Target::Button(ctrl::kSelect)},
+    };
+    m.mouse_buttons = {
+        {MouseButton::kRight, Target::Button(ctrl::kCircle)},
+        {MouseButton::kLeft, Target::Button(ctrl::kSquare)},
     };
     // defaultXInputKeyMap (positional: south = A/cross).
     m.pad_buttons = {
@@ -115,6 +119,11 @@ void InputTranslator::OnKey(Scancode key, bool down) {
     if (key < kScancodeCount) keys_down_.set(key, down);
 }
 
+void InputTranslator::OnMouseButton(MouseButton button, bool down) {
+    const auto index = static_cast<std::size_t>(button);
+    if (index < mouse_down_.size()) mouse_down_.set(index, down);
+}
+
 void InputTranslator::OnPadButton(PadButton button, bool down) {
     const auto index = static_cast<std::size_t>(button);
     if (index < pad_down_.size()) pad_down_.set(index, down);
@@ -129,6 +138,10 @@ void InputTranslator::OnPadAxis(PadAxis axis, float value) {
 
 void InputTranslator::ReleaseKeyboard() {
     keys_down_.reset();
+}
+
+void InputTranslator::ReleaseMouse() {
+    mouse_down_.reset();
 }
 
 void InputTranslator::ReleasePad() {
@@ -155,6 +168,10 @@ SceCtrlData InputTranslator::Sample(std::uint32_t timestamp) const {
 
     for (const KeyBinding &b : mapping_.keys) {
         if (b.key < kScancodeCount && keys_down_.test(b.key)) apply(b.target, 1.0f, false);
+    }
+    for (const MouseButtonBinding &b : mapping_.mouse_buttons) {
+        const auto index = static_cast<std::size_t>(b.button);
+        if (index < mouse_down_.size() && mouse_down_.test(index)) apply(b.target, 1.0f, false);
     }
     for (const PadButtonBinding &b : mapping_.pad_buttons) {
         const auto index = static_cast<std::size_t>(b.button);

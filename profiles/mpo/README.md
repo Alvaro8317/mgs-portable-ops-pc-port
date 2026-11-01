@@ -8,6 +8,42 @@ Estado: **F03**. Están el instalador (`mpo --install`), que también descifra e
 tests de disco y de descifrado con datos sintéticos, y las herramientas de análisis en Ghidra
 (`tools/ghidra/`). Los resultados están en `docs/analysis/mgp_main.md`.
 
+## Instalar y jugar sin conocimientos técnicos (F22)
+
+`scripts/setup.py` hace todo el camino, desde el ISO del jugador hasta el juego nativo, en su
+máquina. El proyecto nunca distribuye el código del juego, ni traducido ni compilado (`CLAUDE.md`
+§1). Es lo que va a correr el launcher.
+
+```bash
+python3 -I profiles/mpo/scripts/setup.py install --iso ULUS-10202.iso   # ~22 min la primera vez (F22)
+python3 -I profiles/mpo/scripts/setup.py play                           # ya se puede jugar
+python3 -I profiles/mpo/scripts/setup.py stages --low-priority          # las etapas, en segundo plano
+python3 -I profiles/mpo/scripts/setup.py status --json
+```
+
+- `install`:
+  1. compila `mpo` y `psp_recomp`;
+  2. valida y descifra el ISO;
+  3. genera el C++ de `mgp_main`, de los módulos y de las etapas;
+  4. compila `mpo_boot`.
+
+  Todo se reanuda: volver a correrlo solo hace lo que falta.
+- **Sin Ghidra**: los hints del análisis (direcciones de funciones, rangos de código y tablas de
+  saltos, sin bytes del juego) están versionados en `config/recomp/<corpus>.hints.txt`. Con ellos,
+  `generate.py` produce el mismo C++ byte a byte que con el export de Ghidra (`--hints-from`,
+  por defecto `auto`). Para regenerarlos desde Ghidra:
+  `generate.py --hints-from ghidra --update-profile-hints`.
+- `stages` compila las etapas en el orden de `config/build_order.toml` y mueve cada librería ya
+  terminada a `<data>/overlays`. Un `mpo_boot` que ya esté corriendo la encuentra la próxima vez
+  que el juego carga esa etapa; mientras tanto, la etapa corre en el intérprete. Borra los objetos
+  de cada etapa instalada, pero el C++ se queda, porque CMake lo vuelve a buscar en cada build.
+- `<data>` es `%LOCALAPPDATA%\mpo-pc-port\install` en Windows y
+  `$XDG_DATA_HOME/mpo-pc-port/install` en Linux. Tiene el juego descifrado, el C++ generado y el
+  build, así que no se comparte.
+- Las fuentes del firmware (`ltn0.pgf`, `jpn0.pgf`) se buscan en `--fonts`, en `flash0/font` junto
+  al ISO y en una instalación de PPSSPP, y se copian a `<data>/flash0/font`. Sin ellas, el juego
+  arranca, pero no se ve el texto "Checking Memory Stick".
+
 ## Instalar la copia del usuario
 
 ```bash

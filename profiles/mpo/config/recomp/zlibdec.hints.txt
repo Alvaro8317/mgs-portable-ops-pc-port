@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Analysis hints for zlibdec (ULUS-10202, disc 1.02): the Ghidra export plus
+# profiles/mpo/config/hints, written by generate.py --hints-from ghidra
+# --update-profile-hints. Addresses only; do not edit by hand.
+
+code 0x08B20000 0x08B2297C
+seed 0x08B20000 ghidra
+seed 0x08B20098 ghidra
+seed 0x08B200F8 ghidra
+seed 0x08B20AF8 ghidra
+seed 0x08B20B18 ghidra
+seed 0x08B20B20 ghidra
+seed 0x08B20B44 ghidra
+seed 0x08B21268 ghidra
+seed 0x08B21270 ghidra
+seed 0x08B216B4 ghidra
+seed 0x08B216BC ghidra
+seed 0x08B216C4 ghidra
+seed 0x08B21718 ghidra
+seed 0x08B21764 ghidra
+seed 0x08B21864 ghidra
+seed 0x08B21888 ghidra
+seed 0x08B21D90 ghidra
+seed 0x08B21DB0 ghidra
+seed 0x08B222EC ghidra
+seed 0x08B22390 ghidra
+seed 0x08B22524 ghidra
+seed 0x08B2255C ghidra
+seed 0x08B226EC ghidra
+seed 0x08B22870 ghidra
+jumptable 0x08B20180 0x08B20188 0x08B20364 0x08B2040C 0x08B20540 0x08B205B4 0x08B206D8 0x08B20838 0x08B208E4 0x08B20914 0x08B20AD0
+jumptable 0x08B20BC8 0x08B20BD0 0x08B20C04 0x08B20E20 0x08B20E9C 0x08B20F74 0x08B20FE0 0x08B21128 0x08B211F0 0x08B21230 0x08B21240
+jumptable 0x08B21910 0x08B21918 0x08B219B0 0x08B21A5C 0x08B21AA4 0x08B21AF4 0x08B21B44 0x08B21B9C 0x08B21BBC 0x08B21C1C 0x08B21C64 0x08B21CB4 0x08B21D04 0x08B21D68 0x08B21D88

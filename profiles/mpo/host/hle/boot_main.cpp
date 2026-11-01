@@ -10,7 +10,7 @@
 //            [--unimplemented stop|continue] [--interpreter 0|1]
 //            [--fiber-stack-mib N] [--preempt-interval N] [--us-per-preempt N]
 //            [--press <buttons>@<ms>[+<ms>]]... [--capture <dir>] [--capture-every N]
-//            [--window 0|1] [--scale N] [--input-map <input.toml>]
+//            [--window 0|1] [--scale N] [--filter nearest|linear] [--input-map <input.toml>]
 //            [--overlays <dir>|none] [--renderer soft|vulkan] [--capture-window 0|1]
 //            [--audio 0|1] [--audio-wav <file>] [--fonts <dir>] [--osk-text <text>]...
 //            [--record-input <file>] [--replay-input <file>] [--replay-end stop|live]
@@ -48,6 +48,10 @@
 //                             --realtime 0). The mapping is --input-map, or
 //                             <config dir>/input.toml when it exists, or the
 //                             defaults (profiles/mpo/config/input.toml).
+//   --filter linear           scales the 480x272 image to the window with
+//                             bilinear filtering instead of the nearest
+//                             pixel (F22). --capture (VRAM) is not affected;
+//                             --capture-window 1 shows the filtered image.
 //
 // F14b: --renderer vulkan draws the GE on the GPU (mpo::vk::GeRenderer)
 // instead of softgpu. After every run of a display list the renderer writes
@@ -447,6 +451,7 @@ int main(int argc, char **argv) {
     std::uint64_t capture_every = 60u;
     bool window = false;
     int window_scale = 2;
+    bool linear_filter = false;
     std::string input_map;
     std::string overlays_dir = MPO_DEFAULT_OVERLAYS;
     bool vulkan = false;
@@ -517,6 +522,10 @@ int main(int argc, char **argv) {
             window = value != "0";
         } else if (option == "--scale") {
             window_scale = std::max(1, std::atoi(value.c_str()));
+        } else if (option == "--filter") {
+            if (value != "nearest" && value != "linear")
+                return fail("--filter takes nearest or linear");
+            linear_filter = value == "linear";
         } else if (option == "--input-map") {
             input_map = value;
         } else if (option == "--overlays") {
@@ -788,6 +797,7 @@ int main(int argc, char **argv) {
             SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
             mpo::frontend::PresenterConfig presenter_config;
             presenter_config.scale = window_scale;
+            presenter_config.linear_filter = linear_filter;
 #if MPO_BOOT_VULKAN
             if (vulkan) {
                 vk_window = mpo::vk::SdlVulkanWindow::Create(presenter_config, &error);
@@ -1071,11 +1081,10 @@ int main(int argc, char **argv) {
                                     format, &target);
                 std::string present_error;
                 const bool ok =
-                    from_target
-                        ? swapchain->Present(target.image, sw, sh, where, /*linear=*/false,
-                                             window_capture, &present_error)
-                        : swapchain->PresentRgba(shown.data(), sw, sh, where, /*linear=*/false,
-                                                 window_capture, &present_error);
+                    from_target ? swapchain->Present(target.image, sw, sh, where, linear_filter,
+                                                     window_capture, &present_error)
+                                : swapchain->PresentRgba(shown.data(), sw, sh, where, linear_filter,
+                                                         window_capture, &present_error);
                 ++(from_target ? presented_targets : presented_uploads);
                 if (!ok && gpu_error.empty()) {
                     gpu_error = "present: " + present_error;

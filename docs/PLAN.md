@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22 desde el 2026-11-01 (ver su ficha). |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 ✅ → F22b → F22c | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22, F22b y F22c desde el 2026-11-01 (ver su ficha). |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -117,7 +117,9 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F20b | AP Scan, red y GPS en el juego | M6 | ✅ hecha (se recluta por AP Scan; Windows y el menú de red de la antena: pendientes) |
 | F21 | Partida completa y estabilidad | M6 | 🟨 hecha en parte (las 92 etapas compiladas y tramos con saves; el recorrido pasa a F21b) |
 | F21b | Recorrido completo (Linux y Windows) | M6 | ⬜ pendiente (en paralelo con F22) |
-| F22 | Empaquetado y release 0.1 | M6 | ⬜ pendiente |
+| F22 | Distribución: compilar en la máquina del jugador | M6 | ✅ hecha (modelo decidido, `setup.py` de punta a punta en Linux; el resto se partió en F22b y F22c) |
+| F22b | Toolchain portátil, launcher y paquetes | M6 | ⬜ pendiente |
+| F22c | README, aviso legal e instalaciones limpias | M6 | ⬜ pendiente |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
 Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se explica en la nota de sesión).
@@ -1416,7 +1418,7 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - **Trampa**: cambiar un header del framework recompila las 92 etapas (unas 24 h de CPU); para
     depurar el runtime, otro directorio de build.
 
-### F22 — Empaquetado y release 0.1
+### F22 — Distribución: compilar en la máquina del jugador
 
 - **Objetivo**: que alguien sin conocimientos técnicos pueda instalarlo y jugarlo.
 - **Requisitos**: F21 (F21b, el recorrido, corre en paralelo).
@@ -1459,8 +1461,56 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Linux: AppImage o Flatpak. Windows: ZIP.
   - CI que publique solo el código y el runtime, nunca nada del juego.
   - `README.md` para el usuario, smoke test manual y aviso legal.
-- **Criterios de hecho**: una instalación limpia en Windows y Linux (y Steam Deck si se puede) llega a
-  jugar siguiendo solo el README. **M6 cerrado.**
+- **Criterios de hecho** (redefinidos al partirla, el 2026-11-01): el modelo de distribución está
+  decidido, y en Linux `setup.py install` lleva de un ISO a un `mpo_boot` que juega, sin Ghidra y
+  sin la carpeta `analysis/`. La instalación limpia que cierra M6 pasa a F22c.
+- **Notas (cierre de F22)**: ver `docs/sessions/F22.md` y `docs/analysis/distribution.md`.
+  - **Decidido por el usuario**: un launcher que compila en la máquina del jugador (`CLAUDE.md` §9,
+    decisión 10) y el mapeo de PC (decisión 11, hecho).
+  - `profiles/mpo/scripts/setup.py` (`install`, `stages`, `play`, `status`) hace el camino entero
+    sin Ghidra: los hints van versionados en `profiles/mpo/config/recomp/`.
+  - Las etapas se compilan en segundo plano y el juego las toma al cargarlas (`OverlayManager`
+    vuelve a mirar la carpeta).
+  - `mpo_boot --filter linear` (el filtrado bilineal de la ventana).
+  - **Se partió**: el toolchain portátil, el launcher, los paquetes y la CI de release pasan a F22b;
+    el README, el aviso legal y las instalaciones limpias, a F22c.
+
+### F22b — Toolchain portátil, launcher y paquetes
+
+- **Objetivo**: que el jugador no tenga que instalar compiladores ni saber qué es CMake.
+- **Requisitos**: F22. Para probar en Windows y en Steam Deck hace falta el usuario.
+- **Tareas** (el diseño y las opciones están en `docs/analysis/distribution.md` §3 y §4):
+  - **Windows**: compilar el proyecto con llvm-mingw (nunca se probó) y el juego entero en Windows
+    (tampoco). Medir el límite de 65 535 exports de `mpo_boot`. Que el launcher baje llvm-mingw,
+    CMake, Ninja y Python embebible con su SHA-256 fijado. Resolver FFmpeg en Windows (prebuilt
+    LGPL desde la CI, o el `sh` de un MSYS2 portátil).
+  - **Linux y Steam Deck**: un Flatpak con `org.freedesktop.Sdk` como runtime, para compilar dentro
+    del sandbox. Verificar qué trae el SDK (los [?] del documento).
+  - **El launcher**: elegir el ISO y las fuentes, el progreso de `setup.py install`, el botón
+    Jugar, la compilación de las etapas en segundo plano y las acciones de saves (F18c). Decidir
+    entre Python con Tkinter (PyInstaller) y C++ con SDL3 y Dear ImGui.
+  - **La CI de release**: que publique solo el código, el launcher y lo que no es del juego. Un
+    test que falle si un artefacto trae algo de `game/`, `analysis/` o `generated/`.
+  - Que `setup.py play` decida `--unimplemented` para la release (ver el documento, §5).
+- **Criterios de hecho**: en una máquina Windows y en una Linux sin herramientas de desarrollo, el
+  launcher lleva del ISO al juego sin pasos manuales.
+
+### F22c — README, aviso legal e instalaciones limpias
+
+- **Objetivo**: que alguien sin conocimientos técnicos pueda instalarlo y jugarlo siguiendo solo
+  el README. **Cierra M6**, junto con F21b.
+- **Requisitos**: F22b.
+- **Tareas**:
+  - `README.md` en la raíz, para el jugador: qué hace falta (el ISO de `ULUS-10202`, las fuentes
+    del firmware, espacio en disco y tiempo de la primera compilación), el launcher, los
+    controles (el mapeo de F22), el mando, cómo pasar los saves (`mpo --import-save` y
+    `--export-save`, F18c) y qué hacer si algo falla.
+  - El aviso legal: no se distribuye nada del juego, el usuario pone su copia.
+  - El smoke test manual de `CLAUDE.md` §7, con los saves hasheados antes y después.
+  - Una instalación limpia en Windows y en Linux (y Steam Deck si se puede), siguiendo solo el
+    README.
+- **Criterios de hecho**: las instalaciones limpias llegan a jugar siguiendo solo el README.
+  **M6 cerrado** (con F21b).
 
 ---
 

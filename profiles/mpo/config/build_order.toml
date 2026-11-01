@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The order in which setup.py compiles the stage overlays (F22). The game can
+# be played as soon as mgp_main is built: a stage whose library is not ready
+# yet runs on the interpreter (slower, but playable: st01t1 was played that
+# way in F19), and the library is picked up the next time the game loads that
+# stage. So the stages the player meets first go first.
+#
+# - first: the boot, the title and the start of the story in the order the
+#   game loads them (F19 [V]), then the mission map. Stages that share a PRX
+#   share a library (st01t1 = st01t2...), so listing one is enough.
+# - The rest follow in natural order of their names (st01 < st02 < st10),
+#   which roughly follows the missions; the menus and the network stages
+#   (n01, ntmenu2...) are not needed to finish the game and go last.
+
+first = [
+    "init",
+    "r_main01",
+    "title",
+    "r_main02",
+    "st04vo",
+    "flashdemo",
+    "st04m1",
+    "st01t1",
+    "briefing",
+    "st02",
+]
+
+# Name prefixes compiled after everything else.
+last_prefixes = ["n", "gs", "cyberval", "addscvr", "apscan", "gpstest", "r_net"]

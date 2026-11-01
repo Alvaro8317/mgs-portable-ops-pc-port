@@ -91,11 +91,18 @@ void OverlayManager::add_corpus(const OverlayModuleInfo &info, OverlayInstallFun
 }
 
 std::size_t OverlayManager::load_libraries(const std::filesystem::path &directory) {
+    library_dir_ = directory;
+    return scan_libraries(directory, /*rescan=*/false);
+}
+
+std::size_t OverlayManager::scan_libraries(const std::filesystem::path &directory, bool rescan) {
     std::error_code ec;
     std::filesystem::directory_iterator entries(directory, ec);
     if (ec) {
-        std::fprintf(stderr, "mpo: no overlay libraries in %s (%s)\n", directory.string().c_str(),
-                     ec.message().c_str());
+        if (!rescan) {
+            std::fprintf(stderr, "mpo: no overlay libraries in %s (%s)\n",
+                         directory.string().c_str(), ec.message().c_str());
+        }
         return 0u;
     }
     std::vector<std::filesystem::path> paths;
@@ -107,6 +114,7 @@ std::size_t OverlayManager::load_libraries(const std::filesystem::path &director
     std::size_t added = 0;
     for (const std::filesystem::path &path : paths) {
         const std::string key = std::filesystem::absolute(path, ec).string();
+        if (!library_keys_.insert(key).second) continue;
         auto found = loaded_libraries().find(key);
         if (found == loaded_libraries().end()) {
             void *handle = open_library(path);
@@ -164,6 +172,18 @@ bool OverlayManager::on_module_loaded(kernel::Uid uid, const std::string &module
     // mgp_main and the resident modules have their corpus linked in.
     if (system_.runtime().has_function(entry)) return false;
     const std::string sha256 = psprecomp::sha256_bytes(file);
+    const bool known = std::any_of(corpora_.begin(), corpora_.end(),
+                                   [&](const OverlayCorpus &c) { return c.prx_sha256 == sha256; });
+    if (!known && !library_dir_.empty()) {
+        // It may have been compiled since the game started.
+        const std::size_t added = scan_libraries(library_dir_, /*rescan=*/true);
+        if (added != 0u) {
+            std::printf("stage overlays: %zu new corpora from %s\n", added,
+                        library_dir_.string().c_str());
+            system_.hle().trace_event("overlay libraries: %zu new in %s", added,
+                                      library_dir_.string().c_str());
+        }
+    }
     const OverlayCorpus *other_base = nullptr;
     for (std::size_t i = 0; i < corpora_.size(); ++i) {
         const OverlayCorpus &corpus = corpora_[i];

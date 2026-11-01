@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Analysis hints for stage_r_main01 (ULUS-10202, disc 1.02): the Ghidra export plus
+# profiles/mpo/config/hints, written by generate.py --hints-from ghidra
+# --update-profile-hints. Addresses only; do not edit by hand.
+
+code 0x08AFB800 0x08AFBD38
+seed 0x08AFB800 ghidra
+seed 0x08AFB86C ghidra
+seed 0x08AFB8A0 ghidra
+seed 0x08AFB8A8 ghidra
+seed 0x08AFB8C8 ghidra
+seed 0x08AFB970 ghidra
+seed 0x08AFBA04 ghidra
+seed 0x08AFBA60 ghidra
+seed 0x08AFBAC4 ghidra

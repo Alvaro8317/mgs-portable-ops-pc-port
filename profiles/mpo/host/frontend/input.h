@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// AnalogConfig and the default mapping are ported from PPSSPP @ v1.20.4
-// (GPL-2.0-or-later): Core/Config.cpp, Core/ControlMapper.cpp and
+// AnalogConfig and the default gamepad mapping are ported from PPSSPP @
+// v1.20.4 (GPL-2.0-or-later): Core/Config.cpp, Core/ControlMapper.cpp and
 // Core/KeyMapDefaults.cpp (see input.cpp).
 //
 // Host input -> PSP controller state. InputTranslator receives abstract
-// events (keyboard scancodes, gamepad buttons and axes), applies a
+// events (keyboard scancodes, mouse buttons, gamepad buttons and axes), applies a
 // configurable InputMapping and produces SceCtrlData. It does not know SDL:
 // SdlInput (sdl_input.h) feeds it from SDL events, and the tests feed it
 // directly. The sceCtrl HLE (F10b) samples it once per vblank and applies
@@ -12,7 +12,8 @@
 //
 // The physical codes reuse SDL3's numbering, so a mapping file can name keys
 // and buttons with SDL's own names: a Scancode is a USB HID keyboard usage
-// (= SDL_Scancode), PadButton = SDL_GamepadButton, PadAxis = SDL_GamepadAxis.
+// (= SDL_Scancode), MouseButton = SDL_BUTTON_*, PadButton = SDL_GamepadButton,
+// PadAxis = SDL_GamepadAxis.
 
 #pragma once
 
@@ -30,8 +31,11 @@ using Scancode = std::uint16_t;
 inline constexpr int kScancodeCount = 512; // SDL_SCANCODE_COUNT
 
 namespace scancode {
-// USB HID keyboard usages (SDL_SCANCODE_*), the ones the default map uses.
+// USB HID keyboard usages (SDL_SCANCODE_*): the ones the default map and the
+// tests use.
 inline constexpr Scancode kA = 4;
+inline constexpr Scancode kD = 7;
+inline constexpr Scancode kE = 8;
 inline constexpr Scancode kI = 12;
 inline constexpr Scancode kJ = 13;
 inline constexpr Scancode kK = 14;
@@ -43,12 +47,26 @@ inline constexpr Scancode kW = 26;
 inline constexpr Scancode kX = 27;
 inline constexpr Scancode kZ = 29;
 inline constexpr Scancode kReturn = 40;
+inline constexpr Scancode kEscape = 41;
+inline constexpr Scancode kTab = 43;
 inline constexpr Scancode kSpace = 44;
 inline constexpr Scancode kRight = 79;
 inline constexpr Scancode kLeft = 80;
 inline constexpr Scancode kDown = 81;
 inline constexpr Scancode kUp = 82;
+inline constexpr Scancode kLeftCtrl = 224;
+inline constexpr Scancode kRightCtrl = 228;
 } // namespace scancode
+
+// SDL_BUTTON_* values (SDL numbers mouse buttons from 1).
+enum class MouseButton : std::uint8_t {
+    kLeft = 1,
+    kMiddle = 2,
+    kRight = 3,
+    kX1 = 4,
+    kX2 = 5,
+};
+inline constexpr int kMouseButtonCount = 6; // 0 is unused
 
 // SDL_GamepadButton values (positional names: south is A on Xbox, cross on
 // PlayStation).
@@ -108,6 +126,12 @@ struct KeyBinding {
     friend bool operator==(const KeyBinding &, const KeyBinding &) = default;
 };
 
+struct MouseButtonBinding {
+    MouseButton button = MouseButton::kLeft;
+    Target target;
+    friend bool operator==(const MouseButtonBinding &, const MouseButtonBinding &) = default;
+};
+
 struct PadButtonBinding {
     PadButton button = PadButton::kSouth;
     Target target;
@@ -137,12 +161,15 @@ struct AnalogConfig {
 
 struct InputMapping {
     std::vector<KeyBinding> keys;
+    std::vector<MouseButtonBinding> mouse_buttons;
     std::vector<PadButtonBinding> pad_buttons;
     std::vector<PadAxisBinding> pad_axes;
     AnalogConfig analog;
 
-    // PPSSPP's defaults: defaultQwertyKeyboardKeyMap for the keyboard and
-    // defaultXInputKeyMap for gamepads, plus the triggers as L/R.
+    // Keyboard and mouse: the PC layout chosen in F22 (WASD for the stick,
+    // the arrows for the d-pad, Space = cross, mouse right/left = circle/square,
+    // Ctrl = triangle, Q/E = L/R, Esc or Enter = start, Tab = select).
+    // Gamepads: PPSSPP's defaultXInputKeyMap, plus the triggers as L/R.
     static InputMapping Default();
     friend bool operator==(const InputMapping &, const InputMapping &) = default;
 };
@@ -162,11 +189,14 @@ public:
 
     // Key repeat must be filtered by the caller (repeats are not new presses).
     void OnKey(Scancode key, bool down);
+    void OnMouseButton(MouseButton button, bool down);
     void OnPadButton(PadButton button, bool down);
     // Sticks: -1..1 (Y down), triggers: 0..1. Values are clamped.
     void OnPadAxis(PadAxis axis, float value);
-    // Everything up and centred (focus lost, gamepad removed).
+    // Everything up and centred (focus lost, gamepad removed). Focus loss
+    // releases the keyboard and the mouse.
     void ReleaseKeyboard();
+    void ReleaseMouse();
     void ReleasePad();
 
     // Current state; the timestamp is the caller's (sceCtrl uses microseconds).
@@ -175,6 +205,7 @@ public:
 private:
     InputMapping mapping_;
     std::bitset<kScancodeCount> keys_down_;
+    std::bitset<kMouseButtonCount> mouse_down_;
     std::bitset<kPadButtonCount> pad_down_;
     std::array<float, kPadAxisCount> pad_axes_{};
 };

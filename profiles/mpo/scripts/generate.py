@@ -13,9 +13,16 @@ Pipeline, all from the user's own files (nothing here is versioned):
      extracted to <game-dir>/disc/ for a module. A stage is
      stage/<s>/<s>.prx plus its stage/<s>/_zar, linked with the <s>.rlc inside
      the _zar against mgp_main (rlc.py link, F04) into <out>/stage_<s>.prx.
-  2. recomp_hints.py: the Ghidra export (F03, run_analysis.sh) plus the
-     hand-written hints in profiles/mpo/config/hints/<module>.txt, if any ->
-     <out>/<module>.hints.txt.
+  2. The analysis hints -> <out>/<module>.hints.txt, from one of two sources
+     (--hints-from):
+     - ghidra: recomp_hints.py on the Ghidra export (F03, run_analysis.sh)
+       plus the hand-written hints in profiles/mpo/config/hints/<module>.txt,
+       if any;
+     - profile: the versioned copy of that result,
+       profiles/mpo/config/recomp/<module>.hints.txt (F22). It holds addresses
+       only, so the player's machine needs neither Ghidra nor the analysis
+       folder. --update-profile-hints refreshes it from a Ghidra run.
+     The default (auto) takes the profile copy when it exists.
   3. psp_recomp <elf> --auto <out>/generated <base> 0x4000
          --hints <out>/<module>.hints.txt --vfpu-executor [--prefix <module>]
      mgp_main is generated for 0x08804000 with no prefix; a module for its
@@ -37,6 +44,7 @@ Usage (paths default to the checkout this script lives in):
   python -I profiles/mpo/scripts/generate.py --psp-recomp build/framework/psprecomp/psp_recomp \\
       [--module mgp_main|sound2|kjfs|zlibdec | --stage <s>] \\
       [--game-dir game] [--analysis-dir analysis] [--out analysis/f07b/mgp_main] \\
+      [--hints-from auto|ghidra|profile] [--update-profile-hints] \\
       [--analysis-export build/profiles/mpo/tools/mpo_analysis_export --coverage] [--check]
 
 The output goes to `--out` (default: profiles/mpo/generated/<module>, ignored
@@ -61,6 +69,7 @@ _MAIN = 'mgp_main'
 _MAIN_LOAD_BASE = '0x08804000'
 _UNIT_SPAN = '0x4000'
 _STAGE_DIR = 'PSP_GAME/USRDIR/stage'
+_PROFILE_HINTS = _PROFILE / 'config' / 'recomp'
 
 
 class GenerateError(Exception):
@@ -126,6 +135,30 @@ def _target(name, game_dir, supported_path, modules_path):
                   f'0x{module["base"]:08X}', name, disc)
       raise GenerateError(f'{supported_path}: no file entry for {module["file"]}')
   raise GenerateError(f'unknown module {name!r} (not mgp_main, not in {modules_path})')
+
+
+def profile_hints_header(name):
+  """The comment block that starts a versioned hints file."""
+  return ('# SPDX-License-Identifier: GPL-3.0-or-later\n'
+          f'# Analysis hints for {name} (ULUS-10202, disc 1.02): the Ghidra export plus\n'
+          '# profiles/mpo/config/hints, written by generate.py --hints-from ghidra\n'
+          '# --update-profile-hints. Addresses only; do not edit by hand.\n\n')
+
+
+def strip_profile_header(data):
+  """Drops the leading comment block, giving back what recomp_hints.py wrote."""
+  lines = data.split(b'\n')
+  start = 0
+  while start < len(lines) and lines[start].startswith(b'#'):
+    start += 1
+  if start and start < len(lines) and lines[start] == b'':
+    start += 1
+  return b'\n'.join(lines[start:])
+
+
+def profile_hints_path(name):
+  """Returns the versioned hints file of corpus `name` (it may not exist)."""
+  return _PROFILE_HINTS / f'{name}.hints.txt'
 
 
 def stage_base(stage, stages_path):
@@ -245,13 +278,25 @@ def generate(args):
     inputs = {elf_label: elf_sha256}
   extra_hints = _PROFILE / 'config' / 'hints' / f'{name}.txt'
   recomp_json = analysis_dir / 'out' / name / f'{name}.recomp.json'
+  profile_hints = profile_hints_path(name)
+  hints_from = args.hints_from
+  if hints_from == 'auto':
+    hints_from = 'profile' if profile_hints.is_file() else 'ghidra'
+  if args.update_profile_hints and hints_from != 'ghidra':
+    raise GenerateError('--update-profile-hints needs --hints-from ghidra')
+  if args.coverage and hints_from != 'ghidra':
+    raise GenerateError('--coverage needs --hints-from ghidra (it compares with the Ghidra export)')
   ghidra_hint = 'run profiles/mpo/tools/ghidra/run_analysis.sh'
   if args.stage:
     ghidra_hint = (f'MPO_EXTERNAL_BLOCK="mgp_main 08804000 2F7800" '
                    f'profiles/mpo/tools/ghidra/run_analysis.sh {elf} {name} {load_base[2:]}')
-  for path, what in ((elf, 'installed input (run `mpo --install`)'),
-                     (recomp_json, f'Ghidra export ({ghidra_hint})'),
-                     (psp_recomp, 'psp_recomp (build the framework)')):
+  needed = [(elf, 'installed input (run `mpo --install`)'),
+            (psp_recomp, 'psp_recomp (build the framework)')]
+  if hints_from == 'ghidra':
+    needed.append((recomp_json, f'Ghidra export ({ghidra_hint})'))
+  else:
+    needed.append((profile_hints, 'versioned hints (or use --hints-from ghidra)'))
+  for path, what in needed:
     if not path.is_file():
       raise GenerateError(f'missing {what}: {path}')
   actual = _sha256(elf)
@@ -263,9 +308,16 @@ def generate(args):
   hints = out / f'{name}.hints.txt'
   prefix_args = ['--prefix', prefix] if prefix else []
   with open(out / 'generate.log', 'w', encoding='utf-8') as log:
-    extra = ['--extra', extra_hints] if extra_hints.is_file() else []
-    _run([sys.executable, '-I', _PROFILE / 'tools' / 'recomp_hints.py', recomp_json, *extra,
-          '--output', hints], log)
+    if hints_from == 'ghidra':
+      extra = ['--extra', extra_hints] if extra_hints.is_file() else []
+      _run([sys.executable, '-I', _PROFILE / 'tools' / 'recomp_hints.py', recomp_json, *extra,
+            '--output', hints], log)
+      if args.update_profile_hints:
+        _PROFILE_HINTS.mkdir(parents=True, exist_ok=True)
+        profile_hints.write_bytes(profile_hints_header(name).encode() + hints.read_bytes())
+        print(f'generate: updated {profile_hints}', flush=True)
+    else:
+      hints.write_bytes(strip_profile_header(profile_hints.read_bytes()))
     command = [psp_recomp, elf, '--auto', generated, load_base, _UNIT_SPAN,
                '--hints', hints, '--vfpu-executor', *prefix_args]
     summary = _run(command, log)
@@ -280,12 +332,15 @@ def generate(args):
       coverage = coverage_out.splitlines()
 
   report = json.loads((generated / 'auto_codegen_report.json').read_text(encoding='utf-8'))
-  inputs.update({
-      f'analysis/out/{name}/{recomp_json.name}': _sha256(recomp_json),
-      hints.name: _sha256(hints),
-  })
-  if extra_hints.is_file():
-    inputs[f'profiles/mpo/config/hints/{extra_hints.name}'] = _sha256(extra_hints)
+  # The C++ depends only on the executable and the final hints file; the
+  # sources of the hints are recorded for the record.
+  inputs[hints.name] = _sha256(hints)
+  if hints_from == 'ghidra':
+    inputs[f'analysis/out/{name}/{recomp_json.name}'] = _sha256(recomp_json)
+    if extra_hints.is_file():
+      inputs[f'profiles/mpo/config/hints/{extra_hints.name}'] = _sha256(extra_hints)
+  else:
+    inputs[f'profiles/mpo/config/recomp/{profile_hints.name}'] = _sha256(profile_hints)
   if overlay is not None:
     (out / 'overlay.txt').write_text(
         ''.join(f'{key}={value}\n' for key, value in overlay.items()), encoding='utf-8')
@@ -315,6 +370,11 @@ def parse_args(argv):
   parser.add_argument('--game-dir', default=str(_ROOT / 'game'))
   parser.add_argument('--analysis-dir', default=str(_ROOT / 'analysis'))
   parser.add_argument('--out', help='output directory (default: profiles/mpo/generated/<module>)')
+  parser.add_argument('--hints-from', choices=('auto', 'ghidra', 'profile'), default='auto',
+                      help='where the analysis hints come from (default: the versioned copy in '
+                      'profiles/mpo/config/recomp when there is one, else the Ghidra export)')
+  parser.add_argument('--update-profile-hints', action='store_true',
+                      help='with --hints-from ghidra, copy the result to profiles/mpo/config/recomp')
   parser.add_argument('--analysis-export', help='mpo_analysis_export, for --coverage')
   parser.add_argument('--coverage', action='store_true', help='measure the coverage of Ghidra\'s code')
   parser.add_argument('--check', action='store_true',
@@ -339,7 +399,12 @@ def main(argv):
     if previous is not None:
       changed = sorted(name for name in set(previous['generated']) | set(manifest['generated'])
                        if previous['generated'].get(name) != manifest['generated'].get(name))
-      if changed or previous['inputs'] != manifest['inputs']:
+      # The hints may come from another source (Ghidra or the profile copy):
+      # what has to match is the content that psp_recomp reads.
+      def _key_inputs(inputs):
+        return {k: v for k, v in inputs.items()
+                if not k.startswith(('analysis/out/', 'profiles/mpo/config/'))}
+      if changed or _key_inputs(previous['inputs']) != _key_inputs(manifest['inputs']):
         raise GenerateError(f'not reproducible: inputs or {len(changed)} generated files differ '
                             f'({", ".join(changed[:5])})')
       print(f'generate: reproducible, {len(changed)} differences in {len(manifest["generated"])} files')

@@ -188,21 +188,36 @@ void TestKeyboard() {
     std::vector<std::string> notes;
     input.SetObserver([&](std::string_view s) { notes.emplace_back(s); });
 
-    PushKey(SDL_SCANCODE_Z, true);
+    PushKey(SDL_SCANCODE_SPACE, true);
     PushKey(SDL_SCANCODE_LEFT, true);
     PumpInto(&input);
-    ExpectEq(translator.Sample().buttons, ctrl::kCross | ctrl::kLeft, "Z + Left");
-    Expect(std::find(notes.begin(), notes.end(), "key Z down") != notes.end(), "observer note");
+    ExpectEq(translator.Sample().buttons, ctrl::kCross | ctrl::kLeft, "Space + Left");
+    Expect(std::find(notes.begin(), notes.end(), "key Space down") != notes.end(), "observer note");
 
-    PushKey(SDL_SCANCODE_Z, false);
-    PushKey(SDL_SCANCODE_Z, true, /*repeat=*/true); // a repeat is not a press
+    PushKey(SDL_SCANCODE_SPACE, false);
+    PushKey(SDL_SCANCODE_SPACE, true, /*repeat=*/true); // a repeat is not a press
     PumpInto(&input);
     ExpectEq(translator.Sample().buttons, ctrl::kLeft, "repeat ignored");
+
+    // Mouse buttons; clicks synthesized from a touch screen are not.
+    SDL_Event click{};
+    click.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+    click.button.which = 1;
+    click.button.button = SDL_BUTTON_RIGHT;
+    click.button.down = true;
+    Expect(input.HandleEvent(click), "mouse button consumed");
+    ExpectEq(translator.Sample().buttons, ctrl::kLeft | ctrl::kCircle, "right click = circle");
+    Expect(std::find(notes.begin(), notes.end(), "mouse right down") != notes.end(), "mouse note");
+    SDL_Event touch = click;
+    touch.button.which = SDL_TOUCH_MOUSEID;
+    touch.button.button = SDL_BUTTON_LEFT;
+    Expect(!input.HandleEvent(touch), "touch click not consumed");
+    ExpectEq(translator.Sample().buttons, ctrl::kLeft | ctrl::kCircle, "touch click ignored");
 
     SDL_Event focus{};
     focus.type = SDL_EVENT_WINDOW_FOCUS_LOST;
     Expect(input.HandleEvent(focus), "focus lost consumed");
-    ExpectEq(translator.Sample().buttons, 0u, "focus lost releases keys");
+    ExpectEq(translator.Sample().buttons, 0u, "focus lost releases keys and mouse");
 
     SDL_Event other{};
     other.type = SDL_EVENT_MOUSE_MOTION;
@@ -301,6 +316,10 @@ bool SameBindings(const InputMapping &a, const InputMapping &b) {
                         x.target.direction) <
                std::tie(y.key, y.target.buttons, y.target.stick, y.target.axis, y.target.direction);
     };
+    auto mouse_less = [](const MouseButtonBinding &x, const MouseButtonBinding &y) {
+        return std::tie(x.button, x.target.buttons, x.target.direction) <
+               std::tie(y.button, y.target.buttons, y.target.direction);
+    };
     auto button_less = [](const PadButtonBinding &x, const PadButtonBinding &y) {
         return std::tie(x.button, x.target.buttons, x.target.direction) <
                std::tie(y.button, y.target.buttons, y.target.direction);
@@ -310,6 +329,7 @@ bool SameBindings(const InputMapping &a, const InputMapping &b) {
                std::tie(y.axis, y.sign, y.target.buttons, y.target.direction);
     };
     return Sorted(a.keys, key_less) == Sorted(b.keys, key_less) &&
+           Sorted(a.mouse_buttons, mouse_less) == Sorted(b.mouse_buttons, mouse_less) &&
            Sorted(a.pad_buttons, button_less) == Sorted(b.pad_buttons, button_less) &&
            Sorted(a.pad_axes, axis_less) == Sorted(b.pad_axes, axis_less) && a.analog == b.analog;
 }
@@ -352,6 +372,19 @@ void TestMappingFile(const char *checked_in_path) {
     ExpectEq(d.buttons, ctrl::kCross, "K = cross");
     ExpectEq(d.analog[0][0], 0, "Left = analog left");
 
+    Expect(m.mouse_buttons == defaults.mouse_buttons, "mouse defaults kept");
+
+    // A [mouse] section replaces the mouse map.
+    Expect(ParseInputMapping("[mouse]\ncross = [\"middle\", \"x1\"]\n", defaults, &m, &error),
+           "mouse: " + error);
+    ExpectEq(m.mouse_buttons.size(), 2u, "two mouse bindings");
+    Expect(m.keys == defaults.keys, "keyboard defaults kept");
+    InputTranslator mouse(m);
+    mouse.OnMouseButton(MouseButton::kX1, true);
+    ExpectEq(mouse.Sample().buttons, ctrl::kCross, "x1 = cross");
+    mouse.OnMouseButton(MouseButton::kLeft, true);
+    ExpectEq(mouse.Sample().buttons, ctrl::kCross, "left click unbound");
+
     Expect(ParseInputMapping("[gamepad]\nl = [\"leftshoulder\", \"+lefttrigger\"]\n"
                              "analog_up = \"-righty\"\n",
                              defaults, &m, &error),
@@ -370,7 +403,9 @@ void TestMappingFile(const char *checked_in_path) {
         {"[gamepad]\ncross = [\"leftx\"]\n", "needs a direction"},
         {"[gamepad]\ncross = [\"+nostick\"]\n", "unknown axis"},
         {"[gamepad]\ncross = [\"z\"]\n", "unknown button 'z'"},
-        {"[mouse]\n", "unknown section [mouse]"},
+        {"[mouse]\ncross = [\"wheel\"]\n", "unknown button 'wheel'"},
+        {"[mouse]\njump = [\"left\"]\n", "unknown PSP input 'jump'"},
+        {"[touch]\n", "unknown section [touch]"},
         {"keyboard = 1\n", "must be a table"},
         {"[analog]\ndeadzone = 2.0\n", "deadzone"},
         {"[analog]\ncircular = 1\n", "circular"},

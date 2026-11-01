@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // SDL3 events -> InputTranslator. Keyboard keys are bound by scancode (the
-// physical position, so the default map works on AZERTY/QWERTZ too), and
-// every connected gamepad feeds the same PSP controller: buttons add up, and
-// for each axis the last event wins.
+// physical position, so the default map works on AZERTY/QWERTZ too), mouse
+// buttons by number (clicks synthesized from touches are ignored), and every
+// connected gamepad feeds the same PSP controller: buttons add up, and for
+// each axis the last event wins.
 
 #pragma once
 
@@ -31,13 +32,15 @@ public:
     [[nodiscard]] bool ok() const { return initialised_; }
     [[nodiscard]] const std::string &error() const { return error_; }
 
-    // Feeds one event. Returns true when it was keyboard, gamepad or focus
-    // input (consumed here); other events are left to the caller.
+    // Feeds one event. Returns true when it was keyboard, mouse button,
+    // gamepad or focus input (consumed here); other events are left to the
+    // caller.
     bool HandleEvent(const SDL_Event &event);
 
     [[nodiscard]] int gamepad_count() const { return static_cast<int>(gamepads_.size()); }
 
-    // Called with a short description ("key Z down", "pad a down",
+    // Called with a short description ("key Z down", "mouse left down",
+    // "pad a down",
     // "pad axis leftx +0.500", "gamepad added: <name>") of each event it uses.
     using Observer = std::function<void(std::string_view)>;
     void SetObserver(Observer observer) { observer_ = std::move(observer); }
@@ -51,6 +54,11 @@ private:
     std::vector<SDL_Gamepad *> gamepads_;
     Observer observer_;
 };
+
+// Mouse button names of the mapping file: "left", "middle", "right", "x1" and
+// "x2" (SDL_BUTTON_*). MouseButtonFromName returns 0 for an unknown name.
+[[nodiscard]] const char *MouseButtonName(int button);
+[[nodiscard]] int MouseButtonFromName(std::string_view name);
 
 // SDL's 16-bit axis value to -1..1 (like PPSSPP: -32768 -> -1, 32767 -> 1).
 [[nodiscard]] float AxisValueFromSdl(Sint16 value);

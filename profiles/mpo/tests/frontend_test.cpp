@@ -268,52 +268,75 @@ void TestDefaultKeyboard() {
     ExpectEq(d.analog[0][1], 128, "idle ly");
     ExpectEq(d.analog[1][0], 128, "idle rx");
 
-    t.OnKey(scancode::kZ, true);
-    ExpectEq(t.Sample().buttons, ctrl::kCross, "Z = cross");
+    t.OnKey(scancode::kSpace, true);
+    ExpectEq(t.Sample().buttons, ctrl::kCross, "Space = cross");
     t.OnKey(scancode::kUp, true);
-    ExpectEq(t.Sample().buttons, ctrl::kCross | ctrl::kUp, "Z + Up");
-    t.OnKey(scancode::kZ, false);
+    ExpectEq(t.Sample().buttons, ctrl::kCross | ctrl::kUp, "Space + Up");
+    t.OnKey(scancode::kSpace, false);
     t.OnKey(scancode::kUp, false);
     ExpectEq(t.Sample().buttons, 0u, "released");
 
     // Two keys on one button: releasing one keeps it held.
-    t.OnKey(scancode::kV, true);
+    t.OnKey(scancode::kEscape, true);
     t.OnKey(scancode::kReturn, true);
-    t.OnKey(scancode::kV, false);
-    ExpectEq(t.Sample().buttons, ctrl::kSelect, "Return still holds select");
+    t.OnKey(scancode::kEscape, false);
+    ExpectEq(t.Sample().buttons, ctrl::kStart, "Return still holds start");
     t.OnKey(scancode::kReturn, false);
-    ExpectEq(t.Sample().buttons, 0u, "select released");
+    ExpectEq(t.Sample().buttons, 0u, "start released");
 
     const struct {
         Scancode key;
         std::uint32_t bit;
-    } kButtons[] = {{scancode::kA, ctrl::kSquare},   {scancode::kS, ctrl::kTriangle},
-                    {scancode::kX, ctrl::kCircle},   {scancode::kQ, ctrl::kLTrigger},
-                    {scancode::kW, ctrl::kRTrigger}, {scancode::kSpace, ctrl::kStart},
-                    {scancode::kDown, ctrl::kDown},  {scancode::kLeft, ctrl::kLeft},
+    } kButtons[] = {{scancode::kLeftCtrl, ctrl::kTriangle}, {scancode::kRightCtrl, ctrl::kTriangle},
+                    {scancode::kQ, ctrl::kLTrigger},        {scancode::kE, ctrl::kRTrigger},
+                    {scancode::kEscape, ctrl::kStart},      {scancode::kTab, ctrl::kSelect},
+                    {scancode::kDown, ctrl::kDown},         {scancode::kLeft, ctrl::kLeft},
                     {scancode::kRight, ctrl::kRight}};
     for (const auto &b : kButtons) {
         t.OnKey(b.key, true);
         ExpectEq(t.Sample().buttons, b.bit, "key " + std::to_string(b.key));
         t.OnKey(b.key, false);
     }
+    // PPSSPP's old keys are free.
+    for (Scancode key : {scancode::kZ, scancode::kX, scancode::kV, scancode::kI, scancode::kL}) {
+        t.OnKey(key, true);
+        const SceCtrlData idle = t.Sample();
+        Expect(idle.buttons == 0 && idle.analog[0][0] == 128 && idle.analog[0][1] == 128,
+               "key " + std::to_string(key) + " unbound");
+        t.OnKey(key, false);
+    }
 
     // Analog keys: full deflection, opposite keys cancel.
-    t.OnKey(scancode::kL, true);
-    ExpectEq(t.Sample().analog[0][0], 255, "L = right");
-    t.OnKey(scancode::kJ, true);
-    ExpectEq(t.Sample().analog[0][0], 128, "J + L cancel");
-    t.OnKey(scancode::kL, false);
-    ExpectEq(t.Sample().analog[0][0], 0, "J = left");
-    t.OnKey(scancode::kJ, false);
-    t.OnKey(scancode::kI, true);
-    ExpectEq(t.Sample().analog[0][1], 0, "I = up (0)");
-    t.OnKey(scancode::kI, false);
-    t.OnKey(scancode::kK, true);
-    ExpectEq(t.Sample().analog[0][1], 255, "K = down (255)");
+    t.OnKey(scancode::kD, true);
+    ExpectEq(t.Sample().analog[0][0], 255, "D = right");
+    t.OnKey(scancode::kA, true);
+    ExpectEq(t.Sample().analog[0][0], 128, "A + D cancel");
+    t.OnKey(scancode::kD, false);
+    ExpectEq(t.Sample().analog[0][0], 0, "A = left");
+    t.OnKey(scancode::kA, false);
+    t.OnKey(scancode::kW, true);
+    ExpectEq(t.Sample().analog[0][1], 0, "W = up (0)");
+    t.OnKey(scancode::kW, false);
+    t.OnKey(scancode::kS, true);
+    ExpectEq(t.Sample().analog[0][1], 255, "S = down (255)");
     ExpectEq(t.Sample().buttons, 0u, "analog keys press no buttons");
     t.ReleaseKeyboard();
     ExpectEq(t.Sample().analog[0][1], 128, "ReleaseKeyboard centres");
+
+    // Mouse: right = circle, left = square; the rest is free.
+    t.OnMouseButton(MouseButton::kRight, true);
+    ExpectEq(t.Sample().buttons, ctrl::kCircle, "right click = circle");
+    t.OnMouseButton(MouseButton::kLeft, true);
+    ExpectEq(t.Sample().buttons, ctrl::kCircle | ctrl::kSquare, "both clicks");
+    t.OnMouseButton(MouseButton::kRight, false);
+    ExpectEq(t.Sample().buttons, ctrl::kSquare, "left click = square");
+    t.OnMouseButton(MouseButton::kMiddle, true);
+    t.OnMouseButton(MouseButton::kX2, true);
+    ExpectEq(t.Sample().buttons, ctrl::kSquare, "middle and x2 unbound");
+    t.ReleaseMouse();
+    ExpectEq(t.Sample().buttons, 0u, "ReleaseMouse");
+    t.OnMouseButton(static_cast<MouseButton>(200), true);
+    ExpectEq(t.Sample().buttons, 0u, "bad mouse button");
 
     // Out-of-range scancodes are ignored.
     t.OnKey(0xFFFF, true);
@@ -397,7 +420,7 @@ void TestDefaultGamepad() {
     SceCtrlData idle = t.Sample();
     Expect(idle.buttons == 0 && idle.analog[0][0] == 128 && idle.analog[0][1] == 128,
            "ReleasePad clears");
-    t.OnKey(scancode::kL, true);
+    t.OnKey(scancode::kD, true);
     t.OnPadAxis(PadAxis::kLeftX, 0.5f);
     ExpectEq(t.Sample().analog[0][0], 255, "key + stick clamp to 1");
     t.OnPadAxis(PadAxis::kLeftX, -1.0f);

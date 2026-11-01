@@ -11,6 +11,8 @@
 #include <SDL3/SDL.h>
 #include <toml++/toml.hpp>
 
+#include "sdl_input.h"
+
 namespace mpo::frontend {
 namespace {
 
@@ -86,6 +88,32 @@ bool ParseKeyboard(const toml::table &table, InputMapping *m, std::string *error
                 return false;
             }
             m->keys.push_back({static_cast<Scancode>(code), *target});
+        }
+    }
+    return true;
+}
+
+bool ParseMouse(const toml::table &table, InputMapping *m, std::string *error) {
+    m->mouse_buttons.clear();
+    std::vector<std::string> names;
+    for (const auto &[key, node] : table) {
+        const Target *target = FindTarget(key.str());
+        if (target == nullptr) {
+            *error = "[mouse]: unknown PSP input '" + std::string(key.str()) + "'";
+            return false;
+        }
+        if (!StringList(node, &names)) {
+            *error = "[mouse] " + std::string(key.str()) + ": expected a list of mouse buttons";
+            return false;
+        }
+        for (const std::string &name : names) {
+            const int button = MouseButtonFromName(name);
+            if (button == 0) {
+                *error = "[mouse] " + std::string(key.str()) + ": unknown button '" + name +
+                         "' (left, middle, right, x1 or x2)";
+                return false;
+            }
+            m->mouse_buttons.push_back({static_cast<MouseButton>(button), *target});
         }
     }
     return true;
@@ -220,6 +248,8 @@ bool ParseInputMapping(std::string_view toml_text, const InputMapping &base, Inp
         bool ok = false;
         if (section == "keyboard") {
             ok = ParseKeyboard(*table, &m, error);
+        } else if (section == "mouse") {
+            ok = ParseMouse(*table, &m, error);
         } else if (section == "gamepad") {
             ok = ParseGamepad(*table, &m, error);
         } else if (section == "analog") {
@@ -257,6 +287,18 @@ std::string FormatInputMapping(const InputMapping &mapping) {
             if (b.target != t.target) continue;
             const char *name = SDL_GetScancodeName(static_cast<SDL_Scancode>(b.key));
             if (name && *name) names.push_back(Quoted(name));
+        }
+        if (names.empty()) continue;
+        out += std::string(t.name) + " = [";
+        for (std::size_t i = 0; i < names.size(); ++i) out += (i ? ", " : "") + names[i];
+        out += "]\n";
+    }
+    out += "\n[mouse]\n";
+    for (const NamedTarget &t : TargetNames()) {
+        std::vector<std::string> names;
+        for (const MouseButtonBinding &b : mapping.mouse_buttons) {
+            if (b.target == t.target)
+                names.push_back(Quoted(MouseButtonName(static_cast<int>(b.button))));
         }
         if (names.empty()) continue;
         out += std::string(t.name) + " = [";

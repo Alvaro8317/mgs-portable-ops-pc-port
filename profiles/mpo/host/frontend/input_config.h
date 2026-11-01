@@ -4,9 +4,12 @@
 // it, by SDL name:
 //
 //   [keyboard]                    # SDL key names (SDL_GetScancodeFromName)
-//   cross = ["Z"]
-//   select = ["V", "Return"]
-//   analog_up = ["I"]
+//   cross = ["Space"]
+//   start = ["Escape", "Return"]
+//   analog_up = ["W"]
+//
+//   [mouse]                       # left middle right x1 x2
+//   square = ["left"]
 //
 //   [gamepad]                     # SDL gamepad names; axes with a sign
 //   cross = ["a"]                 # "a" is the bottom face button

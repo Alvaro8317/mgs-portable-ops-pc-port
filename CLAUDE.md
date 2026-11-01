@@ -489,12 +489,33 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
    lee del `title.prx` instalado del usuario (`config/savedata.toml`). Se descartó una opción de
    CMake que las enlazara en el runtime.
 
+### Tomadas (2026-11-01, F22)
+
+10. **El port se distribuye como un launcher que compila en la máquina del jugador** (como
+    gow-psp-recomp). La release no trae código del juego, ni traducido ni compilado, ni claves; §1
+    queda como está.
+    - `profiles/mpo/scripts/setup.py` hace el camino: valida y descifra el ISO, genera el C++ y
+      compila. Primero `mpo_boot` (`mgp_main` y los módulos); las etapas, en segundo plano y en
+      orden de la historia (`config/build_order.toml`).
+    - Mientras una etapa no está compilada, corre en el intérprete. `OverlayManager` encuentra las
+      librerías nuevas cuando el juego carga la etapa.
+    - **Los hints del análisis se versionan** (`config/recomp/`, solo direcciones), así que el
+      jugador no necesita Ghidra. Con ellos sale el mismo C++ byte a byte.
+    - Se descartaron publicar binarios con el código compilado (como Yakumo), por el riesgo legal,
+      y reescribir antes el emisor por funciones, porque retrasaba la release.
+    - El diseño, el toolchain de cada plataforma y lo que falta están en
+      `docs/analysis/distribution.md`.
+11. **Mapeo de teclado por defecto para PC** (decidido por el usuario):
+    - stick en WASD y cruceta en las flechas;
+    - Cruz en Espacio, Círculo en el clic derecho, Cuadrado en el clic izquierdo y Triángulo en
+      Ctrl;
+    - L en Q, R en E, Start en Esc y Enter, Select en Tab.
+
+    El mando sigue con el mapeo de PPSSPP. Reasignar teclas desde el juego queda para F23+.
+
 ### Abiertas
 
-- **Cómo se distribuye el port (F22)**: publicar el código del juego ya compilado, como Yakumo, o
-  que el jugador lo genere y compile una vez en su máquina con un launcher, como gow-psp-recomp.
-  Lo segundo es lo que pide hoy §1. Las opciones están en la ficha de F22 de `docs/PLAN.md` y en
-  `docs/RESEARCH.md` §3. La decide el usuario.
+- Ninguna por ahora.
 
 ---
 

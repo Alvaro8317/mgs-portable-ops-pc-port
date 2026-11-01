@@ -27,6 +27,11 @@
 //     the stage and the mismatch is reported (stderr, trace and report);
 //   - on_module_unloaded: the corpus leaves the dispatch table.
 //
+// Libraries can appear while the game runs (F22: the launcher compiles the
+// stages in the background and moves each finished library into the folder):
+// a stage with no corpus makes the manager look at the folder again before
+// falling back to the interpreter.
+//
 // The libraries stay mapped for the rest of the process: a thread may still
 // have native frames of a corpus that left the dispatch table.
 
@@ -35,6 +40,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
@@ -80,7 +86,9 @@ public:
     void add_corpus(const OverlayModuleInfo &info, OverlayInstallFunction install,
                     std::string origin);
     // Loads every overlay library (.so, .dll, .dylib) in `directory`; prints
-    // why a file is skipped. Returns the number of corpora added.
+    // why a file is skipped. Returns the number of corpora added. The folder
+    // is remembered: a stage loaded later with no corpus rescans it for
+    // libraries that were not there (a library is only tried once).
     std::size_t load_libraries(const std::filesystem::path &directory);
     [[nodiscard]] const std::vector<OverlayCorpus> &corpora() const noexcept { return corpora_; }
 
@@ -107,12 +115,16 @@ private:
         bool verified{};
     };
 
+    std::size_t scan_libraries(const std::filesystem::path &directory, bool rescan);
     std::string text_sha256(const OverlayCorpus &corpus) const;
     OverlayStats &stats_for(const std::string &name, std::uint32_t base, std::uint32_t size);
     void remove(const Installed &installed);
 
     System &system_;
     std::vector<OverlayCorpus> corpora_;
+    std::filesystem::path library_dir_;
+    // Libraries already tried by this manager (added or rejected).
+    std::set<std::string> library_keys_;
     std::map<kernel::Uid, Installed> installed_;
     std::size_t unverified_{};
     std::vector<OverlayStats> stats_;

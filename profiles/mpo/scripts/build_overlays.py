@@ -3,7 +3,7 @@
 """Generates the recompiled stage overlays (F13), one corpus per distinct stage.
 
 For each stage it runs generate.py --stage <s> (check against supported.toml,
-link the .rlc, Ghidra hints, psp_recomp --prefix stage_<s>) into
+link the .rlc, analysis hints, psp_recomp --prefix stage_<s>) into
 <out>/<s>/. Each <out>/<s>/ then becomes one overlay library when the build is
 configured with -DMPO_GENERATED_OVERLAYS_DIR=<out>; mpo_boot loads them
 (--overlays) and installs the one whose <s>.prx SHA-256 and base match the
@@ -13,15 +13,17 @@ Stages that share a PRX (r_main01 = r_net01, st08 = st0801 = st0802...) also
 share their .rlc (F13 [V]) and so their corpus: only the first one of each
 (PRX, base) pair is generated.
 
-With --ghidra, a stage without a Ghidra export is analysed first
-(run_analysis.sh on the linked PRX, with mgp_main as the external block); that
-needs GHIDRA_INSTALL_DIR (and JAVA_HOME) like run_analysis.sh itself.
+The hints come from profiles/mpo/config/recomp/stage_<s>.hints.txt (versioned,
+F22) unless --hints-from ghidra. With --hints-from ghidra and --ghidra, a
+stage without a Ghidra export is analysed first (run_analysis.sh on the linked
+PRX, with mgp_main as the external block); that needs GHIDRA_INSTALL_DIR (and
+JAVA_HOME) like run_analysis.sh itself.
 
 Usage:
 
   python -I profiles/mpo/scripts/build_overlays.py --psp-recomp build/framework/psprecomp/psp_recomp \\
       (--stages init,r_main01,title | --all) [--out profiles/mpo/generated/overlays] \\
-      [--ghidra] [--game-dir game] [--analysis-dir analysis]
+      [--hints-from auto|ghidra|profile] [--ghidra] [--game-dir game] [--analysis-dir analysis]
 """
 
 import argparse
@@ -115,11 +117,15 @@ def build(args, generate):
   for stage in kept:
     out = pathlib.Path(args.out) / stage
     recomp_json = pathlib.Path(args.analysis_dir) / 'out' / f'stage_{stage}' / f'stage_{stage}.recomp.json'
-    if args.ghidra and not recomp_json.is_file():
+    profile_hints = generate.profile_hints_path(f'stage_{stage}')
+    uses_ghidra = args.hints_from == 'ghidra' or (args.hints_from == 'auto' and
+                                                  not profile_hints.is_file())
+    if args.ghidra and uses_ghidra and not recomp_json.is_file():
       _run_ghidra(generate, stage, args)
     start = time.monotonic()
     argv = ['--psp-recomp', args.psp_recomp, '--stage', stage, '--game-dir', args.game_dir,
-            '--analysis-dir', args.analysis_dir, '--out', str(out)]
+            '--analysis-dir', args.analysis_dir, '--out', str(out),
+            '--hints-from', args.hints_from]
     if generate.main(argv) != 0:
       raise generate.GenerateError(f'{stage}: generate.py failed')
     manifest = json.loads((out / 'generate.json').read_text(encoding='utf-8'))
@@ -136,7 +142,10 @@ def main(argv):
   which.add_argument('--stages', help='comma-separated stage names (stage/<s>/<s>.prx)')
   which.add_argument('--all', action='store_true', help='every stage of supported.toml')
   parser.add_argument('--out', default=str(_PROFILE / 'generated' / 'overlays'))
-  parser.add_argument('--ghidra', action='store_true', help='analyse stages without a Ghidra export')
+  parser.add_argument('--hints-from', choices=('auto', 'ghidra', 'profile'), default='auto',
+                      help='passed to generate.py (default: the versioned hints when they exist)')
+  parser.add_argument('--ghidra', action='store_true',
+                      help='analyse stages without a Ghidra export (when the hints come from Ghidra)')
   parser.add_argument('--game-dir', default=str(_ROOT / 'game'))
   parser.add_argument('--analysis-dir', default=str(_ROOT / 'analysis'))
   args = parser.parse_args(argv)
