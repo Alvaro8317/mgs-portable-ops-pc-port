@@ -1,17 +1,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# PSP module decryption for the installer: libkirk and Core/ELF/PrxDecrypter.cpp
-# from PPSSPP, fetched unmodified at configure time and verified by SHA-256.
+# PSP module and savedata decryption for the installer: libkirk,
+# Core/ELF/PrxDecrypter.cpp and Core/HLE/sceChnnlsv.cpp from PPSSPP, fetched
+# unmodified at configure time and verified by SHA-256.
 #
-# These files embed the KIRK keyvault and the PRX tag key tables, so they are
-# never committed (CLAUDE.md §1.1). They are compiled only into the targets
-# that link mpo_prx_decrypter (the installer). See NOTICE.md.
+# These files embed the KIRK keyvault, the PRX tag key tables and the
+# sceChnnlsv keys, so they are never committed (CLAUDE.md §1.1). They are
+# compiled only into the targets that link mpo_prx_decrypter or mpo_chnnlsv
+# (the installer and its tests). See NOTICE.md.
 #
 # Defines, when MPO_ENABLE_PRX_DECRYPT is ON:
 #   mpo_prx_decrypter  static library exporting pspDecryptPRX()
+#   mpo_chnnlsv        static library exporting sceSdMac*/sceSdCipher* (F18c)
 
 option(MPO_ENABLE_PRX_DECRYPT
-       "Build EBOOT decryption into the installer (fetches libkirk and PrxDecrypter from PPSSPP)"
+       "Build EBOOT and savedata decryption into the installer (fetches libkirk, PrxDecrypter and sceChnnlsv from PPSSPP)"
        ON)
 set(MPO_PPSSPP_SOURCE_DIR "" CACHE PATH
     "Local PPSSPP checkout to take the pinned files from instead of downloading them")
@@ -32,6 +35,8 @@ set(mpo_ppsspp_files
     ext/libkirk/kirk_engine.c 74e363f78fdec5c0fc82842a21c11c3b0363996a931805cec9fd11231a3e7763
     ext/libkirk/kirk_engine.h d827ae841fe160a52ae4ad8f118c6d46476a5a0887d349328419197ad5e996bc
     Core/ELF/PrxDecrypter.cpp 9bea13a3867b7b7e60b26f648bfcf650ce96e9f0da2203949cf1f9c2df54659b
+    Core/HLE/sceChnnlsv.cpp   37cf4b819618bd6d7616b3481bbade22efc02ccb13c80e5b6f1f7a3bdcb6ee6e
+    Core/HLE/sceChnnlsv.h     74054ca519e9065cd3bec7c578920d7b7dc4ef514d469c95a8b5de27a906f6c9
 )
 set(mpo_ppsspp_dir "${CMAKE_BINARY_DIR}/_deps/ppsspp_crypto")
 
@@ -104,4 +109,19 @@ if(MSVC)
     target_compile_options(mpo_prx_decrypter PRIVATE /w)
 else()
     target_compile_options(mpo_prx_decrypter PRIVATE -w)
+endif()
+
+# F18c: the savedata crypto (sceSdMac*, sceSdCipher*) of the unmodified
+# sceChnnlsv.cpp, for the save converter of the installer. The shim directory
+# replaces the PPSSPP HLE headers it includes; its guest-memory wrappers are
+# compiled but never called.
+add_library(mpo_chnnlsv STATIC "${mpo_ppsspp_dir}/Core/HLE/sceChnnlsv.cpp")
+target_include_directories(mpo_chnnlsv BEFORE PUBLIC
+    "${PROJECT_SOURCE_DIR}/profiles/mpo/host/crypto/chnnlsv_shim"
+    "${PROJECT_SOURCE_DIR}/profiles/mpo/host/crypto/ppsspp_shim")
+target_link_libraries(mpo_chnnlsv PUBLIC mpo_kirk)
+if(MSVC)
+    target_compile_options(mpo_chnnlsv PRIVATE /w)
+else()
+    target_compile_options(mpo_chnnlsv PRIVATE -w)
 endif()

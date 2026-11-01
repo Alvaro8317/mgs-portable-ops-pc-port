@@ -368,6 +368,10 @@ int SavedataStore::save_crypt_mode(const SavedataParam &param, const std::string
     if (!is_safe_component(folder)) return 0;
     SfoFile sfo;
     if (!load_sfo(savedata_dir() / folder / kSfoFileName, sfo, config_.max_file_size)) return 0;
+    return crypt_mode_of(sfo);
+}
+
+int SavedataStore::crypt_mode_of(const SfoFile &sfo) {
     const std::vector<std::uint8_t> *params = sfo.binary("SAVEDATA_PARAMS");
     if (params == nullptr || params->empty()) return 0;
     switch ((*params)[0]) {

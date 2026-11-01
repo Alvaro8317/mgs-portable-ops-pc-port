@@ -43,46 +43,6 @@ constexpr std::uint32_t kIconBuf = 0x08940000u;
 constexpr std::uint32_t kMpoDataSize = 0xA610u;
 constexpr std::uint32_t kMpoSdk = 0x02080010u;
 
-// A temporary ms0:/ root, removed at the end.
-class TempRoot {
-public:
-    TempRoot() {
-        std::random_device rd;
-        std::uniform_int_distribution<unsigned> dist;
-        for (int attempt = 0; attempt < 16; ++attempt) {
-            char name[48];
-            std::snprintf(name, sizeof(name), "mpo_savedata_test_%08x%08x", dist(rd), dist(rd));
-            path_ = fs::temp_directory_path() / name;
-            std::error_code ec;
-            if (fs::create_directory(path_, ec) && !ec) return;
-        }
-        path_.clear();
-    }
-    ~TempRoot() {
-        if (path_.empty()) return;
-        std::error_code ec;
-        fs::remove_all(path_, ec);
-    }
-    TempRoot(const TempRoot &) = delete;
-    TempRoot &operator=(const TempRoot &) = delete;
-    [[nodiscard]] const fs::path &path() const { return path_; }
-
-private:
-    fs::path path_;
-};
-
-std::vector<std::uint8_t> read_all(const fs::path &path) {
-    std::ifstream in(path, std::ios::binary);
-    return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in), {});
-}
-
-void write_all(const fs::path &path, const std::vector<std::uint8_t> &bytes) {
-    fs::create_directories(path.parent_path());
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char *>(bytes.data()),
-              static_cast<std::streamsize>(bytes.size()));
-}
-
 // SHA-256 of every file under `dir`, by relative path.
 std::map<std::string, std::string> tree_hashes(const fs::path &dir) {
     std::map<std::string, std::string> out;
@@ -101,16 +61,6 @@ std::map<std::string, std::string> without_prefix(std::map<std::string, std::str
         it = it->first.rfind(prefix, 0) == 0 ? tree.erase(it) : std::next(it);
     }
     return tree;
-}
-
-std::vector<std::uint8_t> pattern(std::uint32_t size, std::uint32_t seed) {
-    std::vector<std::uint8_t> out(size);
-    std::uint32_t x = seed * 2654435761u + 1;
-    for (auto &b : out) {
-        x = x * 1664525u + 1013904223u;
-        b = static_cast<std::uint8_t>(x >> 24);
-    }
-    return out;
 }
 
 constexpr std::array<std::uint8_t, 16> kFakeKey = {0x13, 0x37, 0xC0, 0xDE, 1, 2,  3,  4,

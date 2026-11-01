@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Savedata of each supported version, for `mpo --import-save/--export-save`
+# (F18c). The game's 16-byte savedata key is not here (CLAUDE.md §1.1): the
+# converter reads it from the user's installed disc, at `key_offset` of
+# <game_dir>/disc/<key_file>, after checking the file's and the key's SHA-256.
+#
+# ULUS-10202 1.02 (docs/analysis/utility.md §2):
+#   - every savedata request carries the key at 0x08BC747C with `title`
+#     loaded at 0x08B8F900 (the same library is in briefing, cyberval2 and
+#     ending): segment 0 of title.prx starts at file offset 0xA0, so the key
+#     is at 0xA0 + (0x08BC747C - 0x08B8F900) = 0x37C1C [V];
+#   - a key, secureVersion 0 and SDK 0x02080010 make PSP and PPSSPP saves
+#     crypt mode 5 [V on the user's PPSSPP save, F18c].
+
+[[version]]
+disc_id = "ULUS10202"
+disc_version = "1.02"
+game_name = "ULUS10202"
+crypt_mode = 5
+key_file = "PSP_GAME/USRDIR/stage/title/title.prx"
+key_file_sha256 = "f71020e7bbd09d0c9714f1d25333bdb4042800dd55e21a1fe8c4eb72d4f5b1f7"
+key_offset = 0x37C1C
+key_sha256 = "14b14758c62181df6fc9af6b053e58c92bee895408e59cf9736e2c2e7de9fe4f"

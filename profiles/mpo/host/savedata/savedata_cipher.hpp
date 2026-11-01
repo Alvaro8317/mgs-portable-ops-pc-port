@@ -6,14 +6,16 @@
 // PPSSPP does the same in SavedataParam::EncryptData, DecryptData and
 // UpdateHash (Core/Dialog/SavedataParam.cpp @ v1.20.4). MPO asks for it: its
 // requests carry a non-zero 16-byte key with secureVersion 0 and SDK
-// 0x02080010, which is crypt mode 3 (docs/analysis/utility.md).
+// 0x02080010, which is crypt mode 5 (docs/analysis/utility.md §2.4).
 //
 // mpo_savedata never links libkirk and holds no keys: libkirk is linked only
 // by the installer (F02, third_party/ppsspp_crypto/NOTICE.md). Without a
 // cipher the store writes plain saves (SAVEDATA_PARAMS all zero, which PPSSPP
 // also reads) and refuses to load an encrypted one, visibly
-// (SavedataStore::needs_cipher). How a real cipher reaches the runtime is a
-// decision for F18b (docs/sessions/F18a.md).
+// (SavedataStore::needs_cipher). The runtime never gets a cipher (CLAUDE.md
+// §9, decision 9): saves of a PSP or PPSSPP are converted by the installer
+// (`mpo --import-save/--export-save`, savedata/save_transfer.hpp) with the
+// real one, crypto::KirkSavedataCipher (F18c).
 
 #pragma once
 

@@ -382,3 +382,19 @@ add_executable(mpo_savedata_store_test savedata_store_test.cpp)
 target_link_libraries(mpo_savedata_store_test PRIVATE mpo_savedata mpo_host)
 mpo_target_warnings(mpo_savedata_store_test)
 add_test(NAME mpo_savedata_store_test COMMAND mpo_savedata_store_test)
+
+# F18c: the save converter of the installer (mpo --import-save/--export-save)
+# on synthetic saves, and the real savedata cipher when the build has it (it
+# holds keys, so only this test and `mpo` link it).
+add_executable(mpo_savedata_transfer_test savedata_transfer_test.cpp)
+target_link_libraries(mpo_savedata_transfer_test PRIVATE mpo_savedata mpo_host)
+target_compile_definitions(mpo_savedata_transfer_test PRIVATE
+    MPO_SAVEDATA_TOML="${CMAKE_CURRENT_SOURCE_DIR}/../config/savedata.toml")
+if(MPO_ENABLE_PRX_DECRYPT)
+    target_link_libraries(mpo_savedata_transfer_test PRIVATE mpo_savedata_cipher)
+    target_compile_definitions(mpo_savedata_transfer_test PRIVATE MPO_TEST_KIRK=1)
+else()
+    target_compile_definitions(mpo_savedata_transfer_test PRIVATE MPO_TEST_KIRK=0)
+endif()
+mpo_target_warnings(mpo_savedata_transfer_test)
+add_test(NAME mpo_savedata_transfer_test COMMAND mpo_savedata_transfer_test)

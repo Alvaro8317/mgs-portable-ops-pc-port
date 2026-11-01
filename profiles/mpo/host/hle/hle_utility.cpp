@@ -240,8 +240,8 @@ void Utility::finish_savedata() {
         ++stats_.failures;
         if (store_->needs_cipher())
             std::fprintf(stderr,
-                         "mpo: the save is encrypted (from a PSP or PPSSPP); convert it with "
-                         "the installer first\n");
+                         "mpo: the save is encrypted (from a PSP or PPSSPP); convert it first "
+                         "with mpo --import-save <save directory> --ms0 <this ms0>\n");
     }
 }
 

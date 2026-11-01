@@ -18,6 +18,7 @@ mpo_target_warnings(mpo_disc)
 add_library(mpo_host STATIC
     crypto/psp_module.cpp
     install/installer.cpp
+    install/save_profile.cpp
     install/supported_versions.cpp
     util/sha256.cpp
 )
@@ -42,7 +43,8 @@ add_subdirectory(audio)
 add_executable(mpo main.cpp)
 target_link_libraries(mpo PRIVATE mpo_host)
 target_compile_definitions(mpo PRIVATE
-    MPO_DEFAULT_SUPPORTED_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../config/supported.toml")
+    MPO_DEFAULT_SUPPORTED_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../config/supported.toml"
+    MPO_DEFAULT_SAVEDATA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../config/savedata.toml")
 mpo_target_warnings(mpo)
 
 add_subdirectory(ge)
@@ -67,3 +69,18 @@ add_subdirectory(hle)
 
 # F18a: sceUtility savedata, message and OSK dialogs (mpo_savedata).
 add_subdirectory(savedata)
+
+# F18c: the savedata cipher on sceChnnlsv and libkirk, for the save converter
+# of the installer (mpo --import-save/--export-save). It holds keys, so only
+# `mpo` and its test link it; the runtime saves plain.
+target_link_libraries(mpo PRIVATE mpo_savedata)
+if(MPO_ENABLE_PRX_DECRYPT)
+    add_library(mpo_savedata_cipher STATIC crypto/savedata_cipher_kirk.cpp)
+    target_include_directories(mpo_savedata_cipher PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(mpo_savedata_cipher PUBLIC mpo_savedata PRIVATE mpo_chnnlsv)
+    mpo_target_warnings(mpo_savedata_cipher)
+    target_link_libraries(mpo PRIVATE mpo_savedata_cipher)
+    target_compile_definitions(mpo PRIVATE MPO_HAVE_SAVEDATA_CIPHER=1)
+else()
+    target_compile_definitions(mpo PRIVATE MPO_HAVE_SAVEDATA_CIPHER=0)
+endif()

@@ -11,6 +11,7 @@ add_library(mpo_savedata STATIC
     osk_dialog.cpp
     save_dialog.cpp
     save_paths.cpp
+    save_transfer.cpp
     savedata_store.cpp
     sfo_file.cpp
     utility_dialogs.cpp

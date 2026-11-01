@@ -29,6 +29,7 @@
 #include "kernel/guest_memory.hpp"
 #include "savedata/psp_types.hpp"
 #include "savedata/savedata_cipher.hpp"
+#include "savedata/sfo_file.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -111,6 +112,10 @@ public:
     [[nodiscard]] const Activity &activity() const noexcept { return activity_; }
     // A short host-side reason for the last failure (empty if none).
     [[nodiscard]] const std::string &last_error() const noexcept { return last_error_; }
+
+    // The crypt mode SAVEDATA_PARAMS says (0: plain; 1, 3 or 5; any other
+    // non-zero flag is 1, as in PPSSPP's GetSaveCryptMode).
+    static int crypt_mode_of(const SfoFile &sfo);
 
     static bool is_safe_component(const std::string &name);
     static std::string game_name(const SavedataParam &param);

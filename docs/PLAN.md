@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) puede ir en paralelo, en su worktree. |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -111,7 +111,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F17b | Video del título y fuentes en el juego | M4 | ✅ hecha (Windows y la sincronía contra PPSSPP: pendientes) |
 | F18a | Savedata, OSK y diálogos (autónomo) | M4 | ✅ hecha (ola 4) |
 | F18b | Savedata, OSK y diálogos en el juego | M4 | ✅ hecha (la contraseña pasa a F19; el teclado del PC y Windows: pendientes del usuario) |
-| F18c | Conversor de saves cifrados en el instalador (autónomo) | M4 | ⬜ pendiente |
+| F18c | Conversor de saves cifrados en el instalador (autónomo) | M4 | ✅ hecha (cargar los exports en PPSSPP y Windows: pendientes del usuario) |
 | F19 | Primera misión y repetición de input | M5 | ✅ hecha (M5 cerrado en Linux; Windows: pendiente del usuario; la contraseña pasa a F20b) |
 | F20a | Generador de APs virtuales (autónomo) | M6 | ✅ hecha (ola 2) |
 | F20b | AP Scan, red y GPS en el juego | M6 | ⬜ pendiente |
@@ -1242,6 +1242,16 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Tests sin datos del juego (un save sintético cifrado y descifrado de ida y vuelta).
 - **Criterios de hecho**: un save de PPSSPP del usuario (`PSP/SAVEDATA/ULUS10202*`) se importa, el
   port lo carga con LOAD GAME, y exportarlo de vuelta da un save que PPSSPP carga; todo en local.
+- **Notas (cierre de F18c)**: hecha, ver `docs/sessions/F18c.md`.
+  - `mpo --import-save <dir>` y `mpo --export-save <dir>` (`--ms0`, `--save`, `--game-dir`,
+    `--overwrite`), sobre `sceChnnlsv.cpp` de PPSSPP sin modificar (descargado con su SHA-256) y
+    `crypto::KirkSavedataCipher`. La clave del juego sale del `title.prx` instalado del usuario
+    (`config/savedata.toml`, con los SHA-256 del archivo y de la clave).
+  - **[V]** El save de PPSSPP del usuario es modo 5, se importa con el hash comprobado, el port lo
+    carga con LOAD GAME (sigue a `briefing`, 19 de noviembre de 1970), y `UpdateHash` reproduce bit a
+    bit los `SAVEDATA_PARAMS` que escribió PPSSPP.
+  - **Pendiente del usuario**: cargar en PPSSPP los dos exports de `analysis/f18c/for-ppsspp/`
+    (ranuras `002` y `003`), y Windows.
 
 ---
 
@@ -1348,10 +1358,17 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     `st04vo`, `st04m1`, `st04m3`, `st04`, `st01t1` (mismo PRX que `st01t2`), `briefing` y `st02`.
     `play.sh` corre en el intérprete las que falten, y el informe las nombra (`mgp_stage@<sha>`).
   - Los menús de MPO se mueven con la cruceta, no con el stick [V].
+- **Notas (F18c)**: el diálogo de la lista de saves no dibuja `ICON0.PNG` (sale un recuadro con el
+  número de ranura; PPSSPP muestra el ícono). Un save de PPSSPP del usuario importado con
+  `mpo --import-save` deja empezar desde mitad del juego (`briefing`, 19 de noviembre de 1970).
+
 ### F22 — Empaquetado y release 0.1
 
 - **Objetivo**: que alguien sin conocimientos técnicos pueda instalarlo y jugarlo.
 - **Requisitos**: F21.
+- **Notas (F18c)**: el README tiene que explicar `mpo --import-save` y `mpo --export-save` (pasar
+  saves de una PSP o de PPSSPP al port y al revés). El launcher puede ofrecerlo como botón. No hay
+  opción para cambiar de ranura (ver `docs/sessions/F18c.md`).
 - **Notas (F19)**: el mapeo de teclado por defecto es el de PPSSPP (IJKL para el stick), y al
   usuario le resultó incómodo. Propone WASD para el stick, Espacio para Cruz (correr y rodar) y Ctrl
   para agacharse; su `input.toml` está en `docs/sessions/F19.md`. Hay que decidir el mapeo de PC por

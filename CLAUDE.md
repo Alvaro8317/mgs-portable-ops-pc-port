@@ -209,6 +209,8 @@ los hilos y fibras, en vez de depender de `ulimit`.
   - los diálogos se dibujan con display lists al estilo de PPGe y el texto PGF del firmware
     (`host/hle/ppge.hpp`), y el runtime guarda sin cifrar (F18b [V]). NEW GAME llega así a la
     primera etapa jugable, `st04vo` (la celda);
+  - los saves de PPSSPP y de la PSP (modo 5) se pasan al port con `mpo --import-save` y de vuelta
+    con `mpo --export-save`; un save de PPSSPP importado carga con LOAD GAME (F18c [V]);
   - en los diálogos del juego, Círculo confirma (`buttonSwap = 0`) con el sistema en "Cruz
     confirma" (F18b [V]).
 
@@ -472,8 +474,10 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
    estilo de PPGe y las fuentes PGF del firmware, para que salgan igual en softgpu y Vulkan y en las
    capturas. Se descartó Dear ImGui sobre SDL3.
 9. **El cifrado de los saves (modo 5) solo está en el instalador**: un conversor
-   `mpo --import-save/--export-save` (fase F18c). El runtime guarda sin cifrar y nunca lleva
-   claves KIRK. Se descartó una opción de CMake que las enlazara en el runtime.
+   `mpo --import-save/--export-save` (hecho en F18c, sobre `sceChnnlsv.cpp` de PPSSPP descargado
+   al configurar). El runtime guarda sin cifrar y nunca lleva claves KIRK. La clave del juego se
+   lee del `title.prx` instalado del usuario (`config/savedata.toml`). Se descartó una opción de
+   CMake que las enlazara en el runtime.
 
 ### Abiertas
 

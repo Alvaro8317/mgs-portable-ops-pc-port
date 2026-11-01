@@ -119,7 +119,16 @@ Los llamadores (`FUN_08b98b70`…`FUN_08b99710`, con `FUN_08b987b8` como constru
   `SAVEDATA_PARAMS[0] = 0x41`.
 - **Hace falta el cifrado** para leer los saves de una PSP o de PPSSPP, y para que los nuestros
   carguen en una PSP. Para jugar en el port, no: PPSSPP y la librería leen saves sin cifrar
-  (`SAVEDATA_PARAMS` a cero). Ver la propuesta en `docs/sessions/F18a.md`.
+  (`SAVEDATA_PARAMS` a cero). Lo hace el conversor del instalador, `mpo --import-save/--export-save`
+  (F18c).
+- **Confirmado en un save de PPSSPP v1.20.x** (F18c) [V]:
+  - `SAVEDATA_PARAMS[0] = 0x41` (modo 5); `+0x10` y `+0x70`, los hashes del `PARAM.SFO`; `+0x20`,
+    16 bytes `0x01` (PPSSPP no tiene la clave de la consola que pide ese hash; una PSP pondría un
+    hash real [S: `SavedataParam::UpdateHash`, `BuildHash`]);
+  - `00000000.000` mide `0xA620`: 16 bytes de IV y los `0xA610` del save;
+  - se descifra en modo 5 con la clave de la petición (`0x08BC747C` con `title` en `0x08B8F900`, o
+    sea el offset `0x37C1C` de `title.prx`) y el hash de `SAVEDATA_FILE_LIST` coincide. La clave no
+    se copia aquí: el conversor la lee del disco del usuario (`profiles/mpo/config/savedata.toml`).
 
 ## 3. OSK [V]
 

@@ -15,6 +15,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <random>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -57,6 +61,58 @@ void check_eq(const A &a, const B &b, const char *ea, const char *eb, const char
 inline int finish(const char *name) {
     std::printf("%s: %d checks, %d failures\n", name, g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
+}
+
+// Files for the store and transfer tests (F18a, F18c).
+
+// A temporary ms0:/ root, removed at the end.
+class TempRoot {
+public:
+    TempRoot() {
+        std::random_device rd;
+        std::uniform_int_distribution<unsigned> dist;
+        for (int attempt = 0; attempt < 16; ++attempt) {
+            char name[48];
+            std::snprintf(name, sizeof(name), "mpo_savedata_test_%08x%08x", dist(rd), dist(rd));
+            path_ = std::filesystem::temp_directory_path() / name;
+            std::error_code ec;
+            if (std::filesystem::create_directory(path_, ec) && !ec) return;
+        }
+        path_.clear();
+    }
+    ~TempRoot() {
+        if (path_.empty()) return;
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);
+    }
+    TempRoot(const TempRoot &) = delete;
+    TempRoot &operator=(const TempRoot &) = delete;
+    [[nodiscard]] const std::filesystem::path &path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
+
+inline std::vector<std::uint8_t> read_all(const std::filesystem::path &path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in), {});
+}
+
+inline void write_all(const std::filesystem::path &path, const std::vector<std::uint8_t> &bytes) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char *>(bytes.data()),
+              static_cast<std::streamsize>(bytes.size()));
+}
+
+inline std::vector<std::uint8_t> pattern(std::uint32_t size, std::uint32_t seed) {
+    std::vector<std::uint8_t> out(size);
+    std::uint32_t x = seed * 2654435761u + 1;
+    for (auto &b : out) {
+        x = x * 1664525u + 1013904223u;
+        b = static_cast<std::uint8_t>(x >> 24);
+    }
+    return out;
 }
 
 using mpo::savedata::DialogStatus;
