@@ -262,6 +262,14 @@ void Net::queue_adhocctl_event(std::uint64_t delay_us, std::uint32_t event, std:
     kick(adhocctl_thread_);
 }
 
+bool Net::next_adhocctl_handler(std::int32_t from, std::int32_t *id, AdhocHandler *handler) const {
+    const auto found = adhocctl_handlers_.lower_bound(from);
+    if (found == adhocctl_handlers_.end()) return false;
+    *id = found->first;
+    *handler = found->second;
+    return true;
+}
+
 std::uint32_t Net::adhocctl_thread_main() {
     kernel::Kernel &k = system_.kernel();
     while (adhocctl_thread_.running) {
@@ -272,13 +280,15 @@ std::uint32_t Net::adhocctl_thread_main() {
             // The state changes before the handlers run, as with Apctl.
             adhocctl_state_ = event.new_state;
             // By id, looked up again after each call: a handler may add or
-            // delete handlers, and nothing here may own memory.
+            // delete handlers, and nothing here may own memory or be a
+            // (checked) iterator while the guest runs: Term abandons this
+            // frame.
             std::int32_t next_id = 0;
             while (adhocctl_thread_.running) {
-                const auto found = adhocctl_handlers_.lower_bound(next_id);
-                if (found == adhocctl_handlers_.end()) break;
-                next_id = found->first + 1;
-                const AdhocHandler handler = found->second;
+                std::int32_t id = 0;
+                AdhocHandler handler;
+                if (!next_adhocctl_handler(next_id, &id, &handler)) break;
+                next_id = id + 1;
                 const std::uint32_t args[3] = {event.event, event.error, handler.arg};
                 ++stats_.adhocctl_handler_calls;
                 system_.hle().trace_event("net: adhocctl handler %08X(event %u, %08X, %08X)",

@@ -116,6 +116,8 @@ private:
     // Runs cpu() until it reaches `return_pc`; a runtime stop parks the thread
     // for good (the runtime stop is fatal).
     void dispatch_until(kernel::Kernel &kernel, std::uint32_t return_pc);
+    // nullptr when `address` is not a host thread entry.
+    [[nodiscard]] const HostThreadEntry *host_entry(std::uint32_t address) const;
     [[noreturn]] void park(kernel::Kernel &kernel);
     static void starvation_hook(psprecomp::Runtime &runtime, psprecomp::AllegrexContext &ctx);
 

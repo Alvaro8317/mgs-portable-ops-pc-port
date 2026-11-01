@@ -122,6 +122,8 @@ private:
     std::uint32_t apctl_thread_main();
     std::uint32_t adhocctl_thread_main();
     [[nodiscard]] std::optional<std::uint64_t> adhocctl_deadline() const;
+    // The handler with the lowest id >= `from` (no iterator outlives the call).
+    bool next_adhocctl_handler(std::int32_t from, std::int32_t *id, AdhocHandler *handler) const;
     void queue_adhocctl_event(std::uint64_t delay_us, std::uint32_t event, std::uint32_t error,
                               std::uint32_t new_state);
 

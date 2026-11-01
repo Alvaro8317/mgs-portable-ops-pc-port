@@ -61,6 +61,11 @@ void CpuBridge::set_host_thread_entry(std::uint32_t address, HostThreadEntry ent
     host_entries_[address] = std::move(entry);
 }
 
+const CpuBridge::HostThreadEntry *CpuBridge::host_entry(std::uint32_t address) const {
+    const auto found = host_entries_.find(address);
+    return found != host_entries_.end() ? &found->second : nullptr;
+}
+
 void CpuBridge::install_preemption(kernel::Kernel &kernel, std::uint64_t interval,
                                    std::function<void()> on_tick) {
     preempt_kernel_ = &kernel;
@@ -105,12 +110,12 @@ std::uint32_t CpuBridge::run_thread(kernel::Kernel &kernel, const kernel::Thread
     cpu.gpr[31] = start.ra;
     cpu.pc = start.entry;
     if (on_thread_start_) on_thread_start_(start);
-    const auto host = host_entries_.find(start.entry);
-    if (host != host_entries_.end()) {
-        // Not a copy: the thread may be terminated inside, abandoning this
-        // frame, so nothing here may own memory. Elements of an unordered_map
-        // keep their address until erased.
-        const HostThreadEntry *entry = &host->second;
+    // The thread may be terminated inside a host entry, abandoning this frame:
+    // nothing on it may own memory or be a (checked) iterator, so only the
+    // entry's address is kept. Elements of an unordered_map keep their address
+    // until erased.
+    const HostThreadEntry *entry = host_entry(start.entry);
+    if (entry != nullptr) {
         runtime_.cpu().gpr[2] = (*entry)(start);
     } else {
         dispatch_until(kernel, start.ra);
