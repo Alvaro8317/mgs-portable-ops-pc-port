@@ -111,7 +111,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F17b | Video del título y fuentes en el juego | M4 | ✅ hecha (Windows y la sincronía contra PPSSPP: pendientes) |
 | F18a | Savedata, OSK y diálogos (autónomo) | M4 | ✅ hecha (ola 4) |
 | F18b | Savedata, OSK y diálogos en el juego | M4 | ✅ hecha (la contraseña pasa a F19; el teclado del PC y Windows: pendientes del usuario) |
-| F18c | Conversor de saves cifrados en el instalador (autónomo) | M4 | ✅ hecha (cargar los exports en PPSSPP y Windows: pendientes del usuario) |
+| F18c | Conversor de saves cifrados en el instalador (autónomo) | M4 | ✅ hecha (CI en Windows pasa; cargar los exports en PPSSPP: pendiente del usuario) |
 | F19 | Primera misión y repetición de input | M5 | ✅ hecha (M5 cerrado en Linux; Windows: pendiente del usuario; la contraseña pasa a F20b) |
 | F20a | Generador de APs virtuales (autónomo) | M6 | ✅ hecha (ola 2) |
 | F20b | AP Scan, red y GPS en el juego | M6 | ⬜ pendiente |
@@ -1251,7 +1251,7 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     carga con LOAD GAME (sigue a `briefing`, 19 de noviembre de 1970), y `UpdateHash` reproduce bit a
     bit los `SAVEDATA_PARAMS` que escribió PPSSPP.
   - **Pendiente del usuario**: cargar en PPSSPP los dos exports de `analysis/f18c/for-ppsspp/`
-    (ranuras `002` y `003`), y Windows.
+    (ranuras `002` y `003`). En Windows, la CI pasa el test con el cifrador real.
 
 ---
 
