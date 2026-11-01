@@ -349,7 +349,7 @@ void test_rejections() {
         sd::SfoFile sfo;
         CHECK(sfo.parse(read_all(dir / "PARAM.SFO"), error));
         Bytes list = *sfo.binary("SAVEDATA_FILE_LIST");
-        std::fill(list.begin() + 13, list.begin() + 29, 0);
+        std::fill(list.begin() + 13, list.begin() + 29, std::uint8_t{0});
         sfo.set_binary("SAVEDATA_FILE_LIST", list, static_cast<std::uint32_t>(list.size()));
         write_all(dir / "PARAM.SFO", sfo.write());
         CHECK(refused(dir, true));
@@ -605,7 +605,8 @@ void test_kirk_cipher() {
     for (const int mode : {1, 3, 5}) {
         Bytes bytes = base;
         std::fill(bytes.begin() + static_cast<std::ptrdiff_t>(at),
-                  bytes.begin() + static_cast<std::ptrdiff_t>(at) + 128, 0xEE); // ignored
+                  bytes.begin() + static_cast<std::ptrdiff_t>(at) + 128,
+                  std::uint8_t{0xEE}); // ignored
         CHECK_EQ(cipher.update_sfo_hash(bytes, at, mode), 0);
         CHECK_EQ(bytes.size(), base.size());
         const std::uint8_t *params = bytes.data() + at;
