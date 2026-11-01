@@ -4,12 +4,16 @@
 // formats (checked against the GE's own converters in mpo_ge and against hand
 // values), strides, address folding and bad framebuffers; host input ->
 // SceCtrlData with synthetic events, and the analog stick maths against
-// values worked out by hand from PPSSPP's formulas.
+// values worked out by hand from PPSSPP's formulas. F19: the input recording
+// (write, parse back, replay, bad files) and the memory stick digest.
 
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -17,6 +21,7 @@
 #include "ctrl.h"
 #include "framebuffer.h"
 #include "input.h"
+#include "input_recording.h"
 
 namespace {
 
@@ -478,6 +483,145 @@ void TestCtrlData() {
            "FormatCtrl: " + line);
 }
 
+std::string ReadFile(const std::filesystem::path &path) {
+    std::ifstream in(path, std::ios::binary);
+    std::ostringstream text;
+    text << in.rdbuf();
+    return text.str();
+}
+
+void TestInputRecording() {
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "mpo_frontend_test_recording";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path path = dir / "run.input";
+
+    // Write: samples 0..9 with a press of Cross over 3..5 and the stick moved
+    // at 7; an OSK action and two frame checks.
+    InputRecorder recorder;
+    Expect(recorder.Open(path, nullptr), "recorder opens");
+    recorder.Header(1793059200, -18000, 0x0123456789ABCDEFull, {"ALVARO", ""});
+    for (std::uint64_t i = 0; i < 10; ++i) {
+        SceCtrlData d;
+        d.timestamp = static_cast<std::uint32_t>(i * 16683u); // Not recorded.
+        if (i >= 3 && i < 6) d.buttons = ctrl::kCross;
+        if (i >= 7) d.analog[0][0] = 255;
+        if (i == 4) recorder.Osk({i, OskAction::kType, "AB\xC3\x91"});
+        if (i == 5) recorder.Osk({i, OskAction::kFinish, {}});
+        recorder.Sample(i, d);
+    }
+    recorder.Check({60, 9, 0xFFFFFFFFFFFFFFFFull});
+    recorder.Check({120, 10, 1});
+    recorder.End(10, 120);
+    ExpectEq(recorder.changes(), 4u, "changes: 0, 3, 6, 7");
+    ExpectEq(recorder.osk_events(), 2u, "osk events");
+    ExpectEq(recorder.checks(), 2u, "checks");
+
+    InputRecording rec;
+    std::string error;
+    Expect(InputRecording::Load(path, &rec, &error), "load: " + error);
+    Expect(rec.complete && rec.has_rtc && rec.has_ms0_digest, "header and end");
+    ExpectEq(rec.rtc_base, 1793059200, "rtc base");
+    ExpectEq(rec.rtc_utc_offset, -18000, "rtc offset");
+    Expect(rec.ms0_digest == 0x0123456789ABCDEFull, "ms0 digest");
+    Expect(rec.osk_scripts.size() == 2u && rec.osk_scripts[0] == "ALVARO" &&
+               rec.osk_scripts[1].empty(),
+           "osk scripts");
+    ExpectEq(rec.samples, 10u, "samples");
+    ExpectEq(rec.flips, 120u, "flips");
+    ExpectEq(rec.changes.size(), 4u, "parsed changes");
+    Expect(rec.osk.size() == 2u && rec.osk[0].text == "AB\xC3\x91" &&
+               rec.osk[1].action == OskAction::kFinish,
+           "parsed osk");
+
+    InputPlayer player(rec);
+    for (std::uint64_t i = 0; i < 10; ++i) {
+        const InputState state = player.StateAt(i);
+        ExpectEq(state.buttons, (i >= 3 && i < 6) ? ctrl::kCross : 0u,
+                 "replayed buttons at " + std::to_string(i));
+        ExpectEq(state.analog[0][0], i >= 7 ? 255u : ctrl::kAnalogCenter,
+                 "replayed stick at " + std::to_string(i));
+        ExpectEq(player.OskAt(i).size(), (i == 4 || i == 5) ? 1u : 0u,
+                 "osk at " + std::to_string(i));
+        SceCtrlData out;
+        state.ApplyTo(&out);
+        ExpectEq(out.buttons, state.buttons, "ApplyTo");
+    }
+    Expect(player.Covers(9) && !player.Covers(10), "covers");
+    Expect(player.CheckAt(60) != nullptr && player.CheckAt(60)->hash == 0xFFFFFFFFFFFFFFFFull &&
+               player.CheckAt(61) == nullptr,
+           "checks by flip");
+
+    // Cut short (a crash): no end line, the samples end after the last one.
+    std::string text = ReadFile(path);
+    const std::string cut = text.substr(0, text.find("c 60"));
+    InputRecording partial;
+    Expect(InputRecording::Parse(cut, &partial, &error), "parse cut: " + error);
+    Expect(!partial.complete, "cut is incomplete");
+    ExpectEq(partial.samples, 8u, "cut samples: one past the last change");
+
+    // Bad files say which line.
+    const char *bad[] = {
+        "",
+        "mpo-input 2\n",
+        "mpo-input 1\ns 1 00000000 128 128 128 128\n",
+        "mpo-input 1\ns 0 00000000 128 128 128 300\n",
+        "mpo-input 1\ns 0 0 128 128 128 128\ns 0 1 128 128 128 128\n",
+        "mpo-input 1\no 0 type zz\n",
+        "mpo-input 1\no 0 jump\n",
+        "mpo-input 1\nc 5 0 1\nc 5 0 1\n",
+        "mpo-input 1\ns 0 0 128 128 128 128\ns 4 1 128 128 128 128\nend 3 0\n",
+        "mpo-input 1\nend 1 0\ns 0 0 128 128 128 128\n",
+        "mpo-input 1\nwhat 1\n",
+    };
+    for (const char *b : bad) {
+        InputRecording r;
+        error.clear();
+        Expect(!InputRecording::Parse(b, &r, &error) && error.find("line") != std::string::npos,
+               std::string("bad recording rejected: ") + b);
+    }
+    // Comments, blank lines and CRLF are fine.
+    Expect(InputRecording::Parse("# x\r\nmpo-input 1\r\n\r\ns 0 4000 128 128 128 128\r\n", &rec,
+                                 &error) &&
+               rec.changes.size() == 1u && rec.changes[0].second.buttons == 0x4000u,
+           "comments and CRLF: " + error);
+
+    // The memory stick digest: names and contents count, order does not.
+    const std::filesystem::path ms0 = dir / "ms0";
+    ExpectEq(DigestTree(ms0), 0u, "missing folder");
+    std::filesystem::create_directories(ms0 / "PSP" / "SAVEDATA" / "A");
+    {
+        std::ofstream(ms0 / "PSP" / "SAVEDATA" / "A" / "DATA.BIN") << "save";
+    }
+    {
+        std::ofstream(ms0 / "top.txt") << "x";
+    }
+    const std::uint64_t d1 = DigestTree(ms0);
+    std::filesystem::copy(ms0, dir / "copy", std::filesystem::copy_options::recursive);
+    ExpectEq(DigestTree(dir / "copy"), d1, "a copy has the same digest");
+    {
+        std::ofstream(ms0 / "top.txt") << "y";
+    }
+    Expect(DigestTree(ms0) != d1, "contents change the digest");
+    std::filesystem::rename(ms0 / "top.txt", ms0 / "top2.txt");
+    {
+        std::ofstream(ms0 / "top2.txt") << "x";
+    }
+    Expect(DigestTree(ms0) != d1, "names change the digest");
+
+    // Hex and FNV-1a 64 against known values.
+    Expect(ToHex("\x01\xAB") == "01ab", "ToHex");
+    std::string bytes;
+    Expect(FromHex("01ab", &bytes) && bytes == "\x01\xAB" && !FromHex("1", &bytes), "FromHex");
+    const std::uint8_t a = 'a';
+    Expect(Fnv1a64({&a, 1}) == 0xAF63DC4C8601EC8Cull, "FNV-1a 64 of 'a'");
+    Expect(Fnv1a64({}) == 0xCBF29CE484222325ull, "FNV-1a 64 of nothing");
+
+    std::filesystem::remove_all(dir, ec);
+}
+
 } // namespace
 
 int main() {
@@ -488,6 +632,7 @@ int main() {
     TestDefaultGamepad();
     TestCustomMapping();
     TestCtrlData();
+    TestInputRecording();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);
         return 1;

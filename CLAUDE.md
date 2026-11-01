@@ -150,6 +150,9 @@ los hilos y fibras, en vez de depender de `ulimit`.
     - las etapas con el mismo PRX traen el mismo `.rlc`;
     - el `.text` se verifica después del `.rlc`, en `sceKernelDcacheWritebackAll`.
   - El intérprete cubre lo que no se haya recompilado.
+  - El principio del juego, en orden (F19 [V]): `st04vo` (la celda) → `r_main01` → `r_main02` →
+    `flashdemo` (cómic) → `st04m1` → `st01t1` (mismo PRX que `st01t2`) → `briefing` (el mapa de
+    misiones) → `st02` (Soviet Patrol Base). Todas están recompiladas y verificadas.
 - Hay otros módulos de Konami, que son PRX aparte en `USRDIR/modules/` y no van cifrados (verificado
   en F02): `KCEJ_FS` (`kjfs.prx`, el sistema de archivos), `KCEJ_SOUND2` (`sound2.prx`, el driver de
   sonido) y `ZLIB` (`zlibdec.prx`).
@@ -213,7 +216,8 @@ los hilos y fibras, en vez de depender de `ulimit`.
 - `sceNetAdhoc*`, `sceNetApctl*`, `sceHttp*`, `sceNpAuth`.
 
 **Timing (crítico):**
-- **El gameplay corre a 20 FPS**: divisor de vsync 3 y un timestep fijo.
+- **El gameplay corre a 20 FPS**: divisor de vsync 3 y un timestep fijo. En el runtime, `st04vo`
+  da un flip cada 3 vblanks (20,0 fps) y los menús 30 (F19 [V]).
 - La lógica está **atada al framerate**. Los cheats de 60 FPS rompen los timers de chaff, stun,
   granadas y misiles.
 - En la etapa jugable **se respeta el 20/30 original**. Los FPS altos se harán **con interpolación**
@@ -377,6 +381,11 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
     `mpo_audio_report`, evento por evento (F16b).
 - **Repetición de input**: se graba el input (lectura por lectura) y se reproduce de forma
   determinista. Las capturas cada N frames se comparan contra referencias locales (no van al repo).
+  - `mpo_boot --record-input` graba cada muestra del mando, el teclado en el OSK, el hash del frame
+    cada 60 flips y la `ms0` del arranque; `--replay-input` la repite y comprueba los hashes
+    (F19). Una grabación hecha en la ventana, en tiempo real y con Vulkan se repite sin ventana
+    idéntica con softgpu.
+  - Las partidas se juegan por tramos: `analysis/f19/play.sh <nombre> [<grabación anterior>]`.
 - **Toggles A/B por variable de entorno** para cada optimización del renderer, para poder bisecar
   cuando un frame sale mal (como los `MHP3RD_NO_*` de Yakumo). Los del renderer Vulkan son
   `MPO_VK_NO_13`, `MPO_VK_BLEND`, `MPO_VK_DST_READ`, `MPO_VK_NO_BATCH`, `MPO_VK_NO_TEX_CACHE`,

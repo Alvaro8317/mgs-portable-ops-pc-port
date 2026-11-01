@@ -249,9 +249,23 @@ bool Ge::Execute(std::uint32_t op, std::uint32_t diff, DisplayList &list, RunRes
         ExecuteMatrixData(kCmdBoneMatrixNumber, kCmdBoneMatrixData, state_.bone_matrix.data(), 96,
                           op);
         return true;
-    case kCmdVap:
-        stats_.Unsupported("immediate vertices (VAP)");
+    case kCmdVap: {
+        // GPUCommon::FlushImm: a lone immediate point at 0,0 with z and colour
+        // 0 is what games send when they clear the GE's registers; PPSSPP
+        // ignores it (F19: MPO sends one, VSC* and VCV all 0).
+        const int x = static_cast<int>(state_.Reg(kCmdVscx) & 0xFFFF) -
+                      (state_.IsModeThrough() ? 0x8000 : state_.OffsetX16());
+        const int y = static_cast<int>(state_.Reg(kCmdVscx + 1) & 0xFFFF) -
+                      (state_.IsModeThrough() ? 0x8000 : state_.OffsetY16());
+        const std::uint32_t z = state_.Reg(kCmdVscx + 2) & 0xFFFF;
+        const std::uint32_t color = (state_.Reg(kCmdVscx + 6) & 0xFFFFFF) | ((data & 0xFF) << 24);
+        const std::uint32_t prim = (data >> 8) & 7;
+        if (prim == 0 && x == 0 && y == 0 && z == 0 && color == 0)
+            ++stats_.immediate_ignored;
+        else
+            stats_.Unsupported("immediate vertices (VAP)");
         return true;
+    }
     default:
         if (cmd >= kCmdMorphWeight0 && cmd <= kCmdMorphWeight7) {
             morph_weights_[static_cast<std::size_t>(cmd - kCmdMorphWeight0)] = GetFloat24(op);

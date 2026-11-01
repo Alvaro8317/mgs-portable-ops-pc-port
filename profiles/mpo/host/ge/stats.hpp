@@ -32,6 +32,9 @@ struct Stats {
     std::uint64_t bbox_culled = 0;
     std::uint64_t clut_loads = 0;
     std::uint64_t block_transfers = 0;
+    // Immediate points at 0,0 with z and colour 0 (a register clear), ignored
+    // as PPSSPP does.
+    std::uint64_t immediate_ignored = 0;
     // Feature name -> occurrences (draws or commands) that were not executed
     // or not executed exactly.
     std::map<std::string, std::uint64_t, std::less<>> unsupported;

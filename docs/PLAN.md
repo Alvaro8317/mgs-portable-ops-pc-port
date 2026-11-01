@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) puede ir en paralelo, en su worktree. |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) puede ir en paralelo, en su worktree. |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -112,7 +112,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F18a | Savedata, OSK y diálogos (autónomo) | M4 | ✅ hecha (ola 4) |
 | F18b | Savedata, OSK y diálogos en el juego | M4 | ✅ hecha (la contraseña pasa a F19; el teclado del PC y Windows: pendientes del usuario) |
 | F18c | Conversor de saves cifrados en el instalador (autónomo) | M4 | ⬜ pendiente |
-| F19 | Primera misión y repetición de input | M5 | ⬜ pendiente |
+| F19 | Primera misión y repetición de input | M5 | ✅ hecha (M5 cerrado en Linux; Windows: pendiente del usuario; la contraseña pasa a F20b) |
 | F20a | Generador de APs virtuales (autónomo) | M6 | ✅ hecha (ola 2) |
 | F20b | AP Scan, red y GPS en el juego | M6 | ⬜ pendiente |
 | F21 | Partida completa y estabilidad | M6 | ⬜ pendiente |
@@ -1318,6 +1318,15 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     cooldown y qué comprueba `0x0883754C`.
   - **Pendiente del usuario**: una partida en la que el AP Scan esté disponible (la que hay ahora
     no lo tiene).
+- **Notas (F19)**: ver `docs/sessions/F19.md`.
+  - **Criterio que viene de F19 (y antes de F18b): ingresar una contraseña en `briefing`** (OSK con
+    límite de 10). Los textos "PASSWORD:", "ENTER PASSWORD", "KEYWORD:" y "VERIFY PASSWORD" están en
+    `briefing.prx` junto a los del punto de acceso ("ACCESS POINT:", "SEARCHING…", "CONNECTING…"),
+    y en la barra de íconos de `briefing` la antena sale en gris: es el menú de red [?].
+  - `analysis/f19/play3.input` llega al mapa de `briefing` (1135 s), y `rp3c.input` entra a `st02`.
+    Se continúan con `analysis/f19/play.sh <nombre> <grabación>`.
+  - `sceWlanGetEtherAddr` se llama cientos de veces en `briefing` y en las misiones (hoy devuelve
+    0 sin implementar).
 
 ### F21 — Partida completa y estabilidad
 
@@ -1330,11 +1339,23 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Probar la estabilidad en sesiones largas.
 - **Criterios de hecho**: el juego se completa en Windows y en Linux, y no hay crashes conocidos sin
   documentar.
-
+- **Notas (F19)**: ver `docs/sessions/F19.md`.
+  - Las partidas se juegan por tramos con `--record-input` y `--replay-input` (`analysis/f19/play.sh`)
+    y se verifican sin ventana: cada grabación lleva el hash del frame cada 60 flips.
+  - **Hacen falta savestates o un renderer más rápido** para retomar: con softgpu la repetición va a
+    ~1,6x, y retomar después de 1135 s ya tarda ~12 min.
+  - Etapas recompiladas hasta ahora: `init`, `r_main01`, `r_main02`, `title`, `flashdemo`, `st01`,
+    `st04vo`, `st04m1`, `st04m3`, `st04`, `st01t1` (mismo PRX que `st01t2`), `briefing` y `st02`.
+    `play.sh` corre en el intérprete las que falten, y el informe las nombra (`mgp_stage@<sha>`).
+  - Los menús de MPO se mueven con la cruceta, no con el stick [V].
 ### F22 — Empaquetado y release 0.1
 
 - **Objetivo**: que alguien sin conocimientos técnicos pueda instalarlo y jugarlo.
 - **Requisitos**: F21.
+- **Notas (F19)**: el mapeo de teclado por defecto es el de PPSSPP (IJKL para el stick), y al
+  usuario le resultó incómodo. Propone WASD para el stick, Espacio para Cruz (correr y rodar) y Ctrl
+  para agacharse; su `input.toml` está en `docs/sessions/F19.md`. Hay que decidir el mapeo de PC por
+  defecto (los menús siguen en la cruceta, así que las flechas tienen que quedar en la cruceta).
 - **Tareas**:
   - Flujo de instalación: el usuario elige el ISO, se valida, se descifra, se genera y se compila, o
     se usa un binario precompilado del runtime más la generación en local. **Hay que decidir el

@@ -13,6 +13,8 @@
 //            [--window 0|1] [--scale N] [--input-map <input.toml>]
 //            [--overlays <dir>|none] [--renderer soft|vulkan] [--capture-window 0|1]
 //            [--audio 0|1] [--audio-wav <file>] [--fonts <dir>] [--osk-text <text>]...
+//            [--record-input <file>] [--replay-input <file>] [--replay-end stop|live]
+//            [--check-every N] [--input-log 0|1]
 //
 // It measures the start-up (registering the dispatch table: time and memory),
 // runs PSP threads until --until-us of virtual time (default 5 s), a runtime
@@ -79,6 +81,29 @@
 // (Backspace deletes, Enter finishes, Escape cancels) and its keys press no
 // PSP buttons. The report adds the dialogs, the saves, loads and deletes, and
 // what PPGe drew.
+//
+// F19: input recording and replay (input_recording.h).
+//   --record-input <file>     writes every controller sample the game takes,
+//                             the OSK keyboard actions and a hash of the shown
+//                             frame every --check-every flips (default 60).
+//                             The memory stick at start is copied next to it
+//                             (<file>.ms0) and the RTC base goes in the file.
+//   --replay-input <file>     hands the game the recorded samples instead of
+//                             the controller, with the recording's RTC base,
+//                             --osk-text scripts and, unless --ms0 is given, a
+//                             fresh copy of <file>.ms0 (<file>.ms0-replay).
+//                             Every recorded frame hash is checked; the report
+//                             says how many matched and the first that did
+//                             not. --replay-end stop (the default without a
+//                             window) stops at the end of the recording; live
+//                             (the default with one) hands over to the
+//                             controller, so --record-input with a replay
+//                             continues a recording. With a window, the
+//                             replay runs as fast as it can and realtime
+//                             starts at the handover.
+// With --window 1 or --replay-input, --until-us defaults to no limit.
+// --input-log 1 prints to stderr every key, gamepad and focus event the
+// window receives.
 
 #include <algorithm>
 #include <chrono>
@@ -106,6 +131,7 @@
 #include "hle/system.hpp"
 #include "image.hpp"
 #include "input.h"
+#include "input_recording.h"
 #include "psprecomp/interpreter.hpp"
 #include "psprecomp/runtime.hpp"
 #include "recomp/vfpu_executor.hpp"
@@ -353,6 +379,15 @@ int main(int argc, char **argv) {
     int audio = -1; // -1: on with a window.
     std::string audio_wav;
     std::vector<std::string> osk_texts;
+    std::string record_path;
+    std::string replay_path;
+    int replay_end_live = -1; // -1: live with a window.
+    std::uint64_t check_every = 60u;
+    bool until_given = false;
+    bool input_log = false;
+    // Every option takes a value: a word left over is a mistake, not ignored
+    // (F19: a whole --press list quoted as one word went unnoticed).
+    if (argc % 2 == 0) return fail(std::string("option without a value: ") + argv[argc - 1]);
     for (int i = 1; i + 1 < argc; i += 2) {
         const std::string option = argv[i];
         const std::string value = argv[i + 1];
@@ -379,6 +414,7 @@ int main(int argc, char **argv) {
             trace_limit = std::strtoull(value.c_str(), nullptr, 0);
         } else if (option == "--until-us") {
             until_us = std::strtoull(value.c_str(), nullptr, 0);
+            until_given = true;
         } else if (option == "--unimplemented") {
             if (value != "stop" && value != "continue")
                 return fail("--unimplemented takes stop or continue");
@@ -424,12 +460,54 @@ int main(int argc, char **argv) {
             fonts = value;
         } else if (option == "--osk-text") {
             osk_texts.push_back(value);
+        } else if (option == "--record-input") {
+            record_path = value;
+        } else if (option == "--replay-input") {
+            replay_path = value;
+        } else if (option == "--replay-end") {
+            if (value != "stop" && value != "live") return fail("--replay-end takes stop or live");
+            replay_end_live = value == "live" ? 1 : 0;
+        } else if (option == "--input-log") {
+            input_log = value != "0";
+        } else if (option == "--check-every") {
+            check_every = std::max<std::uint64_t>(1u, std::strtoull(value.c_str(), nullptr, 0));
         } else {
             return fail("unknown option " + option);
         }
     }
     if (elf_path.empty()) return fail("usage: see boot_main.cpp (--elf is required)");
     config.disc_iso = iso;
+
+    // ---- F19: the recording to replay, and the memory stick it started from ----
+    std::unique_ptr<mpo::frontend::InputPlayer> player;
+    if (!replay_path.empty()) {
+        mpo::frontend::InputRecording recording;
+        std::string load_error;
+        if (!mpo::frontend::InputRecording::Load(replay_path, &recording, &load_error))
+            return fail(load_error);
+        if (recording.has_rtc && config.rtc_from_host) {
+            config.rtc_from_host = false;
+            config.rtc_base_seconds = recording.rtc_base;
+            config.rtc_utc_offset_seconds = recording.rtc_utc_offset;
+        }
+        if (osk_texts.empty()) osk_texts = recording.osk_scripts;
+        const std::filesystem::path snapshot = replay_path + ".ms0";
+        std::error_code ec;
+        if (ms0.empty() && std::filesystem::is_directory(snapshot, ec)) {
+            const std::filesystem::path copy = replay_path + ".ms0-replay";
+            std::filesystem::remove_all(copy, ec);
+            std::filesystem::copy(snapshot, copy, std::filesystem::copy_options::recursive, ec);
+            if (ec) return fail("cannot copy " + snapshot.string() + ": " + ec.message());
+            ms0 = copy.string();
+        }
+        std::printf("replay: %s, %llu samples (%zu changes, %zu OSK actions, %zu frame checks)%s\n",
+                    replay_path.c_str(), static_cast<unsigned long long>(recording.samples),
+                    recording.changes.size(), recording.osk.size(), recording.checks.size(),
+                    recording.complete ? "" : ", cut short (no end line)");
+        player = std::make_unique<mpo::frontend::InputPlayer>(std::move(recording));
+    }
+    const bool replay_live = replay_end_live < 0 ? window : replay_end_live == 1;
+    if (!until_given && (window || player)) until_us = std::uint64_t{1} << 62u;
     if (ms0.empty()) {
         const auto root =
             mpo::savedata::default_ms0_root(mpo::savedata::PathEnvironment::from_process());
@@ -442,6 +520,28 @@ int main(int argc, char **argv) {
     }
     config.ms0_root = ms0;
     std::printf("ms0: %s\n", ms0.empty() ? "(none: the game cannot save)" : ms0.c_str());
+    const std::uint64_t ms0_digest = ms0.empty() ? 0u : mpo::frontend::DigestTree(ms0);
+    if (player && player->recording().has_ms0_digest &&
+        player->recording().ms0_digest != ms0_digest)
+        std::printf("replay: the memory stick is not the one the recording started from "
+                    "(digest %016llx, recorded %016llx): the replay may not match\n",
+                    static_cast<unsigned long long>(ms0_digest),
+                    static_cast<unsigned long long>(player->recording().ms0_digest));
+    mpo::frontend::InputRecorder recorder;
+    if (!record_path.empty()) {
+        if (!replay_path.empty() && std::filesystem::weakly_canonical(record_path) ==
+                                        std::filesystem::weakly_canonical(replay_path))
+            return fail("--record-input and --replay-input must be different files");
+        std::string open_error;
+        if (!recorder.Open(record_path, &open_error)) return fail(open_error);
+        const std::filesystem::path snapshot = record_path + ".ms0";
+        std::error_code ec;
+        std::filesystem::remove_all(snapshot, ec);
+        if (!ms0.empty()) {
+            std::filesystem::copy(ms0, snapshot, std::filesystem::copy_options::recursive, ec);
+            if (ec) return fail("cannot copy the memory stick to " + snapshot.string());
+        }
+    }
     if (fonts.empty() && !iso.empty()) {
         const std::filesystem::path guess =
             std::filesystem::path(iso).parent_path() / "flash0" / "font";
@@ -461,6 +561,10 @@ int main(int argc, char **argv) {
         return fail("--capture-window 1 needs --renderer vulkan, --window 1 and --capture");
     // A window plays at the PSP's speed unless asked otherwise.
     if (window && !realtime_given) config.realtime = true;
+    // F19: a replay that hands over to the controller runs as fast as it can
+    // and turns realtime on at the handover (unless --realtime was given).
+    const bool fast_replay = player && replay_live && config.realtime && !realtime_given;
+    if (fast_replay) config.realtime = false;
     if (audio < 0) audio = window ? 1 : 0;
 #if !MPO_BOOT_AUDIO
     if (audio == 1 && window) {
@@ -549,13 +653,17 @@ int main(int argc, char **argv) {
                     wav_samples.push_back(mpo::audio::ClampS16(mix[i]));
             }
 #if MPO_BOOT_AUDIO
-            if (audio_output.IsOpen())
+            // Nothing to the device while a replay fast-forwards.
+            if (audio_output.IsOpen() && !(fast_replay && !system.clock().realtime()))
                 resampler.PushSamples(mix, static_cast<unsigned int>(frames));
 #endif
         });
 
         // ---- F10b: what the display shows, and the controller ----
         mpo::frontend::InputTranslator translator;
+        // F19: the PC keyboard's OSK actions wait for the next controller
+        // sample, so a recording can replay them at the same point.
+        std::vector<mpo::frontend::OskEvent> pending_osk;
 #if MPO_BOOT_SDL
         std::unique_ptr<mpo::frontend::SdlPresenter> presenter;
         std::unique_ptr<mpo::frontend::SdlInput> input;
@@ -598,6 +706,12 @@ int main(int argc, char **argv) {
                 if (!presenter) return fail(error);
             }
             input = std::make_unique<mpo::frontend::SdlInput>(&translator);
+            // F19: what the window receives (keys, gamepads, focus).
+            if (input_log)
+                input->SetObserver([](std::string_view text) {
+                    std::fprintf(stderr, "input: %.*s\n", static_cast<int>(text.size()),
+                                 text.data());
+                });
             if (!input->ok())
                 std::fprintf(stderr, "mpo_boot: input: %s (keyboard only)\n",
                              input->error().c_str());
@@ -625,22 +739,22 @@ int main(int argc, char **argv) {
         // translator, so a key held when the OSK opened is let go.
         const auto osk_keyboard = [&](const SDL_Event &event) {
             if (!text_input) return false;
-            mpo::hle::Utility &utility = system.utility();
+            using mpo::frontend::OskAction;
             if (event.type == SDL_EVENT_TEXT_INPUT) {
-                (void)utility.host_type(event.text.text);
+                pending_osk.push_back({0u, OskAction::kType, event.text.text});
                 return true;
             }
             if (event.type != SDL_EVENT_KEY_DOWN) return false;
             switch (event.key.key) {
             case SDLK_BACKSPACE:
-                (void)utility.host_backspace();
+                pending_osk.push_back({0u, OskAction::kBackspace, {}});
                 break;
             case SDLK_RETURN:
             case SDLK_KP_ENTER:
-                (void)utility.host_finish();
+                pending_osk.push_back({0u, OskAction::kFinish, {}});
                 break;
             case SDLK_ESCAPE:
-                (void)utility.host_cancel();
+                pending_osk.push_back({0u, OskAction::kCancel, {}});
                 break;
             default:
                 break;
@@ -714,12 +828,67 @@ int main(int argc, char **argv) {
 #endif
         [[maybe_unused]] std::uint64_t presented_targets = 0;
         [[maybe_unused]] std::uint64_t presented_uploads = 0;
-        system.ctrl().set_sampler([&translator, &presses](std::uint64_t now) {
-            mpo::frontend::SceCtrlData data = translator.Sample();
-            for (const Press &press : presses)
-                if (now >= press.start_us && now < press.end_us) data.buttons |= press.buttons;
+        // F19: every sample the game takes, live or from the recording.
+        std::uint64_t sample_count = 0;
+        bool replay_over = false;
+        const auto apply_osk = [&system](const mpo::frontend::OskEvent &event) {
+            mpo::hle::Utility &utility = system.utility();
+            switch (event.action) {
+            case mpo::frontend::OskAction::kType:
+                (void)utility.host_type(event.text);
+                break;
+            case mpo::frontend::OskAction::kBackspace:
+                (void)utility.host_backspace();
+                break;
+            case mpo::frontend::OskAction::kFinish:
+                (void)utility.host_finish();
+                break;
+            case mpo::frontend::OskAction::kCancel:
+                (void)utility.host_cancel();
+                break;
+            }
+        };
+        system.ctrl().set_sampler([&](std::uint64_t now) {
+            const std::uint64_t index = sample_count++;
+            mpo::frontend::SceCtrlData data;
+            if (player && player->Covers(index)) {
+                for (const mpo::frontend::OskEvent &event : player->OskAt(index)) {
+                    apply_osk(event);
+                    if (recorder.is_open()) recorder.Osk(event);
+                }
+                player->StateAt(index).ApplyTo(&data);
+                pending_osk.clear(); // The keyboard waits for the replay to end.
+            } else {
+                if (player && !replay_over) {
+                    replay_over = true;
+                    system.hle().trace_event("replay: end of the recording at sample %llu",
+                                             static_cast<unsigned long long>(index));
+                    // stderr too: unbuffered, for whoever waits at the window.
+                    for (std::FILE *out : {stdout, stderr})
+                        std::fprintf(out,
+                                     "replay: end of the recording at sample %llu, %llu us%s\n",
+                                     static_cast<unsigned long long>(index),
+                                     static_cast<unsigned long long>(now),
+                                     replay_live ? ": the controller takes over" : "");
+                    if (!replay_live) system.kernel().request_stop();
+                    if (fast_replay) system.clock().set_realtime(true);
+                }
+                for (mpo::frontend::OskEvent &event : pending_osk) {
+                    event.sample = index;
+                    apply_osk(event);
+                    if (recorder.is_open()) recorder.Osk(event);
+                }
+                pending_osk.clear();
+                data = translator.Sample();
+                for (const Press &press : presses)
+                    if (now >= press.start_us && now < press.end_us) data.buttons |= press.buttons;
+            }
+            if (recorder.is_open()) recorder.Sample(index, data);
             return data;
         });
+        std::uint64_t checks_matched = 0;
+        std::uint64_t checks_differed = 0;
+        std::uint64_t first_difference = 0;
 
         if (!capture_dir.empty()) {
             std::error_code ec;
@@ -745,10 +914,40 @@ int main(int argc, char **argv) {
             }
             const bool present = window;
             const bool capture = !capture_dir.empty();
-            if (!present && !capture) return;
+            // F19: a hash of the shown frame for the recording, or to check
+            // the replay against it.
+            const mpo::frontend::FrameCheck *expected =
+                player ? player->CheckAt(flip_count) : nullptr;
+            const bool record_check = recorder.is_open() && flip_count % check_every == 0u;
+            if (!present && !capture && expected == nullptr && !record_check) return;
             const mpo::frontend::FramebufferDesc desc = framebuffer_desc(framebuffer);
             (void)mpo::frontend::ConvertFramebuffer(shown_memory, desc, shown);
             if (any_pixel_lit(shown)) ++lit_flips;
+            if (expected != nullptr || record_check) {
+                const std::uint64_t hash = mpo::frontend::Fnv1a64(shown);
+                const std::uint64_t sample = sample_count;
+                if (record_check) recorder.Check({flip_count, sample, hash});
+                if (expected != nullptr) {
+                    if (expected->hash == hash && expected->sample == sample) {
+                        ++checks_matched;
+                    } else {
+                        if (checks_differed++ == 0u) {
+                            first_difference = flip_count;
+                            std::printf("replay: flip %llu differs from the recording (sample "
+                                        "%llu, hash %016llx; recorded sample %llu, hash "
+                                        "%016llx)\n",
+                                        static_cast<unsigned long long>(flip_count),
+                                        static_cast<unsigned long long>(sample),
+                                        static_cast<unsigned long long>(hash),
+                                        static_cast<unsigned long long>(expected->sample),
+                                        static_cast<unsigned long long>(expected->hash));
+                        }
+                        system.hle().trace_event("replay: flip %llu differs",
+                                                 static_cast<unsigned long long>(flip_count));
+                    }
+                }
+            }
+            if (!present && !capture) return;
             const bool capture_now = capture && flip_count % capture_every == 0u;
 #if MPO_BOOT_VULKAN && MPO_BOOT_SDL
             if (swapchain) {
@@ -837,10 +1036,39 @@ int main(int argc, char **argv) {
 #endif
         });
 
+        if (recorder.is_open())
+            recorder.Header(system.rtc().base_seconds(), system.rtc().utc_offset(), ms0_digest,
+                            osk_texts);
+
         const auto t2 = std::chrono::steady_clock::now();
         if (!system.boot(elf, "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN", &error)) return fail(error);
         const mpo::kernel::RunResult result = system.run(until_us);
         const auto t3 = std::chrono::steady_clock::now();
+        if (recorder.is_open()) {
+            recorder.End(sample_count, flip_count);
+            std::printf("input recording: %s, %llu samples (%llu changes, %llu OSK actions), "
+                        "%llu flips, %llu frame checks\n",
+                        record_path.c_str(), static_cast<unsigned long long>(sample_count),
+                        static_cast<unsigned long long>(recorder.changes()),
+                        static_cast<unsigned long long>(recorder.osk_events()),
+                        static_cast<unsigned long long>(flip_count),
+                        static_cast<unsigned long long>(recorder.checks()));
+        }
+        if (player) {
+            const std::size_t recorded = player->recording().checks.size();
+            std::printf(
+                "replay: %llu of %llu recorded samples played; frame checks: %llu "
+                "matched, %llu differed%s, %llu not reached\n",
+                static_cast<unsigned long long>(
+                    std::min(sample_count, player->recording().samples)),
+                static_cast<unsigned long long>(player->recording().samples),
+                static_cast<unsigned long long>(checks_matched),
+                static_cast<unsigned long long>(checks_differed),
+                checks_differed != 0u
+                    ? (" (first at flip " + std::to_string(first_difference) + ")").c_str()
+                    : "",
+                static_cast<unsigned long long>(recorded - checks_matched - checks_differed));
+        }
         const char *result_name = result == mpo::kernel::RunResult::kIdle
                                       ? "idle (every thread waits, no timer)"
                                   : result == mpo::kernel::RunResult::kStopped ? "stopped"
@@ -894,6 +1122,9 @@ int main(int argc, char **argv) {
                         static_cast<unsigned long long>(gs.patches),
                         static_cast<unsigned long long>(gs.clut_loads),
                         static_cast<unsigned long long>(gs.block_transfers));
+            if (gs.immediate_ignored != 0u)
+                std::printf("ge: %llu immediate points of a register clear ignored (as PPSSPP)\n",
+                            static_cast<unsigned long long>(gs.immediate_ignored));
             for (const auto &[what, count] : gs.unsupported)
                 std::printf("ge: unsupported: %s (%llu)\n", what.c_str(),
                             static_cast<unsigned long long>(count));
@@ -1096,6 +1327,8 @@ int main(int argc, char **argv) {
             runtime.stop_reason().find("unimplemented HLE import") == std::string::npos &&
             runtime.stop_reason().find("sceKernelExitGame") == std::string::npos;
         exit_code = faulted ? 1 : 0;
+        // F19: a replay that does not match its recording fails.
+        if (checks_differed != 0u) exit_code = 1;
 #if MPO_BOOT_VULKAN
         if (validation_failed) exit_code = 1;
         system.ge().set_after_run(nullptr);

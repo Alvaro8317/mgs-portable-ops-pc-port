@@ -3,7 +3,8 @@
 # Window, presentation and input (F10a). Kept free of HLE registration (that
 # is F10b):
 # - mpo_frontend: framebuffer -> RGBA conversion and host input -> SceCtrlData
-#   translation. C++ only, no SDL, so it is tested without a window.
+#   translation, and the input recording and replay of F19. C++ only, no
+#   SDL, so it is tested without a window.
 # - mpo_frontend_sdl: the SDL3 window/presenter, SDL event -> translator glue
 #   and the TOML input mapping (key and button names are SDL's).
 # - mpo_frontend_demo: manual test tool (synthetic framebuffers in the four
@@ -15,6 +16,7 @@ add_library(mpo_frontend STATIC
     ctrl.cpp
     framebuffer.cpp
     input.cpp
+    input_recording.cpp
 )
 target_include_directories(mpo_frontend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(mpo_frontend PUBLIC cxx_std_20)
