@@ -230,16 +230,22 @@ los hilos y fibras, en vez de depender de `ulimit`.
 
 - **AP Scan (reclutar escaneando APs de Wi-Fi)**:
   - Cómo funciona: llama `sceNetApctlScanUser`, espera el evento `SCAN_COMPLETE` y lee los resultados
-    con `sceNetApctlGetBSSDescIDListUser` y `sceNetApctlGetBSSDescEntryUser` (BSSID, SSID, canal,
-    señal y seguridad).
+    con `sceNetApctlGetBSSDescIDListUser` y `sceNetApctlGetBSSDescEntryUser` (BSSID, SSID y señal).
   - En PPSSPP se queda colgado escaneando (issue #20703); en JPCSP funciona.
-  - Plan: un **generador de APs virtuales con semilla** (BSSID y SSID estables y señal configurable)
-    que respete el cooldown. Opcionalmente, usar el escaneo real del sistema operativo (WlanAPI o
-    nl80211).
+  - **Hecho en F20b [V]**: `host/hle/net.hpp` sobre el modelo de F20a (`host/apscan/`). Los eventos
+    van por un hilo `ApctlThread` del host, nunca dentro de `ScanUser`. Los APs virtuales tienen
+    semilla (`--ap-seed`) y cambian cada día local o con `--ap-place`. Se recluta en `briefing` ›
+    RECRUIT y se sale sin cuelgues (`docs/analysis/apscan.md` §10).
+  - `mgp_main` guarda la MAC (`--mac`, fija) en cada soldado y tiene un historial por AP
+    (`0x08839F9C`) que rechaza un BSSID ya usado (F20b [V]).
+  - Opcional: usar el escaneo real del sistema operativo (WlanAPI o nl80211).
   - Esto **es necesario para el 100 %**: algunos soldados (GRU, KGB, Ocelot) solo se consiguen así.
-- **GPS (PSP-290)**: existe solo en US y JP; EU no lo tiene. Se deja como stub ("no hay receptor") y
-  el contenido que dependa de él se evalúa más adelante.
-- **Ad hoc e infraestructura**: no hacen falta para jugar.
+- **GPS (PSP-290)**: existe solo en US y JP; EU no lo tiene. Es un stub ("no hay receptor"): GPS
+  SCAN dice "Connection has not been established for GPS receiver" y vuelve (F20b [V]). El
+  contenido que dependa de él se evalúa más adelante.
+- **Ad hoc e infraestructura**: no hacen falta para jugar. Desde F20b, ad hoc responde "sin nadie
+  alrededor" (MATCH crea y busca partidas y sale limpio [V]) y la infraestructura "sin red"
+  (`sceUtilityNetconf` dice que no hay red y se cancela).
   - Más adelante se puede añadir compatibilidad con el servidor ad hoc de PPSSPP.
   - Para el online se puede usar el revival de SaveMGO (`mpo.savemgo.com`, STUN `stun.mgo2pc.com`,
     UDP 5730), que usa HTTP plano.

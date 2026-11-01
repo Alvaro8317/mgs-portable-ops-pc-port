@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The sceUtility entry points of the three dialogs, without NIDs (F18a).
+// The sceUtility entry points of the dialogs, without NIDs (F18a; F20b adds
+// Netconf and the HTML viewer).
 // Ported from PPSSPP Core/HLE/sceUtility.cpp @ v1.20.4.
 //
 // One dialog runs at a time: InitStart of another kind while one is active
@@ -22,6 +23,7 @@
 #include "kernel/clock.hpp"
 #include "kernel/guest_memory.hpp"
 #include "savedata/msg_dialog.hpp"
+#include "savedata/net_dialog.hpp"
 #include "savedata/osk_dialog.hpp"
 #include "savedata/psp_types.hpp"
 #include "savedata/save_dialog.hpp"
@@ -47,8 +49,7 @@ public:
     // msToCycles(0.7315 + 0.1): a vblank plus slack (PPSSPP #12044).
     static constexpr std::uint64_t kOskUpdateCycles = 184'593;
 
-    UtilityDialogs(kernel::Clock &clock, SavedataStore &store)
-        : savedata_(clock, store), msg_(clock), osk_(clock) {}
+    UtilityDialogs(kernel::Clock &clock, SavedataStore &store);
 
     UtilityResult savedata_init_start(kernel::GuestMemory &memory, std::uint32_t address);
     UtilityResult savedata_shutdown_start();
@@ -69,12 +70,25 @@ public:
                              const ButtonState &buttons);
     UtilityResult osk_get_status();
 
+    // F20b: the network dialogs (net_dialog.hpp). PPSSPP gives their Update
+    // and GetStatus no delay.
+    UtilityResult net_init_start(DialogType type, kernel::GuestMemory &memory,
+                                 std::uint32_t address);
+    UtilityResult net_shutdown_start(DialogType type);
+    UtilityResult net_update(DialogType type, kernel::GuestMemory &memory, int anim_speed,
+                             const ButtonState &buttons);
+    UtilityResult net_get_status(DialogType type);
+
     [[nodiscard]] DialogType current_type() const noexcept { return type_; }
     [[nodiscard]] bool active() const noexcept { return active_; }
 
     SaveDialog &savedata() noexcept { return savedata_; }
     MsgDialog &msg() noexcept { return msg_; }
     OskDialog &osk() noexcept { return osk_; }
+    // kNetconf or kHtmlViewer.
+    NetDialog &net(DialogType type) noexcept {
+        return type == DialogType::kHtmlViewer ? html_viewer_ : netconf_;
+    }
 
     void set_volatile_hooks(VolatileMemoryHooks *hooks) noexcept;
 
@@ -86,6 +100,8 @@ private:
     SaveDialog savedata_;
     MsgDialog msg_;
     OskDialog osk_;
+    NetDialog netconf_;
+    NetDialog html_viewer_;
     DialogType type_ = DialogType::kNone;
     bool active_ = false;
 };

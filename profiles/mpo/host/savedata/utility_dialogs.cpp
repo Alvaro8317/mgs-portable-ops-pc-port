@@ -6,6 +6,15 @@
 
 namespace mpo::savedata {
 
+UtilityDialogs::UtilityDialogs(kernel::Clock &clock, SavedataStore &store)
+    : savedata_(clock, store), msg_(clock), osk_(clock),
+      netconf_(DialogType::kNetconf, clock, "Network Connection",
+               "A connection error has occurred.\nThis version has no infrastructure "
+               "network: online play is not available."),
+      html_viewer_(DialogType::kHtmlViewer, clock, "Internet Browser",
+                   "A connection error has occurred.\nThis version has no internet "
+                   "browser.") {}
+
 UtilityResult UtilityDialogs::wrong_type() {
     return {static_cast<std::int32_t>(error::kWrongType), 0, 0};
 }
@@ -21,6 +30,8 @@ void UtilityDialogs::set_volatile_hooks(VolatileMemoryHooks *hooks) noexcept {
     savedata_.set_volatile_hooks(hooks);
     msg_.set_volatile_hooks(hooks);
     osk_.set_volatile_hooks(hooks);
+    netconf_.set_volatile_hooks(hooks);
+    html_viewer_.set_volatile_hooks(hooks);
 }
 
 // --- Savedata ---------------------------------------------------------------
@@ -106,6 +117,32 @@ UtilityResult UtilityDialogs::osk_update(kernel::GuestMemory &memory, int anim_s
 UtilityResult UtilityDialogs::osk_get_status() {
     if (type_ != DialogType::kOsk) return wrong_type();
     return {static_cast<std::int32_t>(osk_.status()), 0, 0};
+}
+
+// --- Netconf and HtmlViewer ------------------------------------------------
+
+UtilityResult UtilityDialogs::net_init_start(DialogType type, kernel::GuestMemory &memory,
+                                             std::uint32_t address) {
+    if (!can_start(type)) return wrong_type();
+    activate(type);
+    return {net(type).init(memory, address), 0, 0};
+}
+
+UtilityResult UtilityDialogs::net_shutdown_start(DialogType type) {
+    if (type_ != type) return wrong_type();
+    active_ = false;
+    return {net(type).shutdown(), 0, 0};
+}
+
+UtilityResult UtilityDialogs::net_update(DialogType type, kernel::GuestMemory &memory,
+                                         int anim_speed, const ButtonState &buttons) {
+    if (type_ != type) return wrong_type();
+    return {net(type).update(memory, anim_speed, buttons), 0, 0};
+}
+
+UtilityResult UtilityDialogs::net_get_status(DialogType type) {
+    if (type_ != type) return wrong_type();
+    return {static_cast<std::int32_t>(net(type).status()), 0, 0};
 }
 
 } // namespace mpo::savedata

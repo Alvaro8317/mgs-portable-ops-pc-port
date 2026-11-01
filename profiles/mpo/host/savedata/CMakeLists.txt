@@ -2,12 +2,15 @@
 #
 # mpo_savedata (F18a): sceUtilitySavedata, sceUtilityMsgDialog and
 # sceUtilityOsk without the HLE: dialog state machines ported from PPSSPP,
-# the savedata files on the host and the default ms0:/ folder. No game data,
-# no NID registration (that is F18b), no libkirk (see savedata_cipher.hpp).
+# the savedata files on the host and the default ms0:/ folder. F20b adds
+# sceUtilityNetconf and sceUtilityHtmlViewer, which only say there is no
+# network. No game data, no NID registration (that is F18b), no libkirk
+# (see savedata_cipher.hpp).
 
 add_library(mpo_savedata STATIC
     dialog.cpp
     msg_dialog.cpp
+    net_dialog.cpp
     osk_dialog.cpp
     save_dialog.cpp
     save_paths.cpp

@@ -24,6 +24,8 @@
 // sceMpeg shows the videos and plays their sound, and sceLibFont draws text
 // with the firmware fonts of SystemConfig::font_dir (F17b, Fonts). The
 // sceUtility dialogs save to ms0_root and draw with PPGe (F18b, Utility).
+// The network (F20b, Net) runs the AP Scan on virtual access points and
+// answers "no network" everywhere else.
 
 #pragma once
 
@@ -45,6 +47,7 @@
 #include "hle/io_manager.hpp"
 #include "hle/modules.hpp"
 #include "hle/mpeg.hpp"
+#include "hle/net.hpp"
 #include "hle/overlays.hpp"
 #include "hle/runtime_memory.hpp"
 #include "hle/utility.hpp"
@@ -76,6 +79,8 @@ struct SystemConfig {
     bool rtc_from_host = true;
     std::int64_t rtc_base_seconds = 0;
     std::int64_t rtc_utc_offset_seconds = 0;
+    // The MAC, the WLAN switch and the AP Scan's virtual APs (F20b).
+    NetConfig net;
 };
 
 class System {
@@ -103,6 +108,7 @@ public:
     [[nodiscard]] Fonts &fonts() noexcept { return *fonts_; }
     [[nodiscard]] VolatileMemory &volatile_memory() noexcept { return volatile_memory_; }
     [[nodiscard]] Utility &utility() noexcept { return *utility_; }
+    [[nodiscard]] Net &net() noexcept { return *net_; }
     [[nodiscard]] const SystemConfig &config() const noexcept { return config_; }
 
     // Mounts the ISO and the memory stick of the config (boot() does it too).
@@ -143,13 +149,14 @@ private:
     std::unique_ptr<Audio> audio_;
     std::unique_ptr<Fonts> fonts_;
     std::unique_ptr<Utility> utility_;
+    std::unique_ptr<Net> net_;
     VolatileMemory volatile_memory_;
     bool mounted_ = false;
     std::map<std::uint32_t, std::uint32_t> utility_modules_;
 };
 
 // The HLE groups (hle_kernel.cpp, hle_time.cpp, hle_system.cpp; IoManager,
-// Display, Interrupts, Ctrl, GeManager, Mpeg, Audio, Fonts and Utility register
+// Display, Interrupts, Ctrl, GeManager, Mpeg, Audio, Fonts, Utility and Net register
 // their own).
 void register_kernel_hle(System &system);
 void register_module_hle(System &system);

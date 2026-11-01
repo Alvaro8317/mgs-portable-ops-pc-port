@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -114,7 +114,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F18c | Conversor de saves cifrados en el instalador (autónomo) | M4 | ✅ hecha (CI en Windows pasa; cargar los exports en PPSSPP: pendiente del usuario) |
 | F19 | Primera misión y repetición de input | M5 | ✅ hecha (M5 cerrado en Linux; Windows: pendiente del usuario; la contraseña pasa a F20b) |
 | F20a | Generador de APs virtuales (autónomo) | M6 | ✅ hecha (ola 2) |
-| F20b | AP Scan, red y GPS en el juego | M6 | ⬜ pendiente |
+| F20b | AP Scan, red y GPS en el juego | M6 | ✅ hecha (se recluta por AP Scan; Windows y el menú de red de la antena: pendientes) |
 | F21 | Partida completa y estabilidad | M6 | ⬜ pendiente |
 | F22 | Empaquetado y release 0.1 | M6 | ⬜ pendiente |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
@@ -1338,6 +1338,12 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - `sceWlanGetEtherAddr` se llama cientos de veces en `briefing` y en las misiones (hoy devuelve
     0 sin implementar).
 
+- **Notas (cierre de F20b)**: hecha, ver `docs/sessions/F20b.md`. Se recluta por AP Scan en el
+  juego desde el save del usuario, con 64 escaneos seguidos y dos salidas limpias; la contraseña
+  (OSK, límite 10) se valida; GPS SCAN dice que no hay receptor y vuelve; MATCH (ad hoc) crea y busca
+  partidas sin nadie y sale limpio. La antena de `briefing` (infraestructura) sigue en gris en las
+  partidas que hay.
+
 ### F21 — Partida completa y estabilidad
 
 - **Objetivo**: jugar de principio a fin.
@@ -1361,6 +1367,16 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Notas (F18c)**: el diálogo de la lista de saves no dibuja `ICON0.PNG` (sale un recuadro con el
   número de ranura; PPSSPP muestra el ícono). Un save de PPSSPP del usuario importado con
   `mpo --import-save` deja empezar desde mitad del juego (`briefing`, 19 de noviembre de 1970).
+- **Notas (F20b)**: ver `docs/sessions/F20b.md`.
+  - `analysis/f20b/ap-user2.input` es la grabación más avanzada: el save importado, el AP Scan, la
+    contraseña, GPS SCAN y MATCH. Se sigue con `analysis/f20b/play.sh <nombre> <grabación>`.
+  - Falta probar el menú de red de la antena (Netconf e infraestructura) cuando se active en la
+    historia: tiene que decir que no hay red y dejar volver.
+  - `n01` y `ntmenu2` (MATCH) corren en el intérprete; hay que recompilarlas.
+  - `mpo_boot --watch-call <dirección>` anota en la traza los argumentos y el resultado de una
+    función del juego: sirve para investigar un bug sin depurador.
+  - Una repetición necesita los mismos `--ap-seed`, `--ap-place` y `--mac` que su grabación (los tres
+    tienen valores por defecto fijos).
 
 ### F22 — Empaquetado y release 0.1
 

@@ -19,6 +19,12 @@
 // in a nested run_until() with no PSP thread (run_interrupt); visibility
 // points inside them do not preempt.
 //
+// Host threads (F20b): a PSP thread whose entry is an address registered with
+// set_host_thread_entry() runs that host function on its fiber instead of
+// dispatching guest code, like PPSSPP's HLE loops (__CreateHLELoop: the
+// ApctlThread). It may block in the kernel and call guest code (call_guest)
+// like any HLE call; its return value is the thread's exit status.
+//
 // A runtime stop (an unimplemented import, a guest memory fault) is fatal: the
 // thread parks itself and asks the kernel to stop, so Kernel::run() returns
 // kStopped and the host reads Runtime::stop_reason().
@@ -70,6 +76,13 @@ public:
         on_thread_start_ = std::move(handler);
     }
 
+    // The host function a thread starting at `address` runs (F20b); an empty
+    // function removes it, which must not happen while a thread runs it.
+    // `address` is 8 bytes of guest memory the host owns:
+    // `b -1; nop` is written there for a stray interpreter pass.
+    using HostThreadEntry = std::function<std::uint32_t(const kernel::ThreadStart &)>;
+    void set_host_thread_entry(std::uint32_t address, HostThreadEntry entry);
+
     // Runs an interrupt handler (F09) on the stack of whoever calls it (the
     // scheduler or the fiber of the interrupted thread, inside a kernel event),
     // like PPSSPP's __RunOnePendingInterrupt on the idle thread: a fresh
@@ -111,6 +124,7 @@ private:
     std::unordered_map<kernel::Uid, std::unique_ptr<ThreadCpu>> threads_;
     std::function<void(kernel::Uid, std::uint32_t)> on_thread_return_;
     std::function<void(const kernel::ThreadStart &)> on_thread_start_;
+    std::unordered_map<std::uint32_t, HostThreadEntry> host_entries_;
     kernel::Kernel *preempt_kernel_ = nullptr;
     std::function<void()> on_tick_;
     std::uint64_t switches_ = 0;

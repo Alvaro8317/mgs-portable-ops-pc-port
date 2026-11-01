@@ -179,11 +179,20 @@ reclutar, a `objeto+0x240`):
 - **Del registro al soldado**:
   - `0x08BAEF54` llama a `0x08836E18(…, −1, id especial, 1, semilla, tipo, 0)` y a `0x08836F38` de
     `mgp_main` [V]. Que sean el generador de soldados es una deducción [?].
-  - `0x0883754C(soldado, …, 1)` tiene que devolver 1 para que el AP cuente; si no, el escaneo no da
-    objetivo [V]. Devuelve −1, −2, −4 o −5 según cuatro comprobaciones distintas. Que una de ellas
-    rechace un soldado repetido es una hipótesis [?]. Si lo es, un AP ya usado no vuelve a servir.
-  - Al terminar de llenar la barra, `0x08839D88` confirma el recluta [?] y el juego guarda el momento
-    en `0x08A5D704` [V].
+  - `0x0883754C(soldado, BSSID, 1)` tiene que devolver 1 para que el AP cuente; si no, el escaneo no
+    da objetivo [V]. Son cuatro comprobaciones, en orden (F20b, decompiladas) [V]:
+    - −1 si `0x08832C98` encuentra el soldado entre los 100 de la unidad
+      (`*(0x089F51D0) + 0x778`, registros de 0x88 bytes, comparados con `0x08832BA8`);
+    - −2 si `0x08832D1C` lo encuentra en otra lista de soldados (`0x08839CF8`/`0x08839D08`) [?: cuál];
+    - −4 si `0x08839F9C(1, BSSID)` encuentra **ese BSSID** en una tabla de 100 entradas de 24 bytes
+      (`u16 tipo`, BSSID en `+8`) con tipo 1, 4 o 5. **Es el historial por AP** que los foros
+      describen como "24 h por AP": está en `mgp_main`, no en la etapa. Cuándo se vacía no se miró
+      [?];
+    - −5 si `0x08837770` dice que el soldado no es válido (rangos de sus campos).
+  - En el juego, con los APs virtuales, devuelve 1 en todos los escaneos (F20b, `--watch-call`) [V].
+  - Al pasar la barra de 400, `0x08BDB8BC` devuelve 1, el AP pasa a `objeto+0x240` y en el
+    siguiente `SCAN_COMPLETE` **`0x08839D88` confirma el recluta** (devuelve ≥ 0; en F20b, 1) y el
+    juego guarda el momento en `0x08A5D704` [V]. Sale "New soldier found." y la ficha del soldado.
 - **Seguridad del AP**: el juego **no la consulta** [V]. Lo de que "cuenta si tiene contraseña" (un
   foro, `docs/RESEARCH.md`) no se ve en este build.
 
@@ -196,8 +205,13 @@ reclutar, a `objeto+0x240`):
   - una oscilación (`objeto+0x298`, con `vsin`).
 - El objetivo sale de la señal del AP elegido: se acota a **[10, tope]** y se convierte en
   `señal × 480 / 100`, con un mínimo fijo. Si el escaneo no da AP, el objetivo vuelve a 0.
-- Cuando `0x08BB0FD4` devuelve 1 con el botón pulsado (probablemente, con la barra llena [?]), el
-  AP elegido se copia a `objeto+0x240`. **El recluta empieza en el siguiente `SCAN_COMPLETE`**
+- **La escala** (constantes de `briefing` en `0x08BE348C`…, F20b) [V]: la barra va de 0 a 480
+  (el ancho de la pantalla), y **la meta es 400** (la línea punteada en x = 398). El nivel base se
+  mueve como `base = 0,95·base + 0,05·objetivo` por frame, la componente del jugador sube 10 por
+  frame con el botón hasta 400, y si el objetivo no supera 1 el botón no hace nada (la componente
+  se multiplica por 0,8).
+- En `briefing`, cuando `0x08BDB8BC` (en `apscan`, `0x08BB0FD4`) devuelve 1 con el botón pulsado
+  (la barra pasó de 400) [V], el AP elegido se copia a `objeto+0x240` y el objetivo pasa a 480. **El recluta empieza en el siguiente `SCAN_COMPLETE`**
   (estados 5 a 7), así que también depende de que los escaneos sigan terminando.
 - **Cooldown global del juego** (no es por AP):
   - `t = reloj/300 − último_recluta/300`, con `reloj = *(*(0x089F51D0) + 0x3C)` y
@@ -208,8 +222,8 @@ reclutar, a `objeto+0x240`):
   - Si no, el tope es 50 y la `caída` es 1.
   - **La unidad de `reloj` no se confirmó** [?]. Si son frames a 60 Hz, el cooldown dura 15 minutos;
     si son a 30 Hz, 30. Tampoco se sabe si `0x08A5D704` va en la partida guardada [?].
-- **No hay historial por AP** en la etapa [V]. El "cooldown de 24 h por AP" de los foros
-  (`docs/RESEARCH.md`) no aparece aquí. Podría estar en `0x0883754C` [?].
+- **No hay historial por AP en la etapa** [V], pero sí en `mgp_main`: `0x0883754C` rechaza un BSSID
+  que esté en su tabla (§5) [V].
 - Qué botón llena la barra y cuál pide salir (las máscaras de `0x08A793F0` sobre el pad) no se miró
   [?].
 
@@ -282,6 +296,25 @@ Todo esto lo cumple ya el modelo de F20a (`apctl_model.hpp`) y lo prueba `mpo_ap
    - hay que aceptar `sceNetInit`, `sceNetInetInit`, `sceNetApctlInit`/`Term`,
      `sceUtilityLoadNetModule(1, 3)` y sus `Unload`, aunque no hagan nada.
 
+## 10. Verificado en el juego (F20b)
+
+- El usuario jugó en la ventana desde su save de PPSSPP importado (19 de noviembre de 1970, Easy):
+  `analysis/f20b/ap-user.input` (local), y su repetición sin ventana sale idéntica (252 de 252
+  hashes de frame) [V]:
+  - el AP Scan se abre desde **RECRUIT** en el menú de `briefing` (Cruz en el mapa); antes sale el
+    `MsgDialog` "WARNING! When searching for comrades, please be safe…";
+  - `sceUtilityLoadNetModule(1)` y `(3)`, `sceNetInit`, `sceNetApctlInit(0x8000, 0x21)`,
+    `sceWlanGetSwitchState` → 1 y **64 escaneos seguidos, los 64 completados**, con 128 llamadas al
+    handler desde `ApctlThread`;
+  - **recluta**: la barra llega a 400 con BOOST, "GET", "New soldier found." y la ficha (SEA URCHIN,
+    Captain) [V];
+  - **sale sin cuelgues dos veces**: `DelHandler`, `Term` y vuelta al menú; la segunda vez con
+    "ACCESS POINT SCAN has been canceled" (el síntoma de PPSSPP #20703 no aparece) [V];
+  - la **contraseña** está en el mismo menú: OSK "ENTER PASSWORD" con límite 10, y el juego valida
+    ("The password is incorrect.") [V].
+- La herramienta para mirar dentro: `mpo_boot --watch-call <dirección>` anota en la traza los
+  argumentos y el resultado de una función del juego (ganchos de dispatch del runtime).
+
 ## Lo que falta confirmar
 
 - Cuánto tarda un escaneo en una PSP real (JPCSP usa 700 ms) y si el firmware entrega
@@ -289,5 +322,6 @@ Todo esto lo cumple ya el modelo de F20a (`apctl_model.hpp`) y lo prueba `mpo_ap
 - Qué devuelve el firmware en `GetBSSDescIDListUser` mientras escanea, y el código de error de un
   `entryId` inválido (el modelo usa `INVALID_ID`, `0x80410A09`).
 - La unidad del reloj del cooldown y si el último recluta va en la partida guardada (§6).
-- Qué comprueba `0x0883754C` y si un AP ya usado se puede reutilizar (§5).
+- Cuándo se vacía el historial por AP de `mgp_main` (§5): de eso depende cuántos reclutas da un
+  mismo conjunto de APs virtuales (F20b los rota cada día local y con `--ap-place`).
 - El código de `briefing` se comparó solo en las funciones del escaneo (§1).

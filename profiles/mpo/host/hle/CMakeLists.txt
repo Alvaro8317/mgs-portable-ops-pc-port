@@ -7,7 +7,8 @@
 # F10b, sceCtrl; F11b, sceGe on mpo_ge and sceMpeg on mpo_video; F13, the
 # stage overlays (OverlayManager and their libraries); F16b, sceAudio, sceSasCore
 # and sceAtrac3plus on mpo_audio; F17b, sceLibFont on mpo_font; F18b, the
-# sceUtility dialogs on mpo_savedata, drawn with PPGe.
+# sceUtility dialogs on mpo_savedata, drawn with PPGe; F20b, the network
+# (sceNetApctl on mpo_apscan's virtual APs, the rest "no network").
 # Like mpo_recomp it only sees the framework headers: whatever links it also
 # links psprecomp_core (an object library) once.
 
@@ -22,6 +23,7 @@ add_library(mpo_hle STATIC
     hle_io.cpp
     hle_kernel.cpp
     hle_mpeg.cpp
+    hle_net.cpp
     hle_system.cpp
     hle_table.cpp
     hle_time.cpp
@@ -37,7 +39,7 @@ target_include_directories(mpo_hle SYSTEM PUBLIC
     $<TARGET_PROPERTY:psprecomp_core,INTERFACE_INCLUDE_DIRECTORIES>)
 # mpo_frontend (F10a, no SDL): SceCtrlData and the button masks for sceCtrl.
 target_link_libraries(mpo_hle PUBLIC mpo_kernel mpo_io mpo_frontend mpo_ge mpo_video mpo_audio mpo_font
-    mpo_savedata)
+    mpo_savedata mpo_apscan)
 # dlopen for the overlay libraries (nothing on Windows).
 target_link_libraries(mpo_hle PRIVATE ${CMAKE_DL_LIBS})
 if(MSVC)

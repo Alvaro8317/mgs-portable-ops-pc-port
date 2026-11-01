@@ -533,11 +533,15 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
   `__NetApctlCallbacks` usa referencias al frente de la cola después de `pop_front()`.
 - **JPCSP funciona.** Su implementación es la que hay que estudiar.
 
-**Plan para el port** [?]:
-- Generar los soldados con una función determinista de (BSSID, SSID, señal, tiempo), guardando el
-  historial en el save.
-- Usar APs virtuales con semilla, y opcionalmente el escaneo real del sistema operativo (WlanAPI o
-  nl80211).
+**En el port (F20b)** [V], ver [`docs/analysis/apscan.md`](analysis/apscan.md) §10:
+- Se recluta por AP Scan en el juego (`briefing` › RECRUIT › ACCESS POINT SCAN), con APs virtuales
+  con semilla que cambian cada día local; 64 escaneos seguidos y salidas sin cuelgues.
+- Los soldados los genera el juego a partir del BSSID y el SSID, y `mgp_main` **sí tiene un
+  historial por AP**: `0x08839F9C` rechaza un BSSID que ya esté en una tabla de 100 entradas (sería
+  el "24 h por AP" de los foros; cuándo se vacía no se sabe [?]).
+- El juego guarda la MAC de la PSP en cada soldado: el port usa una fija (`--mac`).
+- El escaneo real del sistema operativo (WlanAPI o nl80211) queda como extensión
+  (`make_os_scan_source()`).
 
 ### GPS (PSP-290)
 

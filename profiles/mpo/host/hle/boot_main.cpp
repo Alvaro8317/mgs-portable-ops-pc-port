@@ -15,6 +15,8 @@
 //            [--audio 0|1] [--audio-wav <file>] [--fonts <dir>] [--osk-text <text>]...
 //            [--record-input <file>] [--replay-input <file>] [--replay-end stop|live]
 //            [--check-every N] [--input-log 0|1]
+//            [--mac aa:bb:cc:dd:ee:ff] [--wlan 0|1] [--ap-seed N] [--ap-place N]
+//            [--watch-call <address>]...
 //
 // It measures the start-up (registering the dispatch table: time and memory),
 // runs PSP threads until --until-us of virtual time (default 5 s), a runtime
@@ -102,10 +104,25 @@
 //                             replay runs as fast as it can and realtime
 //                             starts at the handover.
 // With --window 1 or --replay-input, --until-us defaults to no limit.
+//
+// F20b: the network (net.hpp).
+//   --mac <mac>               the PSP's MAC address, which the game writes into
+//                             every soldier (keep it the same across sessions).
+//   --wlan 0|1                the WLAN switch (on by default; the AP Scan needs it).
+//   --ap-seed N               the seed of the AP Scan's virtual access points.
+//   --ap-place N              another set of APs, as if the PSP were somewhere
+//                             else (the set also changes every local day).
+// A replay needs the same --ap-seed and --ap-place as its recording (and the
+// RTC base, which the recording keeps). The report adds the AP scans.
+//   --watch-call <address>    (diagnostics) traces each call of the guest
+//                             function at <address>: $a0..$a3, $f12 and $ra
+//                             when it is entered, $v0 and $f0 when it returns.
+//                             Repeatable.
 // --input-log 1 prints to stderr every key, gamepad and focus event the
 // window receives.
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -114,6 +131,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -225,6 +243,63 @@ struct Press {
     std::uint64_t start_us = 0;
     std::uint64_t end_us = 0;
 };
+
+// --watch-call: the guest calls to trace, seen from the runtime's dispatch
+// hooks (an outer dispatch at the entry, then at its $ra) and its chained-call
+// hooks. Process-global, like the hooks.
+namespace watch {
+std::set<std::uint32_t> g_targets;
+mpo::hle::System *g_system = nullptr;
+std::map<std::pair<std::int32_t, std::uint32_t>, std::uint32_t> g_returns; // (thread, $ra) -> entry
+
+void enter(const psprecomp::AllegrexContext &ctx, std::uint32_t entry) {
+    g_system->hle().trace_event("watch: call %08X(%08X, %08X, %08X, %08X; f12 %g) ra=%08X", entry,
+                                ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[7],
+                                static_cast<double>(ctx.fpr[12]), ctx.gpr[31]);
+}
+void leave(const psprecomp::AllegrexContext &ctx, std::uint32_t entry) {
+    g_system->hle().trace_event("watch: %08X returns %08X (f0 %g)", entry, ctx.gpr[2],
+                                static_cast<double>(ctx.fpr[0]));
+}
+void pre_dispatch(psprecomp::Runtime &, psprecomp::AllegrexContext &ctx, std::uint32_t pc,
+                  std::int32_t thread) {
+    const std::uint32_t at = psprecomp::GuestMemory::canonical(pc);
+    const auto back = g_returns.find({thread, at});
+    if (back != g_returns.end()) {
+        leave(ctx, back->second);
+        g_returns.erase(back);
+    }
+    if (g_targets.contains(at)) {
+        enter(ctx, at);
+        g_returns[{thread, psprecomp::GuestMemory::canonical(ctx.gpr[31])}] = at;
+    }
+}
+void pre_chained(psprecomp::Runtime &, psprecomp::AllegrexContext &ctx, std::uint32_t target,
+                 std::uint32_t) {
+    if (g_targets.contains(psprecomp::GuestMemory::canonical(target))) enter(ctx, target);
+}
+void post_chained(psprecomp::Runtime &, psprecomp::AllegrexContext &ctx, std::uint32_t target,
+                  std::uint32_t) {
+    if (g_targets.contains(psprecomp::GuestMemory::canonical(target))) leave(ctx, target);
+}
+} // namespace watch
+
+// A recursive copy that keeps each file's modification time: the savedata
+// dialogs show it (F20b: a replay of a LOAD differed only in the save's date).
+void copy_tree(const std::filesystem::path &from, const std::filesystem::path &to,
+               std::error_code &ec) {
+    std::filesystem::copy(from, to, std::filesystem::copy_options::recursive, ec);
+    if (ec) return;
+    for (auto it = std::filesystem::recursive_directory_iterator(from, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        const std::filesystem::path target = to / std::filesystem::relative(it->path(), from, ec);
+        if (ec) return;
+        const auto time = std::filesystem::last_write_time(it->path(), ec);
+        if (ec) return;
+        std::filesystem::last_write_time(target, time, ec);
+        if (ec) return;
+    }
+}
 
 // "<buttons>@<ms>[+<ms>]", buttons joined with '|' or ','.
 bool parse_press(const std::string &text, Press *out) {
@@ -469,6 +544,18 @@ int main(int argc, char **argv) {
             replay_end_live = value == "live" ? 1 : 0;
         } else if (option == "--input-log") {
             input_log = value != "0";
+        } else if (option == "--mac") {
+            if (!mpo::hle::parse_mac(value, &config.net.mac))
+                return fail("--mac takes aa:bb:cc:dd:ee:ff");
+        } else if (option == "--wlan") {
+            config.net.wlan_switch = value != "0";
+        } else if (option == "--ap-seed") {
+            config.net.access_points.seed = std::strtoull(value.c_str(), nullptr, 0);
+        } else if (option == "--ap-place") {
+            config.net.access_points.epoch_offset = std::strtoll(value.c_str(), nullptr, 0);
+        } else if (option == "--watch-call") {
+            watch::g_targets.insert(psprecomp::GuestMemory::canonical(
+                static_cast<std::uint32_t>(std::strtoul(value.c_str(), nullptr, 0))));
         } else if (option == "--check-every") {
             check_every = std::max<std::uint64_t>(1u, std::strtoull(value.c_str(), nullptr, 0));
         } else {
@@ -496,7 +583,7 @@ int main(int argc, char **argv) {
         if (ms0.empty() && std::filesystem::is_directory(snapshot, ec)) {
             const std::filesystem::path copy = replay_path + ".ms0-replay";
             std::filesystem::remove_all(copy, ec);
-            std::filesystem::copy(snapshot, copy, std::filesystem::copy_options::recursive, ec);
+            copy_tree(snapshot, copy, ec);
             if (ec) return fail("cannot copy " + snapshot.string() + ": " + ec.message());
             ms0 = copy.string();
         }
@@ -538,7 +625,7 @@ int main(int argc, char **argv) {
         std::error_code ec;
         std::filesystem::remove_all(snapshot, ec);
         if (!ms0.empty()) {
-            std::filesystem::copy(ms0, snapshot, std::filesystem::copy_options::recursive, ec);
+            copy_tree(ms0, snapshot, ec);
             if (ec) return fail("cannot copy the memory stick to " + snapshot.string());
         }
     }
@@ -627,6 +714,12 @@ int main(int argc, char **argv) {
         if (!nid_table.empty() && !system.hle().load_nid_names(nid_table, &error))
             return fail(error);
         system.hle().set_trace(trace, trace_limit);
+        if (!watch::g_targets.empty()) {
+            watch::g_system = &system;
+            psprecomp::set_runtime_pre_dispatch_hook(&watch::pre_dispatch);
+            psprecomp::set_runtime_pre_chained_call_hook(&watch::pre_chained);
+            psprecomp::set_runtime_post_chained_call_hook(&watch::post_chained);
+        }
         for (const std::string &text : osk_texts) system.utility().queue_osk_text(text);
         if (!overlays_dir.empty()) {
             const std::size_t overlays = system.overlays().load_libraries(overlays_dir);
@@ -1162,6 +1255,23 @@ int main(int argc, char **argv) {
                         static_cast<unsigned long long>(ps.lists),
                         static_cast<unsigned long long>(ps.texts),
                         static_cast<unsigned long long>(ps.text_overflow));
+        }
+        {
+            const mpo::hle::Net::Stats &ns = system.net().stats();
+            const std::array<std::uint8_t, 6> &mac = system.net().config().mac;
+            std::printf("net: mac %02x:%02x:%02x:%02x:%02x:%02x, ap seed %llu place %lld; "
+                        "%llu ap scans (%llu done, %llu bss entries read), %llu apctl and %llu "
+                        "adhocctl handler calls, %llu ad hoc scans; %llu network dialogs\n",
+                        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                        static_cast<unsigned long long>(system.net().config().access_points.seed),
+                        static_cast<long long>(system.net().config().access_points.epoch_offset),
+                        static_cast<unsigned long long>(ns.ap_scans),
+                        static_cast<unsigned long long>(ns.ap_scans_done),
+                        static_cast<unsigned long long>(ns.bss_entries_read),
+                        static_cast<unsigned long long>(ns.apctl_handler_calls),
+                        static_cast<unsigned long long>(ns.adhocctl_handler_calls),
+                        static_cast<unsigned long long>(ns.adhoc_scans),
+                        static_cast<unsigned long long>(system.utility().stats().net_runs));
         }
         const mpo::hle::Audio::Stats &as = system.audio().stats();
         std::printf("audio: %llu blocks mixed from %llu us (%.1f s, %llu audible), %u channels "

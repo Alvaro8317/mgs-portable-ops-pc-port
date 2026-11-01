@@ -107,12 +107,14 @@ System::System(psprecomp::Runtime &runtime, const SystemConfig &config)
     const std::uint32_t stack = alloc_kernel_scratch(kInterruptStack, "interrupt-stack");
     interrupts_->set_context(0u, stack + kInterruptStack - 0x100u);
     clock_.set_realtime(config.realtime);
+    net_ = std::make_unique<Net>(*this, config.net);
     register_hle();
     if (config.vblank) display_->start();
 }
 
 System::~System() {
     // The kernel abandons the fibers; nothing of the guest runs past here.
+    net_.reset();
     utility_.reset();
     fonts_.reset();
     audio_.reset();
@@ -145,6 +147,7 @@ void System::register_hle() {
     audio_->register_hle();
     fonts_->register_hle();
     utility_->register_hle();
+    net_->register_hle();
 }
 
 bool System::mount(std::string *error) {

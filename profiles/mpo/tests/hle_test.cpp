@@ -203,6 +203,29 @@ enum Stub : std::uint32_t {
     kOskGetStatus,
     kGetSystemParamInt,
     kGetSystemParamString,
+    // F20b.
+    kWlanGetSwitchState,
+    kWlanGetEtherAddr,
+    kNetInit,
+    kNetTerm,
+    kNetApctlInit,
+    kNetApctlTerm,
+    kNetApctlAddHandler,
+    kNetApctlScanUser,
+    kNetApctlGetState,
+    kNetApctlGetBSSDescIDListUser,
+    kNetApctlGetBSSDescEntryUser,
+    kNetAdhocctlInit,
+    kNetAdhocctlTerm,
+    kNetAdhocctlAddHandler,
+    kNetAdhocctlScan,
+    kNetAdhocctlGetScanInfo,
+    kNetAdhocctlCreate,
+    kNetAdhocctlGetState,
+    kNetAdhocctlDisconnect,
+    kNetconfInitStart,
+    kNetconfGetStatus,
+    kNetconfUpdate,
     kStubCount,
 };
 constexpr StubImport kStubImports[kStubCount] = {
@@ -248,10 +271,21 @@ constexpr StubImport kStubImports[kStubCount] = {
     {"sceUtility", 0x9790B33Cu},       {"sceUtility", 0xD4B95FFBu},
     {"sceUtility", 0x8874DBE0u},       {"sceUtility", 0x2AD8E239u},
     {"sceUtility", 0x67AF3428u},       {"sceUtility", 0x95FC253Bu},
-    {"sceUtility", 0x9A1C91D7u},       {"sceUtility", 0x4DB1E739u},
+    {"sceUtility", 0x9A1C91D7u},       {"sceUtility", 0x4928BD96u},
     {"sceUtility", 0xF6269B82u},       {"sceUtility", 0x3DFAEBA9u},
     {"sceUtility", 0x4B85C861u},       {"sceUtility", 0xF3F76017u},
     {"sceUtility", 0xA5DA2406u},       {"sceUtility", 0x34B78343u},
+    {"sceWlanDrv", 0xD7763699u},       {"sceWlanDrv", 0x0C622081u},
+    {"sceNet", 0x39AF39A6u},           {"sceNet", 0x281928A9u},
+    {"sceNetApctl", 0xE2F91F9Bu},      {"sceNetApctl", 0xB3EDD0ECu},
+    {"sceNetApctl", 0x8ABADD51u},      {"sceNetApctl", 0xE9B2E5E6u},
+    {"sceNetApctl", 0x5DEAC81Bu},      {"sceNetApctl", 0x6BDDCB8Cu},
+    {"sceNetApctl", 0x04776994u},      {"sceNetAdhocctl", 0xE26F226Eu},
+    {"sceNetAdhocctl", 0x9D689E13u},   {"sceNetAdhocctl", 0x20B317A0u},
+    {"sceNetAdhocctl", 0x08FFF7A0u},   {"sceNetAdhocctl", 0x81AEE1BEu},
+    {"sceNetAdhocctl", 0xEC0635C1u},   {"sceNetAdhocctl", 0x75ECD386u},
+    {"sceNetAdhocctl", 0x34401D65u},   {"sceUtility", 0x4DB1E739u},
+    {"sceUtility", 0x6332AA39u},       {"sceUtility", 0x91E70E35u},
 };
 constexpr std::uint32_t stub(Stub s) {
     return kStubs + 8u * static_cast<std::uint32_t>(s);
@@ -2478,6 +2512,234 @@ void test_utility() {
     CHECK(!ec);
 }
 
+// F20b: the AP Scan as MPO drives it (docs/analysis/apscan.md): a handler
+// that logs its five arguments, three scans in a row, the BSS list and one
+// entry, then ad hoc alone (a scan with no groups, a group of one, a
+// disconnect) and the Netconf dialog that says there is no network.
+void test_net() {
+    mh::SystemConfig config;
+    config.rtc_from_host = false;
+    config.rtc_base_seconds = 1'800'000'000; // 2027-01-15
+    config.net.access_points.seed = 0x4D504Fu;
+    config.net.mac = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
+    Fixture f(config);
+    psprecomp::Runtime &rt = f.runtime;
+    constexpr int t3 = 11, t4 = 12, t5 = 13;
+
+    constexpr std::uint32_t kResults = kData;
+    constexpr std::uint32_t kLogCount = kData + 0x400u;
+    constexpr std::uint32_t kLog = kData + 0x500u; // 32 bytes per call
+    constexpr std::uint32_t kAdhocCount = kData + 0x404u;
+    constexpr std::uint32_t kAdhocLog = kData + 0xA00u;
+    constexpr std::uint32_t kMac = kData + 0x1000u;
+    constexpr std::uint32_t kState = kData + 0x1010u;
+    constexpr std::uint32_t kSize = kData + 0x1014u;
+    constexpr std::uint32_t kList = kData + 0x1100u;
+    constexpr std::uint32_t kEntry = kData + 0x1200u; // 0x30 bytes per infoId
+    constexpr std::uint32_t kAdhocState = kData + 0x1400u;
+    constexpr std::uint32_t kScanSize = kData + 0x1404u;
+    constexpr std::uint32_t kGroup = kData + 0x1410u;
+    constexpr std::uint32_t kNetconf = kData + 0x1500u;
+    constexpr std::uint32_t kArg = 0x1234u;
+    rt.memory().store32(kSize, 0x80u);
+    rt.memory().store32(kScanSize, 0xFFu);
+    for (std::uint32_t k = 0; k < 0x200u; ++k) rt.memory().store8(kEntry + k, 0xEEu);
+    put_string(rt, kGroup, "MPOGROUP");
+    mpo::savedata::DialogCommon common{};
+    common.size = 0x40u;
+    for (std::uint32_t k = 0; k < sizeof(common); ++k)
+        rt.memory().store8(kNetconf + k, reinterpret_cast<const std::uint8_t *>(&common)[k]);
+    rt.memory().store32(kNetconf + 0x30u, 3u); // netAction CONNECT_APNET_LAST, as MPO
+
+    // handler(a0..a3, t0): appends the five arguments to a log.
+    const auto logging_handler = [&](Asm &a, std::uint32_t count, std::uint32_t log) {
+        const std::uint32_t at = a.here();
+        a.li(t2, count);
+        a.lw(t3, 0, t2);
+        a.sll(t4, t3, 5u);
+        a.li(t5, log);
+        a.addu(t5, t5, t4);
+        a.sw(a0, 0, t5);
+        a.sw(a1, 4, t5);
+        a.sw(a2, 8, t5);
+        a.sw(a3, 12, t5);
+        a.sw(t0, 16, t5);
+        a.addiu(t3, t3, 1);
+        a.sw(t3, 0, t2);
+        a.ret();
+        return at;
+    };
+    Asm handlers(rt, kCode + 0x8000u);
+    const std::uint32_t apctl_handler = logging_handler(handlers, kLogCount, kLog);
+    const std::uint32_t adhoc_handler = logging_handler(handlers, kAdhocCount, kAdhocLog);
+
+    Asm main(rt, kCode);
+    const std::uint32_t entry = main.here();
+    std::int32_t slot = 0;
+    const auto rec = [&] {
+        main.sw(v0, slot, s7);
+        slot += 4;
+    };
+    const auto rec_word = [&](std::uint32_t address) {
+        main.li(t2, address);
+        main.lw(v0, 0, t2);
+        rec();
+    };
+    const auto delay = [&](std::uint32_t us) {
+        main.li(a0, us);
+        main.call(kDelayThread);
+    };
+    const auto call = [&](Stub s, std::initializer_list<std::uint32_t> args) {
+        int reg = a0;
+        for (const std::uint32_t value : args) main.li(reg++, value);
+        main.call(s);
+        rec();
+    };
+    main.enter();
+    main.li(s7, kResults);
+    call(kWlanGetSwitchState, {});   // 0
+    call(kWlanGetEtherAddr, {kMac}); // 1
+    main.li(t0, 0u);
+    call(kNetInit, {0x80000u, 0x1Eu, 0u, 0x1Eu});     // 2
+    call(kNetApctlInit, {0x8000u, 0x21u});            // 3
+    call(kNetApctlAddHandler, {apctl_handler, kArg}); // 4
+    for (int scan = 0; scan < 3; ++scan) {
+        call(kNetApctlScanUser, {}); // 5, 8, 11
+        rec_word(kLogCount);         // 6, 9, 12: nothing yet
+        delay(800000u);
+        rec_word(kLogCount); // 7, 10, 13
+    }
+    call(kNetApctlGetState, {kState});                             // 14
+    call(kNetApctlGetBSSDescIDListUser, {kSize, kList});           // 15
+    call(kNetApctlGetBSSDescEntryUser, {0u, 4u, kEntry});          // 16: signal
+    call(kNetApctlGetBSSDescEntryUser, {0u, 0u, kEntry + 0x30u});  // 17: BSSID
+    call(kNetApctlGetBSSDescEntryUser, {0u, 1u, kEntry + 0x60u});  // 18: SSID
+    call(kNetApctlGetBSSDescEntryUser, {0u, 2u, kEntry + 0x90u});  // 19: SSID length
+    call(kNetApctlGetBSSDescEntryUser, {99u, 4u, kEntry + 0xC0u}); // 20: no such entry
+    call(kNetApctlTerm, {});                                       // 21
+    call(kNetAdhocctlInit, {0x2000u, 0x30u, kGroup});              // 22
+    call(kNetAdhocctlAddHandler, {adhoc_handler, 0x55u});          // 23
+    call(kNetAdhocctlScan, {});                                    // 24
+    call(kNetAdhocctlScan, {});                                    // 25: busy
+    delay(1'200'000u);
+    call(kNetAdhocctlGetScanInfo, {kScanSize, kList}); // 26
+    call(kNetAdhocctlCreate, {kGroup});                // 27
+    delay(200'000u);
+    call(kNetAdhocctlGetState, {kAdhocState}); // 28
+    rec_word(kAdhocState);                     // 29: connected
+    call(kNetAdhocctlDisconnect, {});          // 30
+    delay(10'000u);
+    call(kNetAdhocctlGetState, {kAdhocState}); // 31
+    rec_word(kAdhocState);                     // 32: disconnected
+    call(kNetAdhocctlTerm, {});                // 33
+    call(kNetTerm, {});                        // 34
+    call(kNetconfInitStart, {kNetconf});       // 35
+    delay(300'000u);
+    call(kNetconfGetStatus, {}); // 36: RUNNING
+    call(kNetconfUpdate, {1u});  // 37
+    call(kNetconfGetStatus, {}); // 38: still RUNNING
+    main.leave();
+
+    (void)start_thread(*f.system, "net", entry, 0x20u);
+    CHECK(f.system->run(20'000'000u) == mk::RunResult::kIdle);
+    CHECK(!rt.stopped());
+    if (rt.stopped()) std::printf("  stop: %s\n", rt.stop_reason().c_str());
+    const auto result = [&f](int index) {
+        return f.word(kResults + 4u * static_cast<std::uint32_t>(index));
+    };
+    const auto log = [&f](std::uint32_t base, std::uint32_t call_index, std::uint32_t arg_index) {
+        return f.word(base + 32u * call_index + 4u * arg_index);
+    };
+
+    // The switch, the MAC, init.
+    CHECK_EQ(result(0), 1u);
+    CHECK_EQ(result(1), 0u);
+    for (std::uint32_t k = 0; k < 6u; ++k) CHECK_EQ(rt.memory().load8(kMac + k), config.net.mac[k]);
+    for (int k = 2; k <= 4; ++k) CHECK_EQ(result(k), 0u);
+    // Each scan: ScanUser returns before any handler call (the stage clears
+    // its flags right after it); 800 ms later SCAN_REQUEST and SCAN_COMPLETE
+    // have run, so the next ScanUser finds DISCONNECTED and succeeds.
+    for (int scan = 0; scan < 3; ++scan) {
+        CHECK_EQ(result(5 + 3 * scan), 0u);
+        CHECK_EQ(result(6 + 3 * scan), static_cast<std::uint32_t>(2 * scan));
+        CHECK_EQ(result(7 + 3 * scan), static_cast<std::uint32_t>(2 * scan + 2));
+    }
+    CHECK_EQ(f.word(kLogCount), 6u);
+    for (std::uint32_t call_index = 0; call_index < 6u; call_index += 2u) {
+        // SCAN_REQUEST: DISCONNECTED -> SCANNING.
+        CHECK_EQ(log(kLog, call_index, 0), 0u);
+        CHECK_EQ(log(kLog, call_index, 1), 1u);
+        CHECK_EQ(log(kLog, call_index, 2), 1u);
+        CHECK_EQ(log(kLog, call_index, 4), kArg);
+        // SCAN_COMPLETE: SCANNING -> DISCONNECTED, what MPO's handler takes.
+        CHECK_EQ(log(kLog, call_index + 1u, 0), 1u);
+        CHECK_EQ(log(kLog, call_index + 1u, 1), 0u);
+        CHECK_EQ(log(kLog, call_index + 1u, 2), 2u);
+        CHECK_EQ(log(kLog, call_index + 1u, 3), 0u);
+        CHECK_EQ(log(kLog, call_index + 1u, 4), kArg);
+    }
+    // The results: the list of the last scan and entry 0, byte for byte.
+    CHECK_EQ(result(14), 0u);
+    CHECK_EQ(f.word(kState), 0u);
+    // Term dropped the model's results; the generator gives the same APs
+    // (the scan only adds its jitter to the signal).
+    const std::vector<mpo::apscan::AccessPoint> aps = f.system->net().visible_access_points();
+    CHECK_EQ(aps.size(), 8u);
+    CHECK_EQ(result(15), 0u);
+    CHECK_EQ(f.word(kSize), 8u * static_cast<std::uint32_t>(aps.size()));
+    CHECK_EQ(f.word(kList), kList + 8u);
+    CHECK_EQ(f.word(kList + 4u), 0u);
+    CHECK_EQ(f.word(kList + 8u * 7u), 0u); // the last next
+    CHECK_EQ(f.word(kList + 8u * 7u + 4u), 7u);
+    for (int k = 16; k <= 19; ++k) CHECK_EQ(result(k), 0u);
+    CHECK(result(20) != 0u);
+    if (!aps.empty()) {
+        const int signal = rt.memory().load8(kEntry);
+        CHECK(signal >= aps[0].strength - 3 && signal <= aps[0].strength + 3);
+        CHECK_EQ(rt.memory().load8(kEntry + 1u), 0xEEu); // one byte only
+        for (std::uint32_t k = 0; k < 6u; ++k)
+            CHECK_EQ(rt.memory().load8(kEntry + 0x30u + k), aps[0].bssid[k]);
+        std::string ssid;
+        for (std::uint32_t k = 0; k < 32u && rt.memory().load8(kEntry + 0x60u + k) != 0u; ++k)
+            ssid.push_back(static_cast<char>(rt.memory().load8(kEntry + 0x60u + k)));
+        CHECK(ssid == aps[0].ssid);
+        CHECK_EQ(f.word(kEntry + 0x90u), static_cast<std::uint32_t>(aps[0].ssid.size()));
+    }
+    CHECK_EQ(result(21), 0u);
+    // Ad hoc alone: the scan ends with SCAN and nothing found, the group of
+    // one connects, the disconnect notifies.
+    CHECK_EQ(result(22), 0u);
+    CHECK_EQ(result(23), 0u);
+    CHECK_EQ(result(24), 0u);
+    CHECK_EQ(result(25), 0x80410B10u);
+    CHECK_EQ(result(26), 0u);
+    CHECK_EQ(f.word(kScanSize), 0u);
+    CHECK_EQ(result(27), 0u);
+    CHECK_EQ(result(29), 1u);
+    CHECK_EQ(result(30), 0u);
+    CHECK_EQ(result(32), 0u);
+    CHECK_EQ(f.word(kAdhocCount), 3u);
+    CHECK_EQ(log(kAdhocLog, 0, 0), 3u); // SCAN
+    CHECK_EQ(log(kAdhocLog, 1, 0), 1u); // CONNECT
+    CHECK_EQ(log(kAdhocLog, 2, 0), 2u); // DISCONNECT
+    CHECK_EQ(log(kAdhocLog, 2, 2), 0x55u);
+    CHECK_EQ(result(33), 0u);
+    CHECK_EQ(result(34), 0u);
+    // Netconf: it runs and waits for the player to cancel.
+    CHECK_EQ(result(35), 0u);
+    CHECK_EQ(result(36), 2u);
+    CHECK_EQ(result(37), 0u);
+    CHECK_EQ(result(38), 2u);
+
+    const mh::Net::Stats &ns = f.system->net().stats();
+    CHECK_EQ(ns.ap_scans, 3u);
+    CHECK_EQ(ns.ap_scans_done, 3u);
+    CHECK_EQ(ns.apctl_handler_calls, 6u);
+    CHECK_EQ(ns.adhocctl_handler_calls, 3u);
+    CHECK_EQ(ns.adhoc_scans, 1u);
+    CHECK_EQ(f.system->utility().stats().net_runs, 1u);
+}
+
 #ifdef _WIN32
 // The CRT's invalid parameter handler: print where instead of a dialog
 // (Debug) or a silent fast fail (Release).
@@ -2520,6 +2782,7 @@ int main() {
     run_test("test_mpeg_decode", &test_mpeg_decode);
     run_test("test_font", &test_font);
     run_test("test_utility", &test_utility);
+    run_test("test_net", &test_net);
     std::printf("mpo_hle_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

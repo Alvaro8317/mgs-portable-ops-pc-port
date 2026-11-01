@@ -26,7 +26,7 @@ enum class DialogStatus : std::int32_t {
 };
 
 // The dialog kinds that share sceUtility's "one dialog at a time" rule.
-enum class DialogType : std::uint8_t { kNone, kSavedata, kMsg, kOsk };
+enum class DialogType : std::uint8_t { kNone, kSavedata, kMsg, kOsk, kNetconf, kHtmlViewer };
 
 // pspUtilityDialogCommon::result values written by the dialogs.
 inline constexpr std::int32_t kDialogResultSuccess = 0;

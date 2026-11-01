@@ -569,6 +569,52 @@ void test_one_dialog_at_a_time() {
     CHECK_EQ(utility.savedata_update(guest.memory, 2, {}).value, kWrongType);
 }
 
+// F20b: Netconf as MPO opens it (size 0x40, netAction 3) says there is no
+// network and waits for cancel: FINISHED with result ABORT, written back.
+void test_netconf_no_network() {
+    VirtualClock clock;
+    Guest guest;
+    const auto root = std::filesystem::temp_directory_path() / "mpo_savedata_unused_root";
+    sd::SavedataStore store(root);
+    sd::UtilityDialogs utility(clock, store);
+    constexpr std::uint32_t kNetconf = 0x08920000u;
+    sd::DialogCommon common = mpo_common(0x40u, 0, 0x18);
+    common.result = 0x7777;
+    guest.put(kNetconf, common);
+    guest.put(kNetconf + 0x30u, std::int32_t{3});
+    guest.put(kNetconf + 0x40u, std::uint32_t{0xA5A5A5A5u}); // past the request
+
+    const sd::DialogType type = sd::DialogType::kNetconf;
+    CHECK_EQ(utility.net_get_status(type).value, static_cast<std::int32_t>(sd::error::kWrongType));
+    CHECK_EQ(utility.net_init_start(type, guest.memory, kNetconf).value, 0);
+    CHECK(utility.current_type() == type);
+    CHECK_EQ(utility.net(type).net_action(), 3);
+    // Another kind cannot start meanwhile.
+    CHECK_EQ(utility.net_init_start(sd::DialogType::kHtmlViewer, guest.memory, kNetconf).value,
+             static_cast<std::int32_t>(sd::error::kWrongType));
+    CHECK_EQ(utility.net_get_status(type).value, kInitialize);
+    clock.advance(sd::NetDialog::kInitDelayUs);
+    CHECK_EQ(utility.net_get_status(type).value, kRunning);
+    // Circle does nothing (it confirms with buttonSwap 0); cross cancels.
+    for (int k = 0; k < 40; ++k) utility.net_update(type, guest.memory, 1, press(btn::kCircle));
+    CHECK_EQ(utility.net_get_status(type).value, kRunning);
+    CHECK_EQ(guest.get<sd::DialogCommon>(kNetconf).result, 0x7777);
+    CHECK(utility.net(type).view().message.find("connection error") != std::string::npos);
+    CHECK_EQ(utility.net_update(type, guest.memory, 1, press(btn::kCross)).value, 0);
+    CHECK_EQ(guest.get<sd::DialogCommon>(kNetconf).result, sd::kDialogResultAbort);
+    CHECK_EQ(guest.get<std::uint32_t>(kNetconf + 0x40u), 0xA5A5A5A5u);
+    clock.advance(sd::NetDialog::kShutdownDelayUs);
+    CHECK_EQ(utility.net_get_status(type).value, kFinished);
+    CHECK_EQ(utility.net_update(type, guest.memory, 1, {}).value, kInvalidStatus);
+    CHECK_EQ(utility.net_shutdown_start(type).value, 0);
+    CHECK_EQ(utility.net_get_status(type).value, kShutdown);
+    clock.advance(sd::NetDialog::kShutdownDelayUs);
+    CHECK_EQ(utility.net_get_status(type).value, kNone);
+    // The same flow serves the HTML viewer.
+    CHECK_EQ(utility.net_init_start(sd::DialogType::kHtmlViewer, guest.memory, kNetconf).value, 0);
+    CHECK(utility.net(sd::DialogType::kHtmlViewer).view().title == "Internet Browser");
+}
+
 } // namespace
 
 int main() {
@@ -580,5 +626,6 @@ int main() {
     test_osk_pad_sequence();
     test_osk_limits_and_host_input();
     test_one_dialog_at_a_time();
+    test_netconf_no_network();
     return savedata_test::finish("mpo_savedata_dialog_test");
 }

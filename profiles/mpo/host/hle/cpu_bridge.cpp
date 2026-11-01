@@ -51,6 +51,16 @@ void CpuBridge::set_callback_return(std::uint32_t address) {
     runtime_.memory().store32(address + 4u, kMipsNop);
 }
 
+void CpuBridge::set_host_thread_entry(std::uint32_t address, HostThreadEntry entry) {
+    if (!entry) {
+        host_entries_.erase(address);
+        return;
+    }
+    runtime_.memory().store32(address, kMipsBranchSelf);
+    runtime_.memory().store32(address + 4u, kMipsNop);
+    host_entries_[address] = std::move(entry);
+}
+
 void CpuBridge::install_preemption(kernel::Kernel &kernel, std::uint64_t interval,
                                    std::function<void()> on_tick) {
     preempt_kernel_ = &kernel;
@@ -95,7 +105,16 @@ std::uint32_t CpuBridge::run_thread(kernel::Kernel &kernel, const kernel::Thread
     cpu.gpr[31] = start.ra;
     cpu.pc = start.entry;
     if (on_thread_start_) on_thread_start_(start);
-    dispatch_until(kernel, start.ra);
+    const auto host = host_entries_.find(start.entry);
+    if (host != host_entries_.end()) {
+        // Not a copy: the thread may be terminated inside, abandoning this
+        // frame, so nothing here may own memory. Elements of an unordered_map
+        // keep their address until erased.
+        const HostThreadEntry *entry = &host->second;
+        runtime_.cpu().gpr[2] = (*entry)(start);
+    } else {
+        dispatch_until(kernel, start.ra);
+    }
     const std::uint32_t v0 = runtime_.cpu().gpr[2];
     if (on_thread_return_) on_thread_return_(start.thread, v0);
     return v0;

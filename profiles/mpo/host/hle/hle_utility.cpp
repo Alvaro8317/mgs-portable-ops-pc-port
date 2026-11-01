@@ -301,6 +301,24 @@ std::uint32_t Utility::msg_update(int anim_speed) {
     return apply(r);
 }
 
+std::uint32_t Utility::net_init_start(sd::DialogType type, std::uint32_t address) {
+    const sd::UtilityResult r = dialogs_->net_init_start(type, system_.kernel().memory(), address);
+    if (r.value == 0) {
+        ++stats_.net_runs;
+        system_.hle().trace_event("utility: %s, netAction %d: no network",
+                                  dialogs_->net(type).view().title.c_str(),
+                                  dialogs_->net(type).net_action());
+    }
+    return apply(r);
+}
+
+std::uint32_t Utility::net_update(sd::DialogType type, int anim_speed) {
+    kernel::GuestMemory &m = system_.kernel().memory();
+    const sd::UtilityResult r = dialogs_->net_update(type, m, anim_speed, buttons());
+    if (r.value >= 0) draw_net(type);
+    return apply(r);
+}
+
 // ---- The PC keyboard ---------------------------------------------------------
 
 bool Utility::osk_takes_text() {
@@ -414,6 +432,37 @@ void Utility::draw_msg() {
         display_buttons(true, false, fade, v.ok_button, v.cancel_button, swap, v.ok_caption);
     if (v.shows_back_button)
         display_buttons(false, true, fade, v.ok_button, v.cancel_button, swap, {}, v.back_caption);
+    ppge_.end();
+    ++stats_.drawn_frames;
+}
+
+// PSPNetconfDialog::Update's drawing of the "wireless switch off" notice:
+// the banner, the message and the cancel button.
+void Utility::draw_net(sd::DialogType type) {
+    const sd::NetDialogView v = dialogs_->net(type).view();
+    const std::uint32_t fade = v.fade;
+    start_draw(fade);
+    ppge_.draw_rect(0.0f, 0.0f, 480.0f, 272.0f, Ppge::faded(0x63636363u, fade));
+    // DrawBanner.
+    ppge_.draw_rect(0.0f, 0.0f, 480.0f, 22.0f, Ppge::faded(0x65636358u, fade));
+    Ppge::Style banner;
+    banner.align = Ppge::kVCenter;
+    banner.scale = 0.6f;
+    banner.color = Ppge::faded(0xFFFFFFFFu, fade);
+    banner.shadow = false;
+    ppge_.draw_rect(10.0f, 5.0f, 21.0f, 15.0f, Ppge::faded(0xFFFFFFFFu, fade));
+    ppge_.draw_text(v.title, 31.0f, 10.0f, banner);
+    Ppge::Style text = banner;
+    text.align = Ppge::kCenter;
+    text.scale = 0.5f;
+    text.shadow = true;
+    text.shadow_color = Ppge::faded(0x80000000u, fade);
+    ppge_.draw_text_wrapped(v.message, 241.0f, 132.0f, 254.0f, 0.0f, text);
+    Ppge::Style button = text;
+    button.align = Ppge::kLeft;
+    Ppge::Style symbol = text;
+    ppge_.draw_text(button_symbol(v.cancel_button), 265.0f, 250.0f, symbol);
+    ppge_.draw_text("Cancel", 285.0f, 243.0f, button);
     ppge_.end();
     ++stats_.drawn_frames;
 }
@@ -710,8 +759,49 @@ void Utility::register_hle() {
         [this](Ctx &c) { ret(c, msg_update(static_cast<std::int32_t>(arg(c, 0)))); });
     def(0x9A1C91D7u, "sceUtilityMsgDialogGetStatus",
         [this, &d](Ctx &c) { ret(c, apply(d.msg_get_status())); });
-    def(0x4DB1E739u, "sceUtilityMsgDialogAbort",
+    def(0x4928BD96u, "sceUtilityMsgDialogAbort",
         [this, &d](Ctx &c) { ret(c, apply(d.msg_abort())); });
+
+    // sceUtilityNetconf and sceUtilityHtmlViewer (F20b): no network.
+    struct NetNids {
+        sd::DialogType type;
+        std::uint32_t init, shutdown, update, status;
+        const char *names[4];
+    };
+    const NetNids net_dialogs[] = {
+        {sd::DialogType::kNetconf,
+         0x4DB1E739u,
+         0xF88155F6u,
+         0x91E70E35u,
+         0x6332AA39u,
+         {"sceUtilityNetconfInitStart", "sceUtilityNetconfShutdownStart", "sceUtilityNetconfUpdate",
+          "sceUtilityNetconfGetStatus"}},
+        {sd::DialogType::kHtmlViewer,
+         0xCDC3AA41u,
+         0xF5CE1134u,
+         0x05AFB9E4u,
+         0xBDA7D894u,
+         {"sceUtilityHtmlViewerInitStart", "sceUtilityHtmlViewerShutdownStart",
+          "sceUtilityHtmlViewerUpdate", "sceUtilityHtmlViewerGetStatus"}},
+    };
+    for (const NetNids &n : net_dialogs) {
+        const sd::DialogType type = n.type;
+        def(n.init, n.names[0], [this, type](Ctx &c) { ret(c, net_init_start(type, arg(c, 0))); });
+        def(n.shutdown, n.names[1],
+            [this, &d, type](Ctx &c) { ret(c, apply(d.net_shutdown_start(type))); });
+        def(n.update, n.names[2], [this, type](Ctx &c) {
+            ret(c, net_update(type, static_cast<std::int32_t>(arg(c, 0))));
+        });
+        def(n.status, n.names[3],
+            [this, &d, type](Ctx &c) { ret(c, apply(d.net_get_status(type))); });
+    }
+
+    // The old module API (F20b). PPSSPP loads its HLE net modules for 1 and 2
+    // and reserves no memory; the game never checks the result (apscan.md).
+    def(0x1579A159u, "sceUtilityLoadNetModule", [](Ctx &c) { ret(c, 0u); });
+    def(0x64D50C56u, "sceUtilityUnloadNetModule", [](Ctx &c) { ret(c, 0u); });
+    def(0x0D5BC6D2u, "sceUtilityLoadUsbModule", [](Ctx &c) { ret(c, 0u); });
+    def(0xF64910F0u, "sceUtilityUnloadUsbModule", [](Ctx &c) { ret(c, 0u); });
 
     // System parameters: PPSSPP's defaults (English, Cross confirms).
     def(0xA5DA2406u, "sceUtilityGetSystemParamInt", [&k](Ctx &c) {

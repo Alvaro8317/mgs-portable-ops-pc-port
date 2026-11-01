@@ -16,6 +16,10 @@
 //   PPSSPP's job thread; the game waits for it meanwhile.
 // - Buttons: what is held (__CtrlPeekButtons) and pressed since the last
 //   Update (__CtrlReadLatch), as PPSSPP's PSPDialog::UpdateButtons.
+// - F20b: sceUtilityNetconf* and sceUtilityHtmlViewer* say there is no
+//   network until the player cancels (savedata/net_dialog.hpp), and
+//   sceUtilityLoad/UnloadNetModule and ...UsbModule only succeed, as in
+//   PPSSPP (no memory is reserved for them).
 // - The PC keyboard types into the OSK (host_type...), and scripted text
 //   (queue_osk_text) fills the next OSKs for unattended runs.
 
@@ -40,6 +44,7 @@ public:
         std::uint64_t savedata_runs = 0; // InitStart that succeeded
         std::uint64_t osk_runs = 0;
         std::uint64_t msg_runs = 0;
+        std::uint64_t net_runs = 0;     // Netconf and HtmlViewer dialogs (F20b)
         std::uint64_t drawn_frames = 0; // Updates that drew a dialog
         std::uint64_t cancelled = 0;    // Savedata dialogs the player left with Back
         std::uint64_t failures = 0;     // ... that finished with an error
@@ -76,6 +81,8 @@ public:
     std::uint32_t osk_update(int anim_speed);
     std::uint32_t msg_init_start(std::uint32_t address);
     std::uint32_t msg_update(int anim_speed);
+    std::uint32_t net_init_start(savedata::DialogType type, std::uint32_t address);
+    std::uint32_t net_update(savedata::DialogType type, int anim_speed);
 
 private:
     class VolatileHooks;
@@ -83,6 +90,7 @@ private:
     std::uint32_t apply(const savedata::UtilityResult &result);
     savedata::ButtonState buttons();
     void draw_msg();
+    void draw_net(savedata::DialogType type);
     void draw_osk();
     void draw_save();
     // PSPDialog's helpers.
