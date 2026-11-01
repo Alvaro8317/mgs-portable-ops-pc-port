@@ -146,8 +146,12 @@ def profile_hints_header(name):
 
 
 def strip_profile_header(data):
-  """Drops the leading comment block, giving back what recomp_hints.py wrote."""
-  lines = data.split(b'\n')
+  """Drops the leading comment block, giving back what recomp_hints.py wrote.
+
+  CRLF (a Windows checkout without .gitattributes) becomes LF, so the hints
+  psp_recomp reads, and their SHA-256, are the same on every OS.
+  """
+  lines = data.replace(b'\r\n', b'\n').split(b'\n')
   start = 0
   while start < len(lines) and lines[start].startswith(b'#'):
     start += 1

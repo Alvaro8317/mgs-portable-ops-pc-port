@@ -97,6 +97,7 @@ class ProfileHintsTest(unittest.TestCase):
     data = generate.profile_hints_header('stage_x').encode() + body
     self.assertEqual(generate.strip_profile_header(data), body)
     self.assertEqual(generate.strip_profile_header(body), body)
+    self.assertEqual(generate.strip_profile_header(data.replace(b'\n', b'\r\n')), body)
 
   def test_every_corpus_has_its_hints(self):
     supported = _PROFILE / 'config' / 'supported.toml'
@@ -115,7 +116,8 @@ class ProfileHintsTest(unittest.TestCase):
     self.assertTrue(files)
     for path in files:
       name = path.name[:-len('.hints.txt')]
-      data = path.read_bytes()
+      # Read as a Windows checkout without .gitattributes would leave it, too.
+      data = path.read_bytes().replace(b'\r\n', b'\n')
       header = generate.profile_hints_header(name).encode()
       self.assertTrue(data.startswith(header), path.name)
       directives = recomp_hints.parse_hints(data.decode('ascii'), path.name)
