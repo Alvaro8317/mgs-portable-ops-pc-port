@@ -149,7 +149,8 @@ los hilos y fibras, en vez de depender de `ulimit`.
       `r_main01` (y `r_main02`, F18b [V]) van en `0x08AFB800` y el resto en `0x08B8F900`;
     - las etapas con el mismo PRX traen el mismo `.rlc`;
     - el `.text` se verifica después del `.rlc`, en `sceKernelDcacheWritebackAll`.
-  - El intérprete cubre lo que no se haya recompilado.
+  - El intérprete cubre lo que no se haya recompilado. Desde F21 se recompilan **las 92 etapas
+    distintas** (6 h 45 min a `-j5`); la deduplicación barata solo comparte el 3 % (F21 [V]).
   - El principio del juego, en orden (F19 [V]): `st04vo` (la celda) → `r_main01` → `r_main02` →
     `flashdemo` (cómic) → `st04m1` → `st01t1` (mismo PRX que `st01t2`) → `briefing` (el mapa de
     misiones) → `st02` (Soviet Patrol Base). Todas están recompiladas y verificadas.
@@ -393,7 +394,10 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
     cada 60 flips y la `ms0` del arranque; `--replay-input` la repite y comprueba los hashes
     (F19). Una grabación hecha en la ventana, en tiempo real y con Vulkan se repite sin ventana
     idéntica con softgpu.
-  - Las partidas se juegan por tramos: `analysis/f19/play.sh <nombre> [<grabación anterior>]`.
+  - Las partidas se juegan por tramos que se encadenan con los saves del juego:
+    `analysis/f21/play.sh <nombre> <carpeta ms0 anterior>` (F21).
+  - **En WSL, Vulkan corre en `llvmpipe`** (por software, sin la GPU), y en las misiones pesadas no
+    llega a tiempo real: en WSL se juega con `MPO_RENDERER=soft` (F21 [V]).
 - **Toggles A/B por variable de entorno** para cada optimización del renderer, para poder bisecar
   cuando un frame sale mal (como los `MHP3RD_NO_*` de Yakumo). Los del renderer Vulkan son
   `MPO_VK_NO_13`, `MPO_VK_BLEND`, `MPO_VK_DST_READ`, `MPO_VK_NO_BATCH`, `MPO_VK_NO_TEX_CACHE`,

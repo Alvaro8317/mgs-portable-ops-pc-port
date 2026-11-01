@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22 desde el 2026-11-01 (ver su ficha). |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -115,7 +115,8 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F19 | Primera misión y repetición de input | M5 | ✅ hecha (M5 cerrado en Linux; Windows: pendiente del usuario; la contraseña pasa a F20b) |
 | F20a | Generador de APs virtuales (autónomo) | M6 | ✅ hecha (ola 2) |
 | F20b | AP Scan, red y GPS en el juego | M6 | ✅ hecha (se recluta por AP Scan; Windows y el menú de red de la antena: pendientes) |
-| F21 | Partida completa y estabilidad | M6 | ⬜ pendiente |
+| F21 | Partida completa y estabilidad | M6 | 🟨 hecha en parte (las 92 etapas compiladas y tramos con saves; el recorrido pasa a F21b) |
+| F21b | Recorrido completo (Linux y Windows) | M6 | ⬜ pendiente (en paralelo con F22) |
 | F22 | Empaquetado y release 0.1 | M6 | ⬜ pendiente |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
@@ -760,6 +761,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - `st01` se recompila (52 unidades, 54 MB de C++) y su librería compila y carga; se verifica
     contra el juego cuando se pueda entrar (F18b/F19). Compilar las 91 etapas tal cual sería unas
     25 veces `mgp_main`: hay que deduplicar (F04, (b) o (b')) antes de F21.
+    **F21**: la (b') solo comparte el 3 % de las unidades; se compilaron las 92 tal cual (6 h 45 min a
+    `-j5`) y la (b) se decide en F22.
 
 ---
 
@@ -1378,10 +1381,55 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - Una repetición necesita los mismos `--ap-seed`, `--ap-place` y `--mac` que su grabación (los tres
     tienen valores por defecto fijos).
 
+- **Notas (cierre de F21)**: hecha en parte, ver `docs/sessions/F21.md`. **Se partió** (acordado con
+  el usuario): lo técnico queda hecho y el recorrido pasa a F21b, en paralelo con F22.
+  - Las 92 etapas distintas están recompiladas y compiladas (`build-f09-release/overlays`, 2,8 GB):
+    ninguna depende ya del intérprete. Todas las etapas de la historia tienen sus imports en el HLE.
+  - Los tramos se encadenan con los saves del juego (`analysis/f21/play.sh <nombre> <ms0>`), no con
+    savestates.
+  - Jugadas en el port: `st03t1` y `st07m1`, con 0 instrucciones interpretadas; las repeticiones
+    sin ventana con softgpu dan los mismos hashes que las partidas con Vulkan.
+  - **En WSL, Vulkan corre en `llvmpipe`** (por software, sin la GPU): en WSL se juega con
+    `MPO_RENDERER=soft`.
+
+### F21b — Recorrido completo (Linux y Windows)
+
+- **Objetivo**: terminar el juego en el port, en Linux y en Windows, y que no queden crashes
+  conocidos sin documentar.
+- **Requisitos**: F21. **Corre en paralelo con F22** (decidido el 2026-11-01): el recorrido depende
+  del tiempo de juego del usuario y F22 no necesita que termine para empezar. M6 se cierra cuando
+  terminen las dos.
+- **Tareas**:
+  - El usuario juega por tramos (`MPO_RENDERER=soft analysis/f21/play.sh <tramo> <ms0 anterior>`)
+    hasta los créditos, guardando antes de cerrar cada tramo.
+  - Cada bug se anota en la lista de `docs/sessions/F21.md` (o de la nota de F21b), se reproduce con
+    la grabación del tramo y se arregla.
+  - Atajos nativos (`register_native_fast_path`) solo si un tramo no llega a tiempo real con softgpu.
+  - Probar la estabilidad en sesiones largas (la memoria de cada tramo sale en `<tramo>.time.txt`).
+  - Windows: compilar y jugar al menos un tramo con la GPU de verdad (Vulkan) y el mando (XInput).
+- **Criterios de hecho**: el juego se completa en Linux y en Windows; las repeticiones de los tramos
+  salen idénticas sin ventana; la lista de bugs no tiene crashes sin documentar.
+- **Notas (F21)**: ver `docs/sessions/F21.md`.
+  - El último save es `analysis/f21/ms0-tramo3` (después de `st07m1`).
+  - Pendiente con el usuario: si la X blanca grande sobre Snake en `st07m1` (bug 8) sale también en
+    PPSSPP o en la PSP.
+  - **Trampa**: cambiar un header del framework recompila las 92 etapas (unas 24 h de CPU); para
+    depurar el runtime, otro directorio de build.
+
 ### F22 — Empaquetado y release 0.1
 
 - **Objetivo**: que alguien sin conocimientos técnicos pueda instalarlo y jugarlo.
-- **Requisitos**: F21.
+- **Requisitos**: F21 (F21b, el recorrido, corre en paralelo).
+- **Notas (F21)**: ver `docs/sessions/F21.md`.
+  - **Coste de compilar las etapas** (para decidir el modelo de distribución): las 78 que faltaban
+    tardaron 6 h 45 min a `-j5` con Clang; una unidad de misión tarda 20,8 s con `-O2`, 15,9 s con
+    `-O1` y 1,5 s con `-O0`. La deduplicación (b') solo comparte el 3 % de las unidades; la (b)
+    (funciones parametrizadas en el emisor) es la única que ahorraría de verdad.
+  - El usuario encontró los controles de PC "toscos" (refuerza la nota de F19 sobre el mapeo).
+  - El mando del usuario (XInput "Xbox 360", USB o Bluetooth) no se probó: WSL no tiene `evdev`.
+    Probarlo en Windows y en Steam Deck.
+  - La calidad de imagen (480×272 escalado al vecino más cercano) le pareció baja: es de F23, pero
+    exponer `linear_filter` de `SdlPresenter` en `mpo_boot` es barato.
 - **Notas (F18c)**: el README tiene que explicar `mpo --import-save` y `mpo --export-save` (pasar
   saves de una PSP o de PPSSPP al port y al revés). El launcher puede ofrecerlo como botón. No hay
   opción para cambiar de ranura (ver `docs/sessions/F18c.md`).
