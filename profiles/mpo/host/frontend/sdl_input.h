@@ -5,6 +5,13 @@
 // buttons by number (clicks synthesized from touches are ignored), and every
 // connected gamepad feeds the same PSP controller: buttons add up, and for
 // each axis the last event wins.
+//
+// Mouse camera (F22, InputMapping::mouse_camera): a click in the window
+// captures the mouse (relative mode: the cursor hides and motion is no longer
+// limited by the window) and is not a button press; while captured, motion
+// goes to InputTranslator::OnMouseMotion. F1 or losing the focus releases it.
+// Uncaptured motion is left to the caller, so the menus never move by
+// accident.
 
 #pragma once
 
@@ -39,6 +46,11 @@ public:
 
     [[nodiscard]] int gamepad_count() const { return static_cast<int>(gamepads_.size()); }
 
+    // Call after each round of HandleEvent (one poll of the window events).
+    void EndPoll() { translator_->EndPoll(); }
+    [[nodiscard]] bool mouse_captured() const { return captured_; }
+    void ReleaseMouseCapture();
+
     // Called with a short description ("key Z down", "mouse left down",
     // "pad a down",
     // "pad axis leftx +0.500", "gamepad added: <name>") of each event it uses.
@@ -53,6 +65,9 @@ private:
     std::string error_;
     std::vector<SDL_Gamepad *> gamepads_;
     Observer observer_;
+    bool captured_ = false;
+    SDL_WindowID captured_window_ = 0;
+    std::string saved_title_;
 };
 
 // Mouse button names of the mapping file: "left", "middle", "right", "x1" and

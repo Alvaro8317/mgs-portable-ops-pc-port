@@ -1530,5 +1530,7 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     solo con el mouse capturado (modo relativo de SDL), porque los menús también se mueven con la
     cruceta, y soltarse al perder el foco. La captura no puede depender de Esc, que es Start. Las
     grabaciones no cambian, porque guardan las muestras de `sceCtrl`.
+  - **Hecho en F22** (después del cierre, a pedido del usuario): `[mouse_camera]`, clic para
+    capturar y F1 para soltar. Queda para F23+ la cámara libre de verdad, sobre el RE de la cámara.
 - MPO+ (`ULUS-10290`).
 - macOS (MoltenVK).

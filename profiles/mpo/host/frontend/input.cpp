@@ -140,8 +140,47 @@ void InputTranslator::ReleaseKeyboard() {
     keys_down_.reset();
 }
 
+void InputTranslator::OnMouseMotion(float dx, float dy) {
+    if (!mapping_.mouse_camera.enabled || std::isnan(dx) || std::isnan(dy)) return;
+    camera_motion_[0] += dx;
+    camera_motion_[1] += dy;
+    camera_moved_ = true;
+}
+
+void InputTranslator::EndPoll() {
+    camera_buttons_ = 0;
+    const MouseCameraConfig &config = mapping_.mouse_camera;
+    if (!config.enabled) {
+        camera_motion_[0] = camera_motion_[1] = 0.0f;
+        return;
+    }
+    const float step = std::max(config.pixels_per_press, 0.01f);
+    const auto axis = [&](float &motion, std::uint32_t negative, std::uint32_t positive) {
+        // A flick keeps turning for at most two more polls.
+        motion = std::clamp(motion, -3.0f * step, 3.0f * step);
+        if (motion >= step) {
+            camera_buttons_ |= positive;
+            motion -= step;
+        } else if (motion <= -step) {
+            camera_buttons_ |= negative;
+            motion += step;
+        } else if (!camera_moved_) {
+            motion = 0.0f; // the mouse stopped: drop what is left
+        }
+    };
+    axis(camera_motion_[0], ctrl::kLeft, ctrl::kRight);
+    if (config.vertical)
+        axis(camera_motion_[1], ctrl::kUp, ctrl::kDown);
+    else
+        camera_motion_[1] = 0.0f;
+    camera_moved_ = false;
+}
+
 void InputTranslator::ReleaseMouse() {
     mouse_down_.reset();
+    camera_motion_[0] = camera_motion_[1] = 0.0f;
+    camera_moved_ = false;
+    camera_buttons_ = 0;
 }
 
 void InputTranslator::ReleasePad() {
@@ -150,7 +189,7 @@ void InputTranslator::ReleasePad() {
 }
 
 SceCtrlData InputTranslator::Sample(std::uint32_t timestamp) const {
-    std::uint32_t buttons = 0;
+    std::uint32_t buttons = camera_buttons_;
     // half[stick][axis][0: negative, 1: positive], summed like PPSSPP's
     // virtual keys and clamped to 0..1 afterwards.
     float half[2][2][2] = {};

@@ -511,6 +511,9 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
       Ctrl;
     - L en Q, R en E, Start en Esc y Enter, Select en Tab.
 
+    - La cámara del juego (la cruceta) también se mueve con el mouse: un clic en la ventana lo
+      captura y F1 lo suelta (`[mouse_camera]` en `input.toml`).
+
     El mando sigue con el mapeo de PPSSPP. Reasignar teclas desde el juego queda para F23+.
 
 ### Abiertas

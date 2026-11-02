@@ -343,6 +343,64 @@ void TestDefaultKeyboard() {
     ExpectEq(t.Sample().buttons, 0u, "bad scancode");
 }
 
+void TestMouseCamera() {
+    InputTranslator t;
+    ExpectEq(t.mapping().mouse_camera.pixels_per_press, 6.0f, "default step");
+    // 13 px: one press now, the 7 left press again on the next poll.
+    t.OnMouseMotion(13.0f, 0.0f);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, ctrl::kRight, "13 px right = right");
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, ctrl::kRight, "the remainder presses again");
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, 0u, "the last pixel is dropped when the mouse stops");
+    // Slow motion adds up across polls.
+    for (int i = 0; i < 2; ++i) {
+        t.OnMouseMotion(-2.5f, 0.0f);
+        t.EndPoll();
+        ExpectEq(t.Sample().buttons, 0u, "slow motion below the step");
+    }
+    t.OnMouseMotion(-2.5f, 0.0f);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, ctrl::kLeft, "7.5 px left = left");
+    t.EndPoll();
+    // A flick turns for at most three polls.
+    t.OnMouseMotion(500.0f, 0.0f);
+    int presses = 0;
+    for (int i = 0; i < 6; ++i) {
+        t.EndPoll();
+        if (t.Sample().buttons == ctrl::kRight) ++presses;
+    }
+    ExpectEq(presses, 3, "flick clamped to three presses");
+    // Vertical motion is ignored unless enabled; then down is +y.
+    t.OnMouseMotion(0.0f, 10.0f);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, 0u, "vertical off by default");
+    InputMapping m = InputMapping::Default();
+    m.mouse_camera.vertical = true;
+    t.SetMapping(m);
+    t.OnMouseMotion(0.0f, 10.0f);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, ctrl::kDown, "vertical on: down");
+    t.ReleaseMouse();
+    ExpectEq(t.Sample().buttons, 0u, "ReleaseMouse clears the camera");
+    // Disabled: nothing.
+    m.mouse_camera.enabled = false;
+    t.SetMapping(m);
+    t.OnMouseMotion(100.0f, 0.0f);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, 0u, "camera disabled");
+    // The camera adds to the other inputs.
+    t.SetMapping(InputMapping::Default());
+    t.OnKey(scancode::kSpace, true);
+    t.OnMouseMotion(6.0f, 0.0f);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, ctrl::kCross | ctrl::kRight, "camera + cross");
+    t.OnKey(scancode::kSpace, false);
+    t.OnMouseMotion(NAN, 1.0f);
+    t.EndPoll();
+}
+
 void TestDefaultGamepad() {
     InputTranslator t;
     t.OnPadButton(PadButton::kSouth, true);
@@ -652,6 +710,7 @@ int main() {
     TestStridesAndAddresses();
     TestBadFramebuffers();
     TestDefaultKeyboard();
+    TestMouseCamera();
     TestDefaultGamepad();
     TestCustomMapping();
     TestCtrlData();

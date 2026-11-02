@@ -22,6 +22,10 @@
 # triggers as L/R, and [analog] holds PPSSPP's stick settings (deadzone,
 # inverse deadzone, sensitivity, square or circular stick, threshold for axes
 # used as buttons).
+# [mouse_camera] turns the game's camera (the d-pad) with the mouse: click in
+# the window to capture the mouse, F1 (or switching windows) releases it. Every
+# pixels_per_press pixels of motion press left or right for one frame, so a
+# faster motion turns more often; vertical = true drives up/down too.
 # mpo_frontend_sdl_test checks that this file equals InputMapping::Default().
 
 [keyboard]
@@ -68,3 +72,8 @@ inverse_deadzone = 0.0
 sensitivity = 1.1
 circular = false
 axis_button_threshold = 0.75
+
+[mouse_camera]
+enabled = true
+pixels_per_press = 6.0
+vertical = false

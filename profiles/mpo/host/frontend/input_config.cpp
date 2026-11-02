@@ -206,6 +206,31 @@ bool ParseAnalog(const toml::table &table, AnalogConfig *a, std::string *error) 
     return true;
 }
 
+bool ParseMouseCamera(const toml::table &table, MouseCameraConfig *c, std::string *error) {
+    for (const auto &[key, node] : table) {
+        const std::string name(key.str());
+        if (name == "enabled" || name == "vertical") {
+            const toml::value<bool> *v = node.as_boolean();
+            if (v == nullptr) {
+                *error = "[mouse_camera] " + name + ": expected true or false";
+                return false;
+            }
+            (name == "enabled" ? c->enabled : c->vertical) = v->get();
+        } else if (name == "pixels_per_press") {
+            const auto v = node.is_number() ? node.value<double>() : std::nullopt;
+            if (!v || *v < 0.5 || *v > 200.0) {
+                *error = "[mouse_camera] pixels_per_press: expected a number in [0.5, 200]";
+                return false;
+            }
+            c->pixels_per_press = static_cast<float>(*v);
+        } else {
+            *error = "[mouse_camera]: unknown setting '" + name + "'";
+            return false;
+        }
+    }
+    return true;
+}
+
 std::string Quoted(std::string_view s) {
     std::string out = "\"";
     for (char c : s) {
@@ -252,6 +277,8 @@ bool ParseInputMapping(std::string_view toml_text, const InputMapping &base, Inp
             ok = ParseMouse(*table, &m, error);
         } else if (section == "gamepad") {
             ok = ParseGamepad(*table, &m, error);
+        } else if (section == "mouse_camera") {
+            ok = ParseMouseCamera(*table, &m.mouse_camera, error);
         } else if (section == "analog") {
             ok = ParseAnalog(*table, &m.analog, error);
         } else {
@@ -331,6 +358,11 @@ std::string FormatInputMapping(const InputMapping &mapping) {
     out += "sensitivity = " + FloatText(a.sensitivity) + "\n";
     out += std::string("circular = ") + (a.circular ? "true" : "false") + "\n";
     out += "axis_button_threshold = " + FloatText(a.axis_button_threshold) + "\n";
+    const MouseCameraConfig &c = mapping.mouse_camera;
+    out += "\n[mouse_camera]\n";
+    out += std::string("enabled = ") + (c.enabled ? "true" : "false") + "\n";
+    out += "pixels_per_press = " + FloatText(c.pixels_per_press) + "\n";
+    out += std::string("vertical = ") + (c.vertical ? "true" : "false") + "\n";
     return out;
 }
 

@@ -65,6 +65,7 @@ SdlInput::SdlInput(InputTranslator *translator) : translator_(translator) {
 }
 
 SdlInput::~SdlInput() {
+    ReleaseMouseCapture();
     for (SDL_Gamepad *pad : gamepads_) SDL_CloseGamepad(pad);
     if (initialised_) SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
 }
@@ -73,12 +74,29 @@ void SdlInput::Note(const std::string &text) const {
     if (observer_) observer_(text);
 }
 
+void SdlInput::ReleaseMouseCapture() {
+    if (!captured_) return;
+    captured_ = false;
+    if (SDL_Window *window = SDL_GetWindowFromID(captured_window_)) {
+        (void)SDL_SetWindowRelativeMouseMode(window, false);
+        if (!saved_title_.empty()) (void)SDL_SetWindowTitle(window, saved_title_.c_str());
+    }
+    captured_window_ = 0;
+    saved_title_.clear();
+    translator_->ReleaseMouse();
+    Note("mouse released");
+}
+
 bool SdlInput::HandleEvent(const SDL_Event &event) {
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
         const bool down = event.type == SDL_EVENT_KEY_DOWN;
         if (event.key.repeat) return true;
+        if (down && captured_ && event.key.scancode == SDL_SCANCODE_F1) {
+            ReleaseMouseCapture();
+            return true;
+        }
         translator_->OnKey(static_cast<Scancode>(event.key.scancode), down);
         if (observer_) {
             const char *name = SDL_GetScancodeName(event.key.scancode);
@@ -92,6 +110,20 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
         // they are not the player's mouse.
         if (event.button.which == SDL_TOUCH_MOUSEID) return false;
         const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+        if (down && !captured_ && translator_->mapping().mouse_camera.enabled) {
+            // This click only captures the mouse.
+            captured_ = true;
+            captured_window_ = event.button.windowID;
+            if (SDL_Window *window = SDL_GetWindowFromID(captured_window_)) {
+                (void)SDL_SetWindowRelativeMouseMode(window, true);
+                const char *title = SDL_GetWindowTitle(window);
+                saved_title_ = title ? title : "";
+                const std::string captured_title = saved_title_ + " (F1 releases the mouse)";
+                (void)SDL_SetWindowTitle(window, captured_title.c_str());
+            }
+            Note("mouse captured");
+            return true;
+        }
         if (event.button.button < kMouseButtonCount) {
             translator_->OnMouseButton(static_cast<MouseButton>(event.button.button), down);
         }
@@ -101,6 +133,10 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
         }
         return true;
     }
+    case SDL_EVENT_MOUSE_MOTION:
+        if (!captured_ || event.motion.which == SDL_TOUCH_MOUSEID) return false;
+        translator_->OnMouseMotion(event.motion.xrel, event.motion.yrel);
+        return true;
     case SDL_EVENT_GAMEPAD_ADDED: {
         SDL_Gamepad *pad = SDL_OpenGamepad(event.gdevice.which);
         if (pad == nullptr) {
@@ -157,6 +193,7 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
         // Keys and buttons released while unfocused never arrive.
         translator_->ReleaseKeyboard();
         translator_->ReleaseMouse();
+        ReleaseMouseCapture();
         Note("focus lost");
         return true;
     default:

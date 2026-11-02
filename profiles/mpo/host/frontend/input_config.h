@@ -19,6 +19,11 @@
 //   [analog]
 //   deadzone = 0.15
 //
+//   [mouse_camera]                # mouse motion -> d-pad while captured
+//   enabled = true
+//   pixels_per_press = 6.0
+//   vertical = false
+//
 // PSP inputs: up down left right cross circle square triangle l r start
 // select home, analog_{up,down,left,right} (the stick). A section that is
 // present replaces that device's default bindings; a missing one keeps them.

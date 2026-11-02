@@ -159,12 +159,25 @@ struct AnalogConfig {
     friend bool operator==(const AnalogConfig &, const AnalogConfig &) = default;
 };
 
+// F22: the game's camera turns with the d-pad, so mouse motion can drive it.
+// While the mouse is captured (SdlInput), the relative motion adds up and
+// every `pixels_per_press` pixels press the d-pad for one poll of the window
+// events (one flip): moving faster turns more often. Vertical motion drives
+// up/down only when `vertical` is set.
+struct MouseCameraConfig {
+    bool enabled = true;
+    float pixels_per_press = 6.0f;
+    bool vertical = false;
+    friend bool operator==(const MouseCameraConfig &, const MouseCameraConfig &) = default;
+};
+
 struct InputMapping {
     std::vector<KeyBinding> keys;
     std::vector<MouseButtonBinding> mouse_buttons;
     std::vector<PadButtonBinding> pad_buttons;
     std::vector<PadAxisBinding> pad_axes;
     AnalogConfig analog;
+    MouseCameraConfig mouse_camera;
 
     // Keyboard and mouse: the PC layout chosen in F22 (WASD for the stick,
     // the arrows for the d-pad, Space = cross, mouse right/left = circle/square,
@@ -190,6 +203,11 @@ public:
     // Key repeat must be filtered by the caller (repeats are not new presses).
     void OnKey(Scancode key, bool down);
     void OnMouseButton(MouseButton button, bool down);
+    // Relative mouse motion in pixels (x right, y down), for the camera.
+    void OnMouseMotion(float dx, float dy);
+    // End of one poll of the window events: turns the motion since the last
+    // poll into d-pad presses that last until the next poll.
+    void EndPoll();
     void OnPadButton(PadButton button, bool down);
     // Sticks: -1..1 (Y down), triggers: 0..1. Values are clamped.
     void OnPadAxis(PadAxis axis, float value);
@@ -206,6 +224,9 @@ private:
     InputMapping mapping_;
     std::bitset<kScancodeCount> keys_down_;
     std::bitset<kMouseButtonCount> mouse_down_;
+    float camera_motion_[2]{};
+    bool camera_moved_ = false;
+    std::uint32_t camera_buttons_ = 0;
     std::bitset<kPadButtonCount> pad_down_;
     std::array<float, kPadAxisCount> pad_axes_{};
 };

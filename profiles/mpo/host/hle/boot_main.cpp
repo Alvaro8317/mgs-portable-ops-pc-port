@@ -48,6 +48,9 @@
 //                             --realtime 0). The mapping is --input-map, or
 //                             <config dir>/input.toml when it exists, or the
 //                             defaults (profiles/mpo/config/input.toml).
+//                             A click in the window captures the mouse for
+//                             the camera ([mouse_camera]: motion turns it
+//                             with the d-pad); F1 releases it.
 //   --filter linear           scales the 480x272 image to the window with
 //                             bilinear filtering instead of the nearest
 //                             pixel (F22). --capture (VRAM) is not affected;
@@ -1065,6 +1068,7 @@ int main(int argc, char **argv) {
                     if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
                         swapchain->Resize(event.window.data1, event.window.data2);
                 }
+                input->EndPoll();
                 const int sw = mpo::frontend::kPspScreenWidth;
                 const int sh = mpo::frontend::kPspScreenHeight;
                 const mpo::vk::PresentRect where = vk_window->Destination(sw, sh);
@@ -1132,6 +1136,7 @@ int main(int argc, char **argv) {
                         event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
                         system.kernel().request_stop();
                 }
+                input->EndPoll();
                 (void)presenter->PresentRgba(shown.data(), mpo::frontend::kPspScreenWidth,
                                              mpo::frontend::kPspScreenHeight);
             }

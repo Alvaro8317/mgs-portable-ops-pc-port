@@ -199,12 +199,22 @@ void TestKeyboard() {
     PumpInto(&input);
     ExpectEq(translator.Sample().buttons, ctrl::kLeft, "repeat ignored");
 
-    // Mouse buttons; clicks synthesized from a touch screen are not.
+    // Mouse buttons; clicks synthesized from a touch screen are not. The
+    // first click only captures the mouse for the camera.
     SDL_Event click{};
     click.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
     click.button.which = 1;
     click.button.button = SDL_BUTTON_RIGHT;
     click.button.down = true;
+    SDL_Event motion{};
+    motion.type = SDL_EVENT_MOUSE_MOTION;
+    motion.motion.which = 1;
+    motion.motion.xrel = 7.0f;
+    Expect(!input.HandleEvent(motion), "motion before the capture not consumed");
+    Expect(!input.mouse_captured(), "not captured yet");
+    Expect(input.HandleEvent(click), "capturing click consumed");
+    Expect(input.mouse_captured(), "the first click captures");
+    ExpectEq(translator.Sample().buttons, ctrl::kLeft, "the capturing click is not circle");
     Expect(input.HandleEvent(click), "mouse button consumed");
     ExpectEq(translator.Sample().buttons, ctrl::kLeft | ctrl::kCircle, "right click = circle");
     Expect(std::find(notes.begin(), notes.end(), "mouse right down") != notes.end(), "mouse note");
@@ -214,10 +224,31 @@ void TestKeyboard() {
     Expect(!input.HandleEvent(touch), "touch click not consumed");
     ExpectEq(translator.Sample().buttons, ctrl::kLeft | ctrl::kCircle, "touch click ignored");
 
+    // Captured motion turns the camera (the d-pad) at the end of the poll.
+    Expect(input.HandleEvent(motion), "captured motion consumed");
+    input.EndPoll();
+    ExpectEq(translator.Sample().buttons, ctrl::kLeft | ctrl::kCircle | ctrl::kRight,
+             "7 px right = d-pad right");
+    input.EndPoll();
+    ExpectEq(translator.Sample().buttons, ctrl::kLeft | ctrl::kCircle, "one press");
+
+    // F1 releases the capture (and is not passed on).
+    PushKey(SDL_SCANCODE_F1, true);
+    PumpInto(&input);
+    Expect(!input.mouse_captured(), "F1 releases the mouse");
+    Expect(!input.HandleEvent(motion), "motion after the release not consumed");
+    ExpectEq(translator.Sample().buttons, ctrl::kLeft, "the release lets the mouse buttons go");
+    PushKey(SDL_SCANCODE_F1, false);
+    PumpInto(&input);
+
+    // Losing the focus releases keys, mouse buttons and the capture.
+    Expect(input.HandleEvent(click), "capture again");
+    Expect(input.mouse_captured(), "captured again");
     SDL_Event focus{};
     focus.type = SDL_EVENT_WINDOW_FOCUS_LOST;
     Expect(input.HandleEvent(focus), "focus lost consumed");
     ExpectEq(translator.Sample().buttons, 0u, "focus lost releases keys and mouse");
+    Expect(!input.mouse_captured(), "focus lost releases the capture");
 
     SDL_Event other{};
     other.type = SDL_EVENT_MOUSE_MOTION;
@@ -331,7 +362,8 @@ bool SameBindings(const InputMapping &a, const InputMapping &b) {
     return Sorted(a.keys, key_less) == Sorted(b.keys, key_less) &&
            Sorted(a.mouse_buttons, mouse_less) == Sorted(b.mouse_buttons, mouse_less) &&
            Sorted(a.pad_buttons, button_less) == Sorted(b.pad_buttons, button_less) &&
-           Sorted(a.pad_axes, axis_less) == Sorted(b.pad_axes, axis_less) && a.analog == b.analog;
+           Sorted(a.pad_axes, axis_less) == Sorted(b.pad_axes, axis_less) && a.analog == b.analog &&
+           a.mouse_camera == b.mouse_camera;
 }
 
 void TestMappingFile(const char *checked_in_path) {
@@ -374,6 +406,15 @@ void TestMappingFile(const char *checked_in_path) {
 
     Expect(m.mouse_buttons == defaults.mouse_buttons, "mouse defaults kept");
 
+    // [mouse_camera].
+    Expect(ParseInputMapping("[mouse_camera]\nenabled = false\npixels_per_press = 12\n"
+                             "vertical = true\n",
+                             defaults, &m, &error),
+           "mouse_camera: " + error);
+    Expect(!m.mouse_camera.enabled && m.mouse_camera.pixels_per_press == 12.0f &&
+               m.mouse_camera.vertical,
+           "mouse_camera values");
+
     // A [mouse] section replaces the mouse map.
     Expect(ParseInputMapping("[mouse]\ncross = [\"middle\", \"x1\"]\n", defaults, &m, &error),
            "mouse: " + error);
@@ -406,6 +447,9 @@ void TestMappingFile(const char *checked_in_path) {
         {"[mouse]\ncross = [\"wheel\"]\n", "unknown button 'wheel'"},
         {"[mouse]\njump = [\"left\"]\n", "unknown PSP input 'jump'"},
         {"[touch]\n", "unknown section [touch]"},
+        {"[mouse_camera]\npixels_per_press = 0\n", "pixels_per_press"},
+        {"[mouse_camera]\nenabled = 1\n", "expected true or false"},
+        {"[mouse_camera]\nspeed = 2\n", "unknown setting 'speed'"},
         {"keyboard = 1\n", "must be a table"},
         {"[analog]\ndeadzone = 2.0\n", "deadzone"},
         {"[analog]\ncircular = 1\n", "circular"},
