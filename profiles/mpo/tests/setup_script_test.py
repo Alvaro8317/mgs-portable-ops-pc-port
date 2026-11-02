@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tests for setup.py and the versioned analysis hints (F22), without the game."""
 
+import argparse
+import hashlib
 import importlib.util
+import json
 import pathlib
 import tempfile
 import unittest
+import zipfile
 
 _PROFILE = pathlib.Path(__file__).resolve().parent.parent
 
@@ -88,6 +92,76 @@ class FontsTest(unittest.TestCase):
     with tempfile.TemporaryDirectory() as tmp:
       with self.assertRaises(setup.SetupError):
         setup.find_fonts(tmp, None)
+
+
+class StageLibraryTest(unittest.TestCase):
+
+  def test_names_per_level(self):
+    self.assertEqual(setup.library_name('st02', system='Linux'), 'stage_st02.so')
+    self.assertEqual(setup.library_name('st02', quick=True, system='Linux'), 'stage_st02-O0.so')
+    self.assertEqual(setup.library_name('st02', quick=True, system='Windows'),
+                     'stage_st02-O0.dll')
+    self.assertEqual(setup.library_name('title', system='Darwin'), 'stage_title.dylib')
+
+  def test_status_counts_each_stage_once(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      args = argparse.Namespace(data=tmp)
+      s = setup.Setup(args)
+      s.overlays.mkdir(parents=True)
+      for name in ('stage_st02.so', 'stage_st02-O0.so', 'stage_st03-O0.so', 'stage_st04.so',
+                   '.stage_st05.so.tmp'):
+        (s.overlays / name).write_bytes(b'')
+      status = s.status()
+      self.assertEqual(status['stages_installed'], 3)
+      self.assertEqual(status['stages_optimized'], 2)
+      self.assertEqual(status['stages_quick_only'], 1)
+      self.assertEqual(status['stages_total'], 92)
+      json.dumps(status)
+
+
+class ToolchainTest(unittest.TestCase):
+
+  def test_platform(self):
+    self.assertEqual(setup.toolchain_platform('Windows', 'AMD64'), 'windows-x86_64')
+    self.assertIsNone(setup.toolchain_platform('Linux', 'x86_64'))
+    self.assertIsNone(setup.toolchain_platform('Windows', 'ARM64'))
+
+  def test_profile_pins_every_tool(self):
+    path = _PROFILE / 'config' / 'toolchain.toml'
+    tools = setup.load_toolchain(path, 'windows-x86_64')
+    self.assertEqual(sorted(tools), ['cmake', 'llvm-mingw', 'ninja'])
+    for name, spec in tools.items():
+      self.assertTrue(spec['url'].startswith('https://'), name)
+      self.assertIn(spec['version'], spec['url'], name)
+
+  def test_archive_paths(self):
+    setup.check_archive_members(['llvm/bin/clang.exe', 'ninja.exe'])
+    for bad in ('../evil.dll', '/etc/passwd', 'C:/Windows/x.dll', 'a/../../b', '\\server\\x'):
+      with self.assertRaises(setup.SetupError, msg=bad):
+        setup.check_archive_members([bad])
+
+  def _archive(self, root):
+    archive = root / 'tool-1.0.zip'
+    with zipfile.ZipFile(archive, 'w') as z:
+      z.writestr('tool-1.0/bin/tool.exe', b'MZ')
+    return archive, hashlib.sha256(archive.read_bytes()).hexdigest()
+
+  def test_download_checks_the_sha256(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      root = pathlib.Path(tmp)
+      archive, sha256 = self._archive(root)
+      s = setup.Setup(argparse.Namespace(data=str(root / 'data')))
+      spec = {'url': archive.as_uri(), 'sha256': sha256, 'size': archive.stat().st_size}
+      target = root / 'downloads' / 'tool.zip'
+      s._download('tool', spec, target)
+      self.assertEqual(target.read_bytes(), archive.read_bytes())
+      s._unpack('tool', target, root / 'tool-1.0')
+      self.assertTrue((root / 'tool-1.0' / 'tool-1.0' / 'bin' / 'tool.exe').is_file())
+      bad = dict(spec, sha256='0' * 64)
+      with self.assertRaises(setup.SetupError):
+        s._download('tool', bad, root / 'downloads' / 'bad.zip')
+      self.assertFalse((root / 'downloads' / 'bad.zip').exists())
+      self.assertFalse((root / 'downloads' / 'bad.zip.part').exists())
 
 
 class ProfileHintsTest(unittest.TestCase):

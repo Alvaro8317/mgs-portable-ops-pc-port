@@ -66,6 +66,7 @@ std::string library_error() {
 struct LoadedLibrary {
     const OverlayModuleInfo *info{};
     OverlayInstallFunction install{};
+    int opt_level{kOverlayDefaultOptLevel};
 };
 
 std::map<std::string, LoadedLibrary> &loaded_libraries() {
@@ -76,7 +77,7 @@ std::map<std::string, LoadedLibrary> &loaded_libraries() {
 } // namespace
 
 void OverlayManager::add_corpus(const OverlayModuleInfo &info, OverlayInstallFunction install,
-                                std::string origin) {
+                                std::string origin, int opt_level) {
     OverlayCorpus corpus;
     corpus.name = info.name != nullptr ? info.name : "";
     corpus.origin = std::move(origin);
@@ -86,6 +87,7 @@ void OverlayManager::add_corpus(const OverlayModuleInfo &info, OverlayInstallFun
     corpus.text_offset = info.text_offset;
     corpus.text_size = info.text_size;
     corpus.text_sha256 = info.text_sha256 != nullptr ? info.text_sha256 : "";
+    corpus.opt_level = opt_level;
     corpus.install = install;
     corpora_.push_back(std::move(corpus));
 }
@@ -131,7 +133,12 @@ std::size_t OverlayManager::scan_libraries(const std::filesystem::path &director
                 std::fprintf(stderr, "mpo: %s is not an overlay library\n", path.string().c_str());
                 continue;
             }
-            found = loaded_libraries().emplace(key, LoadedLibrary{info_of(), install}).first;
+            const auto opt_level_of = reinterpret_cast<decltype(&mpo_overlay_opt_level)>(
+                library_symbol(handle, "mpo_overlay_opt_level"));
+            const int opt_level =
+                opt_level_of != nullptr ? opt_level_of() : kOverlayDefaultOptLevel;
+            found =
+                loaded_libraries().emplace(key, LoadedLibrary{info_of(), install, opt_level}).first;
         }
         const OverlayModuleInfo *info = found->second.info;
         if (info == nullptr || info->abi_version != kOverlayAbiVersion ||
@@ -141,7 +148,7 @@ std::size_t OverlayManager::scan_libraries(const std::filesystem::path &director
                          path.string().c_str());
             continue;
         }
-        add_corpus(*info, found->second.install, path.filename().string());
+        add_corpus(*info, found->second.install, path.filename().string(), found->second.opt_level);
         ++added;
     }
     return added;
@@ -172,10 +179,9 @@ bool OverlayManager::on_module_loaded(kernel::Uid uid, const std::string &module
     // mgp_main and the resident modules have their corpus linked in.
     if (system_.runtime().has_function(entry)) return false;
     const std::string sha256 = psprecomp::sha256_bytes(file);
-    const bool known = std::any_of(corpora_.begin(), corpora_.end(),
-                                   [&](const OverlayCorpus &c) { return c.prx_sha256 == sha256; });
-    if (!known && !library_dir_.empty()) {
-        // It may have been compiled since the game started.
+    if (!library_dir_.empty()) {
+        // It may have been compiled (or compiled again, optimized) since the
+        // game started.
         const std::size_t added = scan_libraries(library_dir_, /*rescan=*/true);
         if (added != 0u) {
             std::printf("stage overlays: %zu new corpora from %s\n", added,
@@ -185,6 +191,7 @@ bool OverlayManager::on_module_loaded(kernel::Uid uid, const std::string &module
         }
     }
     const OverlayCorpus *other_base = nullptr;
+    std::size_t best = corpora_.size();
     for (std::size_t i = 0; i < corpora_.size(); ++i) {
         const OverlayCorpus &corpus = corpora_[i];
         if (corpus.prx_sha256 != sha256) continue;
@@ -192,6 +199,12 @@ bool OverlayManager::on_module_loaded(kernel::Uid uid, const std::string &module
             other_base = &corpus;
             continue;
         }
+        // The most optimized one; on a tie, the first (sorted by file name).
+        if (best == corpora_.size() || corpus.opt_level > corpora_[best].opt_level) best = i;
+    }
+    if (best != corpora_.size()) {
+        const std::size_t i = best;
+        const OverlayCorpus &corpus = corpora_[i];
         psprecomp::Runtime &runtime = system_.runtime();
         // Whatever an earlier module left in the window goes first.
         runtime.unregister_functions(base, base + size);
@@ -204,9 +217,9 @@ bool OverlayManager::on_module_loaded(kernel::Uid uid, const std::string &module
         ++stats.installs;
         installed_[uid] = std::move(installed);
         ++unverified_;
-        system_.hle().trace_event("overlay %s (%s) installed at %08X..%08X for module %d",
-                                  corpus.name.c_str(), corpus.origin.c_str(), base, base + size,
-                                  uid);
+        system_.hle().trace_event("overlay %s (%s, -O%d) installed at %08X..%08X for module %d",
+                                  corpus.name.c_str(), corpus.origin.c_str(), corpus.opt_level,
+                                  base, base + size, uid);
         return true;
     }
     const std::string name = module_name + "@" + short_hash(sha256);

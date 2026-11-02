@@ -11,6 +11,12 @@
 // it, so it only matches the build it was produced with. The ABI version and
 // the two sizes below catch a library left over from another build of the
 // runtime; nothing else is checked.
+//
+// F22b: a library also says the optimization level its generated code was
+// compiled at (mpo_overlay_opt_level, optional so the libraries built before
+// it still load). The launcher first compiles every stage at -O0 and then
+// again optimized; when both libraries of a stage are there, the host takes
+// the optimized one.
 
 #pragma once
 
@@ -48,6 +54,10 @@ struct OverlayModuleInfo {
 
 using OverlayInstallFunction = void (*)(psprecomp::Runtime &runtime);
 
+// A library without mpo_overlay_opt_level (built before F22b, always at the
+// default level).
+inline constexpr int kOverlayDefaultOptLevel = 2;
+
 } // namespace mpo::hle
 
 // Only a library defines these; the host looks them up by name.
@@ -64,4 +74,6 @@ using OverlayInstallFunction = void (*)(psprecomp::Runtime &runtime);
 extern "C" {
 MPO_OVERLAY_EXPORT const mpo::hle::OverlayModuleInfo *mpo_overlay_info();
 MPO_OVERLAY_EXPORT void mpo_register_overlay(psprecomp::Runtime &runtime);
+// Optional: the -O level of the generated code (0 to 3).
+MPO_OVERLAY_EXPORT int mpo_overlay_opt_level();
 }

@@ -8,17 +8,24 @@
 # Provides the INTERFACE target mpo::ffmpeg, or nothing when FFmpeg is off.
 #
 # Options:
-#   MPO_FFMPEG             auto | bundled | system | off
-#                          auto: bundled where the build can run FFmpeg's
-#                          configure (a POSIX shell and make, not MSVC), else
-#                          system if found, else off.
+#   MPO_FFMPEG             auto | bundled | prebuilt | system | off
+#                          auto: prebuilt when MPO_FFMPEG_ROOT is set, bundled
+#                          where the build can run FFmpeg's configure (a POSIX
+#                          shell and make, not MSVC), else system if found,
+#                          else off.
+#   MPO_FFMPEG_ROOT        prebuilt: an FFmpeg built with this same flags
+#                          (include/ and lib/), as the Windows release carries
+#                          it (packaging/ffmpeg, F22b: Windows has no POSIX
+#                          shell to run configure on the player's machine)
 #   MPO_FFMPEG_URL         where to get ffmpeg-7.1.5.tar.xz (a local path works
 #                          too); the SHA-256 below is always checked
 #   MPO_FFMPEG_SOURCE_DIR  an already unpacked FFmpeg 7.1.5 tree (offline)
 #   MPO_FFMPEG_JOBS        parallel jobs for the bundled build (default 3)
 #
 # The bundled build runs at build time (ExternalProject), out of tree, with
-# the C compiler of this build and ccache when MPO_USE_CCACHE found it. x86
+# the C compiler of this build and ccache when MPO_USE_CCACHE found it. When
+# cross-compiling for Windows (llvm-mingw, cmake/toolchains/llvm-mingw.cmake),
+# configure gets the target and the LLVM binutils of the toolchain. x86
 # assembly needs nasm; without it the build uses --disable-x86asm (C and inline
 # assembly only). Output does not depend on it: H.264 decoding is bit-exact and
 # mpo_video asks swscale for SWS_BITEXACT | SWS_ACCURATE_RND.
@@ -27,8 +34,9 @@ if(TARGET mpo::ffmpeg)
     return()
 endif()
 
-set(MPO_FFMPEG "auto" CACHE STRING "FFmpeg for mpo_video: auto, bundled, system or off")
-set_property(CACHE MPO_FFMPEG PROPERTY STRINGS auto bundled system off)
+set(MPO_FFMPEG "auto" CACHE STRING "FFmpeg for mpo_video: auto, bundled, prebuilt, system or off")
+set_property(CACHE MPO_FFMPEG PROPERTY STRINGS auto bundled prebuilt system off)
+set(MPO_FFMPEG_ROOT "" CACHE PATH "A prebuilt FFmpeg (include/, lib/) for MPO_FFMPEG=prebuilt")
 set(MPO_FFMPEG_VERSION "7.1.5")
 set(MPO_FFMPEG_SHA256 "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f")
 set(MPO_FFMPEG_URL "https://ffmpeg.org/releases/ffmpeg-${MPO_FFMPEG_VERSION}.tar.xz"
@@ -37,10 +45,13 @@ set(MPO_FFMPEG_SOURCE_DIR "" CACHE PATH "Unpacked FFmpeg ${MPO_FFMPEG_VERSION} t
 set(MPO_FFMPEG_JOBS "3" CACHE STRING "Parallel jobs for the bundled FFmpeg build")
 
 set(mpo_ffmpeg_mode "${MPO_FFMPEG}")
+if(mpo_ffmpeg_mode STREQUAL "auto" AND MPO_FFMPEG_ROOT)
+    set(mpo_ffmpeg_mode "prebuilt")
+endif()
 if(mpo_ffmpeg_mode STREQUAL "auto")
     find_program(MPO_FFMPEG_MAKE NAMES gmake make)
     find_program(MPO_FFMPEG_SH NAMES sh bash)
-    if(NOT MSVC AND NOT WIN32 AND MPO_FFMPEG_MAKE AND MPO_FFMPEG_SH)
+    if(NOT MSVC AND (NOT WIN32 OR CMAKE_CROSSCOMPILING) AND MPO_FFMPEG_MAKE AND MPO_FFMPEG_SH)
         set(mpo_ffmpeg_mode "bundled")
     else()
         set(mpo_ffmpeg_mode "system")
@@ -50,6 +61,39 @@ endif()
 
 if(mpo_ffmpeg_mode STREQUAL "off")
     message(STATUS "FFmpeg: off (mpo_video builds without the H.264 decoder)")
+    return()
+endif()
+
+if(mpo_ffmpeg_mode STREQUAL "prebuilt")
+    set(mpo_ffmpeg_libs "")
+    foreach(mpo_ffmpeg_lib IN ITEMS avcodec swscale avutil)
+        # libavcodec.a (MinGW, any POSIX) or avcodec.lib.
+        set(mpo_ffmpeg_lib_path "${MPO_FFMPEG_ROOT}/lib/lib${mpo_ffmpeg_lib}.a")
+        if(NOT EXISTS "${mpo_ffmpeg_lib_path}")
+            set(mpo_ffmpeg_lib_path "${MPO_FFMPEG_ROOT}/lib/${mpo_ffmpeg_lib}.lib")
+        endif()
+        if(NOT EXISTS "${mpo_ffmpeg_lib_path}")
+            message(FATAL_ERROR "MPO_FFMPEG=prebuilt: no ${mpo_ffmpeg_lib} library in "
+                                "${MPO_FFMPEG_ROOT}/lib")
+        endif()
+        list(APPEND mpo_ffmpeg_libs "${mpo_ffmpeg_lib_path}")
+    endforeach()
+    if(NOT EXISTS "${MPO_FFMPEG_ROOT}/include/libavcodec/avcodec.h")
+        message(FATAL_ERROR "MPO_FFMPEG=prebuilt: no include/libavcodec/avcodec.h in "
+                            "${MPO_FFMPEG_ROOT}")
+    endif()
+    add_library(mpo_ffmpeg INTERFACE)
+    add_library(mpo::ffmpeg ALIAS mpo_ffmpeg)
+    target_include_directories(mpo_ffmpeg SYSTEM INTERFACE "${MPO_FFMPEG_ROOT}/include")
+    target_link_libraries(mpo_ffmpeg INTERFACE ${mpo_ffmpeg_libs})
+    if(WIN32)
+        # libavutil's random seed (BCryptGenRandom).
+        target_link_libraries(mpo_ffmpeg INTERFACE bcrypt)
+    else()
+        find_package(Threads REQUIRED)
+        target_link_libraries(mpo_ffmpeg INTERFACE Threads::Threads m)
+    endif()
+    message(STATUS "FFmpeg: prebuilt (${MPO_FFMPEG_ROOT})")
     return()
 endif()
 
@@ -96,7 +140,8 @@ if(mpo_ffmpeg_mode STREQUAL "system")
 endif()
 
 if(NOT mpo_ffmpeg_mode STREQUAL "bundled")
-    message(FATAL_ERROR "MPO_FFMPEG must be auto, bundled, system or off (got ${MPO_FFMPEG})")
+    message(FATAL_ERROR "MPO_FFMPEG must be auto, bundled, prebuilt, system or off "
+                        "(got ${MPO_FFMPEG})")
 endif()
 
 if(MSVC)
@@ -122,10 +167,25 @@ set(mpo_ffmpeg_configure_args
     "--cc=${mpo_ffmpeg_cc}"
     --enable-static --disable-shared --enable-pic
     --disable-programs --disable-doc --disable-network
-    --disable-autodetect --disable-iconv --enable-pthreads
+    --disable-autodetect --disable-iconv
     --disable-everything --enable-decoder=h264 --enable-parser=h264
     --disable-avdevice --disable-avformat --disable-avfilter --disable-swresample
     --enable-swscale --disable-debug)
+if(WIN32)
+    # Windows threads: no winpthreads DLL to carry.
+    list(APPEND mpo_ffmpeg_configure_args --enable-w32threads --disable-pthreads)
+else()
+    list(APPEND mpo_ffmpeg_configure_args --enable-pthreads)
+endif()
+if(CMAKE_CROSSCOMPILING)
+    if(NOT WIN32)
+        message(FATAL_ERROR "MPO_FFMPEG=bundled: cross-compiling is only set up for Windows "
+                            "(llvm-mingw)")
+    endif()
+    list(APPEND mpo_ffmpeg_configure_args --enable-cross-compile --target-os=mingw32
+         --arch=${CMAKE_SYSTEM_PROCESSOR} "--ar=${CMAKE_AR}" "--nm=${CMAKE_NM}"
+         "--ranlib=${CMAKE_RANLIB}" "--strip=${CMAKE_STRIP}")
+endif()
 find_program(MPO_FFMPEG_NASM nasm)
 if(MPO_FFMPEG_NASM)
     list(APPEND mpo_ffmpeg_configure_args --x86asmexe=${MPO_FFMPEG_NASM})
@@ -162,7 +222,9 @@ add_library(mpo::ffmpeg ALIAS mpo_ffmpeg)
 file(MAKE_DIRECTORY "${mpo_ffmpeg_install}/include")
 target_include_directories(mpo_ffmpeg SYSTEM INTERFACE "${mpo_ffmpeg_install}/include")
 target_link_libraries(mpo_ffmpeg INTERFACE ${mpo_ffmpeg_libs} Threads::Threads)
-if(NOT WIN32)
+if(WIN32)
+    target_link_libraries(mpo_ffmpeg INTERFACE bcrypt)
+else()
     target_link_libraries(mpo_ffmpeg INTERFACE m)
     # FFmpeg's configure adds -latomic where the toolchain has it.
     find_library(MPO_FFMPEG_LIBATOMIC NAMES atomic libatomic.so.1)

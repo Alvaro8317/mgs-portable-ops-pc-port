@@ -7,6 +7,10 @@ script turns the player's own ISO into the native game, on their machine, and
 is what the launcher runs. Every step is resumable; running it again only does
 what is missing.
 
+  toolchain  (Windows) downloads the portable compiler (llvm-mingw), CMake and
+           Ninja pinned in profiles/mpo/config/toolchain.toml into
+           <data>/toolchain, checking each SHA-256. `install` runs it first
+           on Windows; elsewhere the system's (or the Flatpak SDK's) are used.
   install  1. tools: configures the build and compiles the installer (`mpo`)
               and the recompiler (`psp_recomp`).
            2. disc: `mpo --install <iso>` validates the ISO (disc ID and the
@@ -22,19 +26,23 @@ what is missing.
            profiles/mpo/config/build_order.toml, and moves each finished
            library into <data>/overlays, where a running mpo_boot finds it the
            next time the game loads that stage (until then the stage runs on
-           the interpreter). With --low-priority it yields the CPU to the game.
-           The objects of an installed stage are deleted (the C++ stays).
+           the interpreter). Two passes (F22b): first every stage at -O0
+           (`quick`, ~14x faster to compile), then at the optimized level,
+           each one replacing its quick library. With --low-priority it
+           yields the CPU to the game. The objects of an installed stage are
+           deleted (the C++ stays).
   play     runs the game: mpo_boot in a window with <data>/overlays, the
            firmware fonts and the default save folder.
   status   what is done, as text or --json (for the launcher).
 
 Usage:
 
+  python3 -I profiles/mpo/scripts/setup.py toolchain [--data <dir>] [--json]
   python3 -I profiles/mpo/scripts/setup.py install --iso <ULUS-10202.iso> [--data <dir>]
       [--jobs N] [--generated-jobs N] [--fonts <dir>] [--cmake cmake] [--generator Ninja]
-      [--cc clang --cxx clang++]
+      [--cc clang --cxx clang++] [--toolchain auto|portable|system] [--ffmpeg-root <dir>]
   python3 -I profiles/mpo/scripts/setup.py stages [--data <dir>] [--jobs N] [--low-priority]
-      [--only st02,st03t1] [--keep-objects]
+      [--only st02,st03t1] [--keep-objects] [--level both|quick|optimized]
   python3 -I profiles/mpo/scripts/setup.py play [--data <dir>] [-- <mpo_boot options>...]
   python3 -I profiles/mpo/scripts/setup.py status [--data <dir>] [--json]
 
@@ -57,6 +65,8 @@ import subprocess
 import sys
 import time
 import tomllib
+import urllib.request
+import zipfile
 
 _ROOT = pathlib.Path(__file__).resolve().parents[3]
 _PROFILE = _ROOT / 'profiles' / 'mpo'
@@ -73,6 +83,12 @@ _PPSSPP_FONT_DIRS = (
     '~/.local/share/ppsspp/assets/flash0/font',
 )
 _FONTS = ('ltn0.pgf', 'jpn0.pgf')
+# The optimization level of the first, fast pass over the stages (F22b): a
+# mission unit compiles in 1.5 s at -O0 against 20.8 s at -O2 (F21).
+QUICK_LEVEL = '0'
+# The release layout next to the source tree (packaging/windows): the FFmpeg
+# the CI built with the pinned llvm-mingw.
+_RELEASE_FFMPEG = _ROOT.parent / 'ffmpeg'
 
 
 class SetupError(Exception):
@@ -146,6 +162,51 @@ def runtime_key(compiler_id, opt_level):
   return digest.hexdigest()
 
 
+def toolchain_platform(system=None, machine=None):
+  """The toolchain.toml table for this machine, or None (use the system's)."""
+  system = platform.system() if system is None else system
+  machine = (platform.machine() if machine is None else machine).lower()
+  if system == 'Windows' and machine in ('amd64', 'x86_64'):
+    return 'windows-x86_64'
+  return None
+
+
+def load_toolchain(path, key):
+  """The tools to download for `key`, by name (the bundled ones excluded)."""
+  with open(path, 'rb') as f:
+    table = tomllib.load(f).get(key, {})
+  tools = {}
+  for name, spec in table.items():
+    for field in ('version', 'url', 'sha256', 'top', 'bin'):
+      if field not in spec:
+        raise SetupError(f'{path}: [{key}.{name}] has no {field}')
+    if not re.fullmatch(r'[0-9a-f]{64}', spec['sha256']):
+      raise SetupError(f'{path}: [{key}.{name}] sha256 is not a SHA-256')
+    if not spec.get('bundled'):
+      tools[name] = spec
+  return tools
+
+
+def check_archive_members(names):
+  """Rejects absolute paths and `..` in an archive before unpacking it."""
+  for name in names:
+    parts = pathlib.PurePosixPath(name.replace('\\', '/')).parts
+    if name.startswith(('/', '\\')) or (parts and ':' in parts[0]) or '..' in parts:
+      raise SetupError(f'unsafe path in the archive: {name!r}')
+
+
+def library_name(stage, quick=False, system=None):
+  """The file of a stage library in <data>/overlays.
+
+  The optimized library is stage_<s>.<ext>; the quick one (-O0) has its own
+  name, so a running game that has it mapped (Windows cannot replace a loaded
+  DLL) never blocks installing the optimized one next to it.
+  """
+  system = platform.system() if system is None else system
+  suffix = '.dll' if system == 'Windows' else '.dylib' if system == 'Darwin' else '.so'
+  return f'stage_{stage}-O{QUICK_LEVEL}{suffix}' if quick else f'stage_{stage}{suffix}'
+
+
 class Setup:
   """The steps, over one <data> folder."""
 
@@ -157,8 +218,10 @@ class Setup:
     self.build = self.data / 'build'
     self.overlays = self.data / 'overlays'
     self.logs = self.data / 'logs'
+    self.toolchain_dir = self.data / 'toolchain'
     self.state_path = self.data / 'state.json'
     self.state = self._load_state()
+    self._use_toolchain_path()
 
   # -- state -----------------------------------------------------------------
 
@@ -178,10 +241,22 @@ class Setup:
     tmp.write_text(json.dumps(self.state, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     os.replace(tmp, self.state_path)
 
+  def _use_toolchain_path(self):
+    # llvm-mingw links libc++ as a DLL: psp_recomp, mpo and mpo_boot find it,
+    # and CMake finds the tools, through PATH.
+    toolchain = self.state.get('toolchain')
+    if not toolchain:
+      return
+    dirs = [d for d in toolchain.get('path', []) if d not in os.environ.get('PATH', '')]
+    if dirs:
+      os.environ['PATH'] = os.pathsep.join(dirs + [os.environ.get('PATH', '')])
+
   # -- helpers ---------------------------------------------------------------
 
   def _note(self, text):
-    print(f'setup: {text}', flush=True)
+    # With --json, stdout is only the JSON.
+    stream = sys.stderr if getattr(self.args, 'json', False) else sys.stdout
+    print(f'setup: {text}', file=stream, flush=True)
 
   def _run(self, command, log_name, low_priority=False, env=None):
     """Runs a command with its output in <data>/logs/<log_name>.log."""
@@ -222,22 +297,44 @@ class Setup:
   def mpo_boot(self):
     return self._exe('profiles/mpo/host/hle/mpo_boot')
 
+  @property
+  def cmake(self):
+    explicit = getattr(self.args, 'cmake', None)
+    return explicit or self.state.get('toolchain', {}).get('cmake') or 'cmake'
+
   def _cmake_configure(self, extra, log_name):
     args = self.args
-    command = [args.cmake, '-S', _ROOT, '-B', self.build, '-G', args.generator,
+    toolchain = self.state.get('toolchain', {})
+    command = [self.cmake, '-S', _ROOT, '-B', self.build, '-G', args.generator,
                '-DCMAKE_BUILD_TYPE=Release', '-DPSPRECOMP_BUILD_TESTS=OFF',
                '-DPSPRECOMP_BUILD_PROFILE_TESTS=OFF']
-    if args.cc:
-      command.append(f'-DCMAKE_C_COMPILER={args.cc}')
-    if args.cxx:
-      command.append(f'-DCMAKE_CXX_COMPILER={args.cxx}')
+    cc = args.cc or toolchain.get('cc')
+    cxx = args.cxx or toolchain.get('cxx')
+    if cc:
+      command.append(f'-DCMAKE_C_COMPILER={cc}')
+    if cxx:
+      command.append(f'-DCMAKE_CXX_COMPILER={cxx}')
+    if toolchain.get('ninja') and args.generator == 'Ninja':
+      command.append(f'-DCMAKE_MAKE_PROGRAM={toolchain["ninja"]}')
+    ffmpeg = self._ffmpeg_root()
+    if ffmpeg:
+      command += ['-DMPO_FFMPEG=prebuilt', f'-DMPO_FFMPEG_ROOT={ffmpeg}']
     if args.generated_jobs:
       command.append(f'-DPSPRECOMP_GENERATED_JOBS={args.generated_jobs}')
     command += extra
     self._run(command, log_name)
 
+  def _ffmpeg_root(self):
+    explicit = getattr(self.args, 'ffmpeg_root', None)
+    if explicit:
+      return pathlib.Path(explicit).resolve()
+    # Only where the build cannot compile FFmpeg itself (no POSIX shell).
+    if os.name == 'nt' and (_RELEASE_FFMPEG / 'include' / 'libavcodec').is_dir():
+      return _RELEASE_FFMPEG
+    return None
+
   def _cmake_build(self, targets, log_name, low_priority=False):
-    command = [self.args.cmake, '--build', self.build, '--target', *targets]
+    command = [self.cmake, '--build', self.build, '--target', *targets]
     if self.args.jobs:
       command += ['--parallel', str(self.args.jobs)]
     self._run(command, log_name, low_priority=low_priority)
@@ -250,6 +347,97 @@ class Setup:
       if line.startswith(f'{name}:'):
         return line.split('=', 1)[1]
     return None
+
+  # -- toolchain -------------------------------------------------------------
+
+  def _download(self, name, spec, target):
+    """Downloads `spec['url']` to `target`, checking its SHA-256."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part = target.with_name(target.name + '.part')
+    digest = hashlib.sha256()
+    expected_size = spec.get('size')
+    done = 0
+    shown = -1
+    request = urllib.request.Request(spec['url'], headers={'User-Agent': 'mpo-pc-port-setup'})
+    with urllib.request.urlopen(request, timeout=60) as response, open(part, 'wb') as out:
+      total = expected_size or int(response.headers.get('Content-Length') or 0)
+      while True:
+        block = response.read(1 << 20)
+        if not block:
+          break
+        out.write(block)
+        digest.update(block)
+        done += len(block)
+        if total:
+          percent = min(100, done * 100 // total)
+          if percent // 10 != shown:
+            shown = percent // 10
+            self._note(f'toolchain: {name} {percent}% ({done >> 20} of {total >> 20} MB)')
+    if expected_size and done != expected_size:
+      part.unlink(missing_ok=True)
+      raise SetupError(f'{name}: downloaded {done} bytes, expected {expected_size} '
+                       f'({spec["url"]})')
+    if digest.hexdigest() != spec['sha256']:
+      part.unlink(missing_ok=True)
+      raise SetupError(f'{name}: the download does not have the pinned SHA-256 '
+                       f'(got {digest.hexdigest()}, expected {spec["sha256"]}; {spec["url"]})')
+    os.replace(part, target)
+
+  def _unpack(self, name, archive, folder):
+    tmp = folder.with_name(folder.name + '.tmp')
+    shutil.rmtree(tmp, ignore_errors=True)
+    with zipfile.ZipFile(archive) as z:
+      check_archive_members(z.namelist())
+      self._note(f'toolchain: unpacking {name}')
+      z.extractall(tmp)
+    shutil.rmtree(folder, ignore_errors=True)
+    os.replace(tmp, folder)
+
+  def toolchain(self):
+    """Downloads and unpacks the portable toolchain (toolchain.toml)."""
+    key = toolchain_platform()
+    if key is None:
+      raise SetupError('there is no portable toolchain for this system: install CMake, Ninja '
+                       'and Clang or GCC (docs/analysis/distribution.md §3)')
+    tools = load_toolchain(_PROFILE / 'config' / 'toolchain.toml', key)
+    roots = {}
+    for name, spec in tools.items():
+      folder = self.toolchain_dir / f'{name}-{spec["version"]}'
+      stamp = folder / '.mpo-sha256'
+      if not (stamp.is_file() and stamp.read_text(encoding='utf-8').strip() == spec['sha256']):
+        archive = self.toolchain_dir / 'downloads' / pathlib.PurePosixPath(spec['url']).name
+        self._note(f'toolchain: downloading {name} {spec["version"]}')
+        self._download(name, spec, archive)
+        self._unpack(name, archive, folder)
+        archive.unlink(missing_ok=True)
+        stamp.write_text(spec['sha256'] + '\n', encoding='utf-8')
+      else:
+        self._note(f'toolchain: {name} {spec["version"]} already there')
+      root = folder / spec['top'] if spec['top'] else folder
+      roots[name] = root / spec['bin'] if spec['bin'] else root
+    exe = '.exe' if key.startswith('windows') else ''
+    for name in ('llvm-mingw', 'cmake', 'ninja'):
+      if name not in roots:
+        raise SetupError(f'toolchain.toml: [{key}] has no {name}')
+    toolchain = {
+        'platform': key,
+        'cc': str(roots['llvm-mingw'] / f'clang{exe}'),
+        'cxx': str(roots['llvm-mingw'] / f'clang++{exe}'),
+        'cmake': str(roots['cmake'] / f'cmake{exe}'),
+        'ctest': str(roots['cmake'] / f'ctest{exe}'),
+        'ninja': str(roots['ninja'] / f'ninja{exe}'),
+        'path': [str(roots['llvm-mingw']), str(roots['cmake']), str(roots['ninja'])],
+        'versions': {name: spec['version'] for name, spec in tools.items()},
+    }
+    for field in ('cc', 'cxx', 'cmake', 'ninja'):
+      if not pathlib.Path(toolchain[field]).is_file():
+        raise SetupError(f'toolchain: no {toolchain[field]} after unpacking')
+    self.state['toolchain'] = toolchain
+    self._save_state()
+    self._use_toolchain_path()
+    self._note('toolchain: ready (' + ', '.join(f'{n} {v}' for n, v in
+                                                toolchain['versions'].items()) + ')')
+    return toolchain
 
   # -- install ---------------------------------------------------------------
 
@@ -370,6 +558,10 @@ class Setup:
     self._note(f'fonts: {copied} fonts copied from {found}')
 
   def install(self):
+    mode = self.args.toolchain
+    if mode == 'portable' or (mode == 'auto' and toolchain_platform() is not None and
+                              not (self.args.cc or self.args.cxx)):
+      self.toolchain()
     self.step_tools()
     self.step_disc(self.args.iso)
     self.step_generate()
@@ -378,9 +570,24 @@ class Setup:
 
   # -- stages ----------------------------------------------------------------
 
-  def _library_name(self, stage):
-    suffix = '.dll' if os.name == 'nt' else '.dylib' if sys.platform == 'darwin' else '.so'
-    return f'stage_{stage}{suffix}'
+  def _set_overlay_level(self, level):
+    # Only the stage libraries follow MPO_OVERLAY_OPT_LEVEL; mpo_boot keeps
+    # the level it was built with.
+    if self._cache_value('MPO_OVERLAY_OPT_LEVEL') == level:
+      return
+    self._run([self.cmake, '-S', _ROOT, '-B', self.build, f'-DMPO_OVERLAY_OPT_LEVEL={level}'],
+              'stages-configure')
+
+  def _drop_quick(self, stage):
+    """Deletes a quick library once the optimized one is there."""
+    quick = self.overlays / library_name(stage, quick=True)
+    try:
+      quick.unlink(missing_ok=True)
+    except OSError:
+      # A running game has it loaded (Windows); the next run deletes it.
+      return False
+    self.state.setdefault('stages_quick', {}).pop(stage, None)
+    return True
 
   def stages(self):
     if not self.mpo_boot.is_file():
@@ -390,44 +597,69 @@ class Setup:
     kept, _ = self.stage_corpora(build_overlays, generate)
     only = [s for s in (self.args.only or '').split(',') if s]
     order = stage_order(only or kept, _PROFILE / 'config' / 'build_order.toml')
-    key = runtime_key(self._cache_value('CMAKE_CXX_COMPILER') or '',
-                      self._cache_value('PSPRECOMP_GENERATED_OPT_LEVEL') or '')
-    states = self.state.setdefault('stages', {})
+    compiler = self._cache_value('CMAKE_CXX_COMPILER') or ''
+    optimized = self._cache_value('PSPRECOMP_GENERATED_OPT_LEVEL') or '2'
+    levels = {'quick': [QUICK_LEVEL], 'optimized': [optimized],
+              'both': [QUICK_LEVEL, optimized]}[self.args.level]
+    levels = list(dict.fromkeys(levels))
+    optimized_key = runtime_key(compiler, optimized)
+    records = self.state.setdefault('stages', {})
+    quick_records = self.state.setdefault('stages_quick', {})
     self.overlays.mkdir(parents=True, exist_ok=True)
-    pending = [s for s in order if not self._stage_ready(s, states.get(s), key)]
-    self._note(f'stages: {len(order) - len(pending)} ready, {len(pending)} to compile')
-    for index, stage in enumerate(pending, 1):
-      started = time.monotonic()
-      self._note(f'stages: compiling {stage} ({index}/{len(pending)})')
-      self._cmake_build([f'mpo_overlay_{stage}'], f'stage_{stage}',
-                        low_priority=self.args.low_priority)
-      built = self.build / 'overlays' / self._library_name(stage)
-      if not built.is_file():
-        raise SetupError(f'{stage}: no library at {built}')
-      # Atomic: a running mpo_boot never sees half a library.
-      tmp = self.overlays / f'.{built.name}.tmp'
-      shutil.copyfile(built, tmp)
-      os.replace(tmp, self.overlays / built.name)
-      states[stage] = {
-          'runtime_key': key,
-          'generated': _sha256((self.generated / 'overlays' / stage / 'generate.json')),
-          'seconds': round(time.monotonic() - started, 1),
-      }
-      self._save_state()
-      if not self.args.keep_objects:
-        objects = self.build / 'profiles' / 'mpo' / 'host' / 'hle' / 'CMakeFiles' / \
-            f'mpo_overlay_{stage}.dir'
-        shutil.rmtree(objects, ignore_errors=True)
-      self._note(f'stages: {stage} installed in {states[stage]["seconds"]:.0f} s')
+    for stage in order:
+      if self._stage_ready(stage, records.get(stage), optimized_key):
+        self._drop_quick(stage)
+    for level in levels:
+      quick = level != optimized
+      key = runtime_key(compiler, level)
+      states = quick_records if quick else records
+      pass_name = f'quick (-O{level})' if quick else f'optimized (-O{level})'
+      pending = [s for s in order
+                 if not self._stage_ready(s, states.get(s), key, quick) and
+                 not (quick and self._stage_ready(s, records.get(s), optimized_key))]
+      self._note(f'stages: {pass_name}: {len(order) - len(pending)} ready, {len(pending)} to '
+                 'compile')
+      if not pending:
+        continue
+      self._set_overlay_level(level)
+      for index, stage in enumerate(pending, 1):
+        started = time.monotonic()
+        self._note(f'stages: compiling {stage} ({index}/{len(pending)}, {pass_name})')
+        self._cmake_build([f'mpo_overlay_{stage}'], f'stage_{stage}',
+                          low_priority=self.args.low_priority)
+        built = self.build / 'overlays' / library_name(stage)
+        if not built.is_file():
+          raise SetupError(f'{stage}: no library at {built}')
+        # Atomic: a running mpo_boot never sees half a library.
+        name = library_name(stage, quick)
+        tmp = self.overlays / f'.{name}.tmp'
+        shutil.copyfile(built, tmp)
+        os.replace(tmp, self.overlays / name)
+        states[stage] = {
+            'runtime_key': key,
+            'opt_level': level,
+            'generated': _sha256((self.generated / 'overlays' / stage / 'generate.json')),
+            'seconds': round(time.monotonic() - started, 1),
+        }
+        if not quick:
+          self._drop_quick(stage)
+        self._save_state()
+        if not self.args.keep_objects:
+          objects = self.build / 'profiles' / 'mpo' / 'host' / 'hle' / 'CMakeFiles' / \
+              f'mpo_overlay_{stage}.dir'
+          shutil.rmtree(objects, ignore_errors=True)
+        self._note(f'stages: {stage} installed in {states[stage]["seconds"]:.0f} s '
+                   f'({pass_name})')
+    self._save_state()
     self._note('stages: all stages compiled')
 
-  def _stage_ready(self, stage, state, key):
+  def _stage_ready(self, stage, state, key, quick=False):
     if not state or state.get('runtime_key') != key:
       return False
     manifest = self.generated / 'overlays' / stage / 'generate.json'
     if not manifest.is_file() or state.get('generated') != _sha256(manifest):
       return False
-    return (self.overlays / self._library_name(stage)).is_file()
+    return (self.overlays / library_name(stage, quick)).is_file()
 
   # -- play ------------------------------------------------------------------
 
@@ -441,7 +673,8 @@ class Setup:
     # has no corpus, so libraries that `stages` installs later are picked up.
     self.overlays.mkdir(parents=True, exist_ok=True)
     kept, _ = self.stage_corpora(_load_script('build_overlays'), _load_script('generate'))
-    ready = sum(1 for s in kept if (self.overlays / self._library_name(s)).is_file())
+    ready = sum(1 for s in kept if (self.overlays / library_name(s)).is_file() or
+                (self.overlays / library_name(s, quick=True)).is_file())
     if ready < len(kept):
       self._note(f'play: {ready} of {len(kept)} stages compiled; the rest run on the interpreter '
                  '(slower, FPS drops in heavy scenes). Compile them, also while playing, with: '
@@ -460,15 +693,31 @@ class Setup:
 
   def status(self):
     stages = self.state.get('stages', {})
+    quick = self.state.get('stages_quick', {})
     libraries = sorted(p.name for p in self.overlays.glob('stage_*')
                        if p.suffix in _LIBRARY_SUFFIXES) if self.overlays.is_dir() else []
+    quick_suffix = f'-O{QUICK_LEVEL}'
+    optimized_names = {pathlib.Path(n).stem for n in libraries if not
+                       pathlib.Path(n).stem.endswith(quick_suffix)}
+    quick_names = {pathlib.Path(n).stem[:-len(quick_suffix)] for n in libraries
+                   if pathlib.Path(n).stem.endswith(quick_suffix)}
+    try:
+      total = len(self.stage_corpora(_load_script('build_overlays'), _load_script('generate'))[0])
+    except (OSError, ValueError, SetupError):
+      total = None
     return {
         'data': str(self.data),
         'iso': self.state.get('iso'),
+        'toolchain': self.state.get('toolchain', {}).get('versions'),
         'disc_installed': (self.game / 'install.toml').is_file(),
         'playable': self.mpo_boot.is_file() and 'main' in self.state,
-        'stages_installed': len(libraries),
-        'stages_compiled_seconds': round(sum(s.get('seconds', 0) for s in stages.values())),
+        'stages_total': total,
+        # A stage with either library runs compiled; `optimized` is the end state.
+        'stages_installed': len(optimized_names | quick_names),
+        'stages_optimized': len(optimized_names),
+        'stages_quick_only': len(quick_names - optimized_names),
+        'stages_compiled_seconds': round(sum(s.get('seconds', 0) for s in stages.values()) +
+                                         sum(s.get('seconds', 0) for s in quick.values())),
     }
 
 
@@ -497,7 +746,11 @@ def parse_args(argv):
 
   def build_options(p):
     p.add_argument('--jobs', type=int, help='parallel compile jobs (default: the build tool\'s)')
-    p.add_argument('--cmake', default='cmake')
+    p.add_argument('--cmake', help='cmake to use (default: the portable toolchain\'s, or PATH)')
+
+  toolchain = sub.add_parser('toolchain', help='download the portable compiler, CMake and Ninja')
+  common(toolchain)
+  toolchain.add_argument('--json', action='store_true', help='print the tool paths as JSON')
 
   install = sub.add_parser('install', help='validate the ISO, generate and compile mpo_boot')
   common(install)
@@ -511,6 +764,10 @@ def parse_args(argv):
                        help='corpora generated at a time (default: half the cores, at most 8)')
   install.add_argument('--generated-jobs', type=int,
                        help='parallel jobs for the generated code (default: 1 per 4 GiB of RAM)')
+  install.add_argument('--toolchain', choices=('auto', 'portable', 'system'), default='auto',
+                       help='auto: the portable one on Windows (unless --cc/--cxx), else the '
+                       'system\'s')
+  install.add_argument('--ffmpeg-root', help='a prebuilt FFmpeg (include/, lib/) for the videos')
 
   stages = sub.add_parser('stages', help='compile the stage overlays in the background order')
   common(stages)
@@ -520,6 +777,8 @@ def parse_args(argv):
   stages.add_argument('--only', help='comma-separated stages')
   stages.add_argument('--keep-objects', action='store_true',
                       help='keep the object files of the stages already installed')
+  stages.add_argument('--level', choices=('both', 'quick', 'optimized'), default='both',
+                      help='both: every stage at -O0 first, then optimized (default)')
 
   play = sub.add_parser('play', help='run the game')
   common(play)
@@ -536,7 +795,11 @@ def main(argv):
   args = parse_args(argv)
   try:
     setup = Setup(args)
-    if args.command == 'install':
+    if args.command == 'toolchain':
+      toolchain = setup.toolchain()
+      if args.json:
+        print(json.dumps(toolchain, indent=2))
+    elif args.command == 'install':
       setup.install()
     elif args.command == 'stages':
       setup.stages()
@@ -550,7 +813,7 @@ def main(argv):
       else:
         for key, value in status.items():
           print(f'{key}: {value}')
-  except (OSError, ValueError, SetupError) as error:
+  except (OSError, ValueError, SetupError, zipfile.BadZipFile) as error:
     print(f'setup: {error}', file=sys.stderr)
     return 1
   return 0

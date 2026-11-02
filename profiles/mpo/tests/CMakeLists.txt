@@ -367,9 +367,27 @@ mpo_add_overlay_library(mpo_test_overlay HOST mpo_overlay_library_test
     TEXT_SHA256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
     SOURCES overlay_test_corpus.cpp)
 mpo_target_warnings(mpo_test_overlay)
+# F22b: the quick (-O0) and the optimized library of one stage, side by side;
+# the manager has to install the optimized one. PRX_SHA256 is the SHA-256 of
+# an empty file, so the test can load that "PRX".
+set(mpo_test_overlay_levels_dir "${CMAKE_CURRENT_BINARY_DIR}/test_overlays_levels")
+foreach(mpo_level IN ITEMS 0 2)
+    mpo_add_overlay_library(mpo_test_overlay_o${mpo_level} HOST mpo_overlay_library_test
+        OUTPUT_DIR "${mpo_test_overlay_levels_dir}" PREFIX test_overlay_o${mpo_level}
+        NAME levels_test BASE 0x08B8F900 SIZE 0x1000
+        PRX_SHA256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        TEXT_OFFSET 0x10 TEXT_SIZE 0x20
+        TEXT_SHA256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        OPT ${mpo_level} SOURCES overlay_test_corpus.cpp)
+    target_compile_definitions(mpo_test_overlay_o${mpo_level} PRIVATE
+        MPO_TEST_OVERLAY_RESULT=0xC0D${mpo_level}u
+        MPO_TEST_OVERLAY_REGISTER=register_test_overlay_o${mpo_level}_functions)
+    mpo_target_warnings(mpo_test_overlay_o${mpo_level})
+endforeach()
 # No add_dependencies(test -> library): on Windows the library links the
 # test's import library, so that would be a cycle. Both are in ALL.
-add_test(NAME mpo_overlay_library_test COMMAND mpo_overlay_library_test "${mpo_test_overlay_dir}")
+add_test(NAME mpo_overlay_library_test COMMAND mpo_overlay_library_test "${mpo_test_overlay_dir}"
+         "${mpo_test_overlay_levels_dir}")
 
 # mpo_savedata (F18a): dialogs on a virtual clock, and the savedata files in a
 # temporary ms0:/ (never the real save folder). The store test also links

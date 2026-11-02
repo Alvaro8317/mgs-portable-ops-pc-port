@@ -53,6 +53,11 @@ mpo_target_warnings(mpo_hle)
 # library, which the libraries link). Yakumo does the same.
 function(mpo_enable_overlay_host target)
     set_target_properties(${target} PROPERTIES ENABLE_EXPORTS TRUE WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
+    if(MINGW)
+        # WINDOWS_EXPORT_ALL_SYMBOLS only drives the MSVC-style linkers; with
+        # MinGW (llvm-mingw, F22b) an executable exports nothing by default.
+        target_link_options(${target} PRIVATE -Wl,--export-all-symbols)
+    endif()
 endfunction()
 
 # One stage overlay library (F13): the generated sources of one corpus plus
@@ -62,11 +67,28 @@ endfunction()
 #
 #   mpo_add_overlay_library(<target> HOST <exe> OUTPUT_DIR <dir> PREFIX <p>
 #       NAME <n> BASE <hex> SIZE <hex> PRX_SHA256 <h> TEXT_OFFSET <hex>
-#       TEXT_SIZE <hex> TEXT_SHA256 <h> [GENERATED] SOURCES <files...>)
+#       TEXT_SIZE <hex> TEXT_SHA256 <h> [OPT <0-3>] [GENERATED]
+#       SOURCES <files...>)
+#
+# OPT is the -O of the generated sources and what the library reports
+# (mpo_overlay_opt_level); by default MPO_OVERLAY_OPT_LEVEL, or
+# PSPRECOMP_GENERATED_OPT_LEVEL when that is empty.
 function(mpo_add_overlay_library target)
     cmake_parse_arguments(MPO_OVERLAY "GENERATED"
-        "HOST;OUTPUT_DIR;PREFIX;NAME;BASE;SIZE;PRX_SHA256;TEXT_OFFSET;TEXT_SIZE;TEXT_SHA256"
+        "HOST;OUTPUT_DIR;PREFIX;NAME;BASE;SIZE;PRX_SHA256;TEXT_OFFSET;TEXT_SIZE;TEXT_SHA256;OPT"
         "SOURCES" ${ARGN})
+    # MPO_OVERLAY_LEVEL is what overlay_module.cpp.in reports.
+    if(NOT "${MPO_OVERLAY_OPT}" STREQUAL "")
+        set(MPO_OVERLAY_LEVEL "${MPO_OVERLAY_OPT}")
+    elseif(NOT "$CACHE{MPO_OVERLAY_OPT_LEVEL}" STREQUAL "")
+        set(MPO_OVERLAY_LEVEL "$CACHE{MPO_OVERLAY_OPT_LEVEL}")
+    else()
+        set(MPO_OVERLAY_LEVEL "${PSPRECOMP_GENERATED_OPT_LEVEL}")
+    endif()
+    if(NOT MPO_OVERLAY_LEVEL MATCHES "^[0-3]$")
+        message(FATAL_ERROR "${target}: the optimization level must be 0, 1, 2 or 3 "
+                            "(got ${MPO_OVERLAY_LEVEL})")
+    endif()
     set(entry_point "${CMAKE_CURRENT_BINARY_DIR}/overlays/${MPO_OVERLAY_PREFIX}_module.cpp")
     configure_file("${MPO_HLE_SOURCE_DIR}/overlay_module.cpp.in" "${entry_point}" @ONLY)
     add_library(${target} MODULE ${MPO_OVERLAY_SOURCES} "${entry_point}")
@@ -82,7 +104,8 @@ function(mpo_add_overlay_library target)
     else()
         add_dependencies(${target} ${MPO_OVERLAY_HOST})
     endif()
-    if(MSVC)
+    if(WIN32)
+        # The runtime's data lives in the executable (MSVC and llvm-mingw).
         target_compile_definitions(${target} PRIVATE PSPRECOMP_IMPORT_HOST_SYMBOLS=1)
     endif()
     if(MPO_OVERLAY_GENERATED)
@@ -90,9 +113,13 @@ function(mpo_add_overlay_library target)
         set_target_properties(${target} PROPERTIES JOB_POOL_COMPILE psprecomp_generated)
         if(MSVC)
             target_compile_options(${target} PRIVATE /W0 /bigobj)
+            # Release already has /O2; only the quick pass (F22b) changes it.
+            if(MPO_OVERLAY_LEVEL STREQUAL "0")
+                target_compile_options(${target} PRIVATE /Od)
+            endif()
         else()
             target_compile_options(${target} PRIVATE -w -ffp-contract=off -fno-sanitize=all
-                                   -O${PSPRECOMP_GENERATED_OPT_LEVEL})
+                                   -O${MPO_OVERLAY_LEVEL})
         endif()
     endif()
     set_target_properties(${target} PROPERTIES
@@ -120,6 +147,11 @@ set(MPO_GENERATED_MODULES_DIR "" CACHE PATH
 set(MPO_GENERATED_OVERLAYS_DIR "" CACHE PATH
     "build_overlays.py output root with <stage>/overlay.txt; empty: no stage overlay is built")
 set(MPO_OVERLAY_LIBRARY_DIR "${CMAKE_BINARY_DIR}/overlays")
+# F22b: setup.py compiles every stage at -O0 first (minutes instead of hours)
+# and then again optimized; only the stage libraries follow this, mpo_boot and
+# its corpora keep PSPRECOMP_GENERATED_OPT_LEVEL.
+set(MPO_OVERLAY_OPT_LEVEL "" CACHE STRING
+    "-O level of the stage overlay libraries (0-3); empty: PSPRECOMP_GENERATED_OPT_LEVEL")
 
 # mpo_boot: boots mgp_main on the kernel and traces it (needs the corpus).
 if(TARGET mpo_generated_mgp_main)

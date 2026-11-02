@@ -29,8 +29,10 @@
 //
 // Libraries can appear while the game runs (F22: the launcher compiles the
 // stages in the background and moves each finished library into the folder):
-// a stage with no corpus makes the manager look at the folder again before
-// falling back to the interpreter.
+// every stage load makes the manager look at the folder again for libraries
+// it has not tried yet. When several corpora describe the PRX at that base
+// (F22b: the quick -O0 library and the optimized one), the one compiled at
+// the highest optimization level is installed.
 //
 // The libraries stay mapped for the rest of the process: a thread may still
 // have native frames of a corpus that left the dispatch table.
@@ -62,6 +64,9 @@ struct OverlayCorpus {
     std::uint32_t text_offset{};
     std::uint32_t text_size{};
     std::string text_sha256;
+    // -O level of the generated code (kOverlayDefaultOptLevel when the
+    // library does not say).
+    int opt_level{kOverlayDefaultOptLevel};
     OverlayInstallFunction install{};
 };
 
@@ -84,11 +89,11 @@ public:
 
     // A corpus linked into the executable (tests) or from a library.
     void add_corpus(const OverlayModuleInfo &info, OverlayInstallFunction install,
-                    std::string origin);
+                    std::string origin, int opt_level = kOverlayDefaultOptLevel);
     // Loads every overlay library (.so, .dll, .dylib) in `directory`; prints
     // why a file is skipped. Returns the number of corpora added. The folder
-    // is remembered: a stage loaded later with no corpus rescans it for
-    // libraries that were not there (a library is only tried once).
+    // is remembered: every stage loaded later rescans it for libraries that
+    // were not there (a library is only tried once).
     std::size_t load_libraries(const std::filesystem::path &directory);
     [[nodiscard]] const std::vector<OverlayCorpus> &corpora() const noexcept { return corpora_; }
 

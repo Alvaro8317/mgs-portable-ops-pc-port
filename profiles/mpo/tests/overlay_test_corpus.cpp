@@ -13,15 +13,24 @@ namespace psprecomp {
 
 namespace {
 
+// F22b builds this file again as the quick (-O0) and optimized libraries of
+// one stage, each with its own name and result.
+#ifndef MPO_TEST_OVERLAY_RESULT
+#define MPO_TEST_OVERLAY_RESULT 0xC0DEu
+#endif
+#ifndef MPO_TEST_OVERLAY_REGISTER
+#define MPO_TEST_OVERLAY_REGISTER register_test_overlay_functions
+#endif
+
 void test_overlay_function(Runtime &, AllegrexContext &ctx) {
-    ctx.gpr[2] = 0xC0DEu;
+    ctx.gpr[2] = MPO_TEST_OVERLAY_RESULT;
     ctx.gpr[3] = static_cast<std::uint32_t>(g_runtime_starvation_interval_fast);
     ctx.pc = ctx.gpr[31];
 }
 
 } // namespace
 
-void register_test_overlay_functions(Runtime &runtime) {
+void MPO_TEST_OVERLAY_REGISTER(Runtime &runtime) {
     runtime.register_function(0x08B8F900u, &test_overlay_function, "test_overlay_function");
 }
 

@@ -130,3 +130,47 @@ jobs:
         run: cmake --build build --config ${{ matrix.config }} --parallel
       - name: Test
         run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure --timeout 300
+
+  # F22b: the toolchain the player's Windows gets (setup.py toolchain, the
+  # pins in profiles/mpo/config/toolchain.toml): llvm-mingw, CMake and Ninja,
+  # with no Visual Studio. The game itself is compiled the same way.
+  windows-llvm-mingw:
+    name: Windows llvm-mingw Release
+    timeout-minutes: 60
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Portable toolchain (setup.py toolchain)
+        shell: pwsh
+        run: |
+          python -I profiles/mpo/scripts/setup.py toolchain --data "$env:RUNNER_TEMP\mpo" --json > toolchain.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Content toolchain.json
+          $tc = Get-Content toolchain.json | ConvertFrom-Json
+          # libc++ and libunwind are DLLs: the tests find them through PATH.
+          foreach ($dir in $tc.path) { Add-Content $env:GITHUB_PATH $dir }
+      - name: Configure
+        shell: pwsh
+        run: |
+          $tc = Get-Content toolchain.json | ConvertFrom-Json
+          & $tc.cmake -S . -B build -G Ninja "-DCMAKE_MAKE_PROGRAM=$($tc.ninja)" `
+            "-DCMAKE_C_COMPILER=$($tc.cc)" "-DCMAKE_CXX_COMPILER=$($tc.cxx)" `
+            -DCMAKE_BUILD_TYPE=Release -DMPO_WARNINGS_AS_ERRORS=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build
+        shell: pwsh
+        run: |
+          $tc = Get-Content toolchain.json | ConvertFrom-Json
+          & $tc.cmake --build build --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test
+        shell: pwsh
+        run: |
+          $tc = Get-Content toolchain.json | ConvertFrom-Json
+          & $tc.ctest --test-dir build --output-on-failure --timeout 300
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

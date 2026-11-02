@@ -34,6 +34,8 @@ constexpr mpo::hle::OverlayModuleInfo kInfo{
 
 const mpo::hle::OverlayModuleInfo *mpo_overlay_info() { return &kInfo; }
 
+int mpo_overlay_opt_level() { return @MPO_OVERLAY_LEVEL@; }
+
 void mpo_register_overlay(psprecomp::Runtime &runtime) {
     psprecomp::register_@MPO_OVERLAY_PREFIX@_functions(runtime);
 }
