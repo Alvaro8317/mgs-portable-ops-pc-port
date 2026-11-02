@@ -1523,5 +1523,12 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - Versión EU (`ULES-00645`) y otras regiones.
 - Ad hoc (compatible con el servidor de PPSSPP) y online (SaveMGO).
 - Teclado y mouse, y cámara con el stick derecho.
+  - **La cámara del juego se mueve con la cruceta** (el usuario, en Windows, el 2026-11-01: con las
+    flechas del teclado y con la cruceta del mando) [V por el usuario]. Así que el nivel 1 de la
+    cámara con mouse (`docs/sessions/F21.md`, "Ideas para F23+") es solo del frontend: el
+    movimiento horizontal del mouse aprieta ← o → mientras pasa de un umbral. Tiene que activarse
+    solo con el mouse capturado (modo relativo de SDL), porque los menús también se mueven con la
+    cruceta, y soltarse al perder el foco. La captura no puede depender de Esc, que es Start. Las
+    grabaciones no cambian, porque guardan las muestras de `sceCtrl`.
 - MPO+ (`ULUS-10290`).
 - macOS (MoltenVK).

@@ -437,6 +437,15 @@ class Setup:
     iso = self.state.get('iso')
     if not iso or not pathlib.Path(iso).is_file():
       raise SetupError(f'the ISO {iso} is gone: run `setup.py install --iso <new place>`')
+    # The folder must exist from the start: mpo_boot rescans it when a stage
+    # has no corpus, so libraries that `stages` installs later are picked up.
+    self.overlays.mkdir(parents=True, exist_ok=True)
+    kept, _ = self.stage_corpora(_load_script('build_overlays'), _load_script('generate'))
+    ready = sum(1 for s in kept if (self.overlays / self._library_name(s)).is_file())
+    if ready < len(kept):
+      self._note(f'play: {ready} of {len(kept)} stages compiled; the rest run on the interpreter '
+                 '(slower, FPS drops in heavy scenes). Compile them, also while playing, with: '
+                 f'setup.py stages --data "{self.data}" --low-priority')
     command = [self.mpo_boot, '--elf', self.game / 'elf' / 'mgp_main.elf', '--iso', iso,
                '--window', '1', '--overlays', self.overlays,
                '--renderer', os.environ.get('MPO_RENDERER', 'vulkan')]
