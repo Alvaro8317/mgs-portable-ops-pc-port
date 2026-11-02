@@ -1492,6 +1492,15 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   - **La CI de release**: que publique solo el código, el launcher y lo que no es del juego. Un
     test que falle si un artefacto trae algo de `game/`, `analysis/` o `generated/`.
   - Que `setup.py play` decida `--unimplemented` para la release (ver el documento, §5).
+  - **Compilar las etapas en dos niveles** (acordado con el usuario el 2026-11-01), para que todo
+    el juego esté compilado en ~30 min y no en horas:
+    - primero las 92 a `-O0` (1,5 s por unidad de misión, contra 20,8 s a `-O2`, F21);
+    - después, a `-O2` en segundo plano, reemplazando a las de `-O0`.
+
+    Hay que medir antes cuánto corre una etapa a `-O0` frente al intérprete y a `-O2`, con la
+    repetición de `tramo3`. El runtime tiene que preferir la librería optimizada cuando las dos
+    describen el mismo PRX: hoy `OverlayManager` toma la primera que coincide. Lo mismo vale para
+    la clave de `setup.py stages`, que tiene que incluir el nivel.
 - **Criterios de hecho**: en una máquina Windows y en una Linux sin herramientas de desarrollo, el
   launcher lleva del ISO al juego sin pasos manuales.
 
@@ -1516,6 +1525,13 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 
 ## F23+ — Mejoras (se planifican cuando M6 esté cerrado)
 
+- **El emisor por funciones, con deduplicación** (la opción (b) de F21; acordado con el usuario el
+  2026-11-01 como fase propia después de la 0.1). Las 92 etapas son casi el mismo programa: de
+  54,2 MB de `.text`, las funciones distintas suman 2,0 MB (`docs/analysis/stages.md`). Un emisor
+  que genere cada función una sola vez, con las direcciones relocalizadas como parámetro,
+  compilaría una fracción de lo de hoy (gow-psp-recomp, que emite por funciones, compila en unos
+  4 min). Es una reescritura grande de PSPRecomp (MIT, para upstream) y cambia el difftest del
+  emisor.
 - Resolución interna configurable, MSAA y filtrado anisotrópico.
 - Widescreen y ultrawide con el HUD ajustado (CWCheat `0x201E9728` como pista).
 - 60+ fps con **interpolación** (la lógica sigue a 20 o 30 fps).
