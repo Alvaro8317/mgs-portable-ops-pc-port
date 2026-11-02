@@ -6,6 +6,7 @@
 
 add_subdirectory(host)
 add_subdirectory(tools)
+add_subdirectory(launcher)
 
 if(PSPRECOMP_BUILD_PROFILE_TESTS)
     add_subdirectory(tests)

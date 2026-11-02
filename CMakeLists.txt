@@ -42,6 +42,22 @@ if(MPO_SANITIZERS)
     add_link_options(-fsanitize=${mpo_sanitizer_list})
 endif()
 
+# libc++ (llvm-mingw, F22b) does not pull <algorithm> in through the other
+# standard headers the way libstdc++ and MSVC's STL do, and the framework's
+# allegrex_context.hpp uses std::max without including it. Fixing the header
+# would recompile every generated corpus of an existing build (~24 h of CPU
+# for the 92 stages, F21), so until the fork carries the include it is forced
+# here, only for libc++: other builds see no change at all.
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("#include <version>
+#ifndef _LIBCPP_VERSION
+#error not libc++
+#endif
+int main() { return 0; }" MPO_STDLIB_IS_LIBCXX)
+if(MPO_STDLIB_IS_LIBCXX AND NOT MSVC)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include algorithm>")
+endif()
+
 # Warning flags for project targets. The framework keeps its own flags.
 function(mpo_target_warnings target)
     if(MSVC)

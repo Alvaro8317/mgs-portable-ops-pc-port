@@ -119,6 +119,20 @@ class StageLibraryTest(unittest.TestCase):
       json.dumps(status)
 
 
+class LockTest(unittest.TestCase):
+
+  def test_one_install_at_a_time(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      first = setup.Setup(argparse.Namespace(data=tmp))
+      second = setup.Setup(argparse.Namespace(data=tmp))
+      with first.lock():
+        with self.assertRaises(setup.SetupError):
+          with second.lock():
+            pass
+      with second.lock():
+        pass
+
+
 class ToolchainTest(unittest.TestCase):
 
   def test_platform(self):

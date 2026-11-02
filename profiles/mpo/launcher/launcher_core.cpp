@@ -1,0 +1,455 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The launcher's logic without a window (F22b); see launcher_core.hpp.
+
+#include "launcher_core.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <charconv>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+
+namespace mpo::launcher {
+
+namespace {
+
+class JsonParser {
+public:
+    explicit JsonParser(std::string_view text) : text_(text) {}
+
+    std::optional<JsonValue> parse_document() {
+        std::optional<JsonValue> value = parse_value(0);
+        skip_space();
+        if (!value || pos_ != text_.size()) return std::nullopt;
+        return value;
+    }
+
+private:
+    static constexpr int kMaxDepth = 32;
+
+    void skip_space() {
+        while (pos_ < text_.size() && (text_[pos_] == ' ' || text_[pos_] == '\t' ||
+                                       text_[pos_] == '\n' || text_[pos_] == '\r'))
+            ++pos_;
+    }
+
+    bool literal(std::string_view word) {
+        if (text_.substr(pos_, word.size()) != word) return false;
+        pos_ += word.size();
+        return true;
+    }
+
+    static void append_utf8(std::string &out, std::uint32_t cp) {
+        if (cp < 0x80u) {
+            out += static_cast<char>(cp);
+        } else if (cp < 0x800u) {
+            out += static_cast<char>(0xC0u | (cp >> 6u));
+            out += static_cast<char>(0x80u | (cp & 0x3Fu));
+        } else if (cp < 0x10000u) {
+            out += static_cast<char>(0xE0u | (cp >> 12u));
+            out += static_cast<char>(0x80u | ((cp >> 6u) & 0x3Fu));
+            out += static_cast<char>(0x80u | (cp & 0x3Fu));
+        } else {
+            out += static_cast<char>(0xF0u | (cp >> 18u));
+            out += static_cast<char>(0x80u | ((cp >> 12u) & 0x3Fu));
+            out += static_cast<char>(0x80u | ((cp >> 6u) & 0x3Fu));
+            out += static_cast<char>(0x80u | (cp & 0x3Fu));
+        }
+    }
+
+    bool hex4(std::uint32_t &out) {
+        if (pos_ + 4u > text_.size()) return false;
+        out = 0;
+        for (int i = 0; i < 4; ++i) {
+            const char c = text_[pos_++];
+            out <<= 4u;
+            if (c >= '0' && c <= '9') {
+                out |= static_cast<std::uint32_t>(c - '0');
+            } else if (c >= 'a' && c <= 'f') {
+                out |= static_cast<std::uint32_t>(c - 'a' + 10);
+            } else if (c >= 'A' && c <= 'F') {
+                out |= static_cast<std::uint32_t>(c - 'A' + 10);
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::optional<std::string> parse_string() {
+        if (pos_ >= text_.size() || text_[pos_] != '"') return std::nullopt;
+        ++pos_;
+        std::string out;
+        while (pos_ < text_.size()) {
+            const char c = text_[pos_++];
+            if (c == '"') return out;
+            if (static_cast<unsigned char>(c) < 0x20u) return std::nullopt;
+            if (c != '\\') {
+                out += c;
+                continue;
+            }
+            if (pos_ >= text_.size()) return std::nullopt;
+            const char e = text_[pos_++];
+            switch (e) {
+            case '"':
+                out += '"';
+                break;
+            case '\\':
+                out += '\\';
+                break;
+            case '/':
+                out += '/';
+                break;
+            case 'b':
+                out += '\b';
+                break;
+            case 'f':
+                out += '\f';
+                break;
+            case 'n':
+                out += '\n';
+                break;
+            case 'r':
+                out += '\r';
+                break;
+            case 't':
+                out += '\t';
+                break;
+            case 'u': {
+                std::uint32_t cp = 0;
+                if (!hex4(cp)) return std::nullopt;
+                if (cp >= 0xD800u && cp < 0xDC00u) {
+                    std::uint32_t low = 0;
+                    if (!literal("\\u") || !hex4(low) || low < 0xDC00u || low >= 0xE000u)
+                        return std::nullopt;
+                    cp = 0x10000u + ((cp - 0xD800u) << 10u) + (low - 0xDC00u);
+                } else if (cp >= 0xDC00u && cp < 0xE000u) {
+                    return std::nullopt;
+                }
+                append_utf8(out, cp);
+                break;
+            }
+            default:
+                return std::nullopt;
+            }
+        }
+        return std::nullopt;
+    }
+
+    std::optional<JsonValue> parse_number() {
+        const std::size_t start = pos_;
+        if (pos_ < text_.size() && text_[pos_] == '-') ++pos_;
+        while (pos_ < text_.size() &&
+               (std::isdigit(static_cast<unsigned char>(text_[pos_])) != 0 || text_[pos_] == '.' ||
+                text_[pos_] == 'e' || text_[pos_] == 'E' || text_[pos_] == '+' ||
+                text_[pos_] == '-'))
+            ++pos_;
+        JsonValue value;
+        value.kind = JsonValue::Kind::kNumber;
+        const char *first = text_.data() + start;
+        const char *last = text_.data() + pos_;
+        const auto [end, ec] = std::from_chars(first, last, value.number);
+        if (ec != std::errc() || end != last || first == last) return std::nullopt;
+        return value;
+    }
+
+    std::optional<JsonValue> parse_value(int depth) {
+        if (depth > kMaxDepth) return std::nullopt;
+        skip_space();
+        if (pos_ >= text_.size()) return std::nullopt;
+        JsonValue value;
+        const char c = text_[pos_];
+        if (c == '{') {
+            ++pos_;
+            value.kind = JsonValue::Kind::kObject;
+            skip_space();
+            if (pos_ < text_.size() && text_[pos_] == '}') {
+                ++pos_;
+                return value;
+            }
+            while (true) {
+                skip_space();
+                std::optional<std::string> key = parse_string();
+                skip_space();
+                if (!key || pos_ >= text_.size() || text_[pos_] != ':') return std::nullopt;
+                ++pos_;
+                std::optional<JsonValue> item = parse_value(depth + 1);
+                if (!item) return std::nullopt;
+                value.keys.push_back(std::move(*key));
+                value.values.push_back(std::move(*item));
+                skip_space();
+                if (pos_ < text_.size() && text_[pos_] == ',') {
+                    ++pos_;
+                    continue;
+                }
+                if (pos_ < text_.size() && text_[pos_] == '}') {
+                    ++pos_;
+                    return value;
+                }
+                return std::nullopt;
+            }
+        }
+        if (c == '[') {
+            ++pos_;
+            value.kind = JsonValue::Kind::kArray;
+            skip_space();
+            if (pos_ < text_.size() && text_[pos_] == ']') {
+                ++pos_;
+                return value;
+            }
+            while (true) {
+                std::optional<JsonValue> item = parse_value(depth + 1);
+                if (!item) return std::nullopt;
+                value.items.push_back(std::move(*item));
+                skip_space();
+                if (pos_ < text_.size() && text_[pos_] == ',') {
+                    ++pos_;
+                    continue;
+                }
+                if (pos_ < text_.size() && text_[pos_] == ']') {
+                    ++pos_;
+                    return value;
+                }
+                return std::nullopt;
+            }
+        }
+        if (c == '"') {
+            std::optional<std::string> text = parse_string();
+            if (!text) return std::nullopt;
+            value.kind = JsonValue::Kind::kString;
+            value.string = std::move(*text);
+            return value;
+        }
+        if (literal("true")) {
+            value.kind = JsonValue::Kind::kBool;
+            value.boolean = true;
+            return value;
+        }
+        if (literal("false")) {
+            value.kind = JsonValue::Kind::kBool;
+            return value;
+        }
+        if (literal("null")) return value;
+        return parse_number();
+    }
+
+    std::string_view text_;
+    std::size_t pos_{};
+};
+
+std::string lower(std::string_view text) {
+    std::string out(text);
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return out;
+}
+
+int int_field(const JsonValue &object, std::string_view key, int fallback) {
+    const JsonValue *value = object.find(key);
+    if (value == nullptr || value->kind != JsonValue::Kind::kNumber) return fallback;
+    if (!std::isfinite(value->number) || value->number < -1.0 || value->number > 1e9)
+        return fallback;
+    return static_cast<int>(value->number);
+}
+
+bool bool_field(const JsonValue &object, std::string_view key) {
+    const JsonValue *value = object.find(key);
+    return value != nullptr && value->kind == JsonValue::Kind::kBool && value->boolean;
+}
+
+std::string string_field(const JsonValue &object, std::string_view key) {
+    const JsonValue *value = object.find(key);
+    return value != nullptr && value->kind == JsonValue::Kind::kString ? value->string
+                                                                       : std::string();
+}
+
+} // namespace
+
+const JsonValue *JsonValue::find(std::string_view key) const {
+    for (std::size_t i = 0; i < keys.size(); ++i)
+        if (keys[i] == key) return &values[i];
+    return nullptr;
+}
+
+std::optional<JsonValue> parse_json(std::string_view text) {
+    return JsonParser(text).parse_document();
+}
+
+std::optional<InstallStatus> parse_status(std::string_view json) {
+    std::optional<JsonValue> root = parse_json(json);
+    if (!root || root->kind != JsonValue::Kind::kObject) return std::nullopt;
+    InstallStatus status;
+    status.data = string_field(*root, "data");
+    status.iso = string_field(*root, "iso");
+    status.disc_installed = bool_field(*root, "disc_installed");
+    status.playable = bool_field(*root, "playable");
+    status.stages_total = int_field(*root, "stages_total", -1);
+    status.stages_installed = int_field(*root, "stages_installed", 0);
+    status.stages_optimized = int_field(*root, "stages_optimized", 0);
+    status.stages_quick_only = int_field(*root, "stages_quick_only", 0);
+    return status;
+}
+
+std::optional<Progress> parse_progress_line(std::string_view line) {
+    constexpr std::string_view kPrefix = "setup: ";
+    if (line.substr(0, kPrefix.size()) != kPrefix) return std::nullopt;
+    line.remove_prefix(kPrefix.size());
+    const std::size_t colon = line.find(": ");
+    if (colon == std::string_view::npos || colon == 0u) return std::nullopt;
+    const std::string_view step = line.substr(0, colon);
+    if (step.find(' ') != std::string_view::npos) return std::nullopt;
+    Progress progress;
+    progress.step = std::string(step);
+    progress.message = std::string(line.substr(colon + 2u));
+    const std::string &message = progress.message;
+    for (std::size_t open = message.find('('); open != std::string::npos;
+         open = message.find('(', open + 1u)) {
+        int done = 0;
+        int total = 0;
+        const char *first = message.data() + open + 1u;
+        const char *last = message.data() + message.size();
+        const auto [slash, ec] = std::from_chars(first, last, done);
+        if (ec != std::errc() || slash == first || slash == last || *slash != '/') continue;
+        const auto [end, ec2] = std::from_chars(slash + 1, last, total);
+        if (ec2 != std::errc() || end == slash + 1 || total <= 0 || done < 0 || done > total)
+            continue;
+        progress.done = done;
+        progress.total = total;
+        break;
+    }
+    return progress;
+}
+
+std::vector<std::string> LineBuffer::append(std::string_view bytes) {
+    std::vector<std::string> completed;
+    for (const char c : bytes) {
+        if (c == '\n') {
+            if (!partial_.empty() && partial_.back() == '\r') partial_.pop_back();
+            completed.push_back(partial_);
+            push(std::move(partial_));
+            partial_.clear();
+        } else if (partial_.size() < 4096u) {
+            partial_ += c;
+        }
+    }
+    return completed;
+}
+
+std::vector<std::string> LineBuffer::finish() {
+    if (partial_.empty()) return {};
+    std::vector<std::string> completed{partial_};
+    push(std::move(partial_));
+    partial_.clear();
+    return completed;
+}
+
+void LineBuffer::clear() {
+    partial_.clear();
+    lines_.clear();
+}
+
+void LineBuffer::push(std::string line) {
+    lines_.push_back(std::move(line));
+    if (lines_.size() > capacity_) lines_.erase(lines_.begin());
+}
+
+std::optional<LauncherPaths> find_paths(const std::filesystem::path &base,
+                                        const std::filesystem::path &source,
+                                        const std::filesystem::path &python,
+                                        const std::filesystem::path &compiled_source,
+                                        bool windows) {
+    const std::filesystem::path script =
+        std::filesystem::path("profiles") / "mpo" / "scripts" / "setup.py";
+    std::vector<std::filesystem::path> roots;
+    if (!source.empty()) {
+        roots.push_back(source);
+    } else {
+        roots.push_back(base / "source");
+        roots.push_back(base.parent_path() / "share" / "mpo-pc-port" / "source");
+        if (!compiled_source.empty()) roots.push_back(compiled_source);
+    }
+    std::error_code ec;
+    LauncherPaths paths;
+    for (const std::filesystem::path &root : roots) {
+        if (std::filesystem::is_regular_file(root / script, ec)) {
+            paths.setup_script = root / script;
+            break;
+        }
+    }
+    if (paths.setup_script.empty()) return std::nullopt;
+    if (!python.empty()) {
+        paths.python = python;
+    } else if (windows && std::filesystem::is_regular_file(base / "python" / "python.exe", ec)) {
+        paths.python = base / "python" / "python.exe";
+    } else {
+        paths.python = windows ? "python" : "python3";
+    }
+    return paths;
+}
+
+std::vector<std::string> setup_command(const LauncherPaths &paths, std::string_view subcommand,
+                                       const std::filesystem::path &data,
+                                       std::span<const std::string> args) {
+    std::vector<std::string> command{paths.python.string(), "-I", paths.setup_script.string(),
+                                     std::string(subcommand)};
+    if (!data.empty()) {
+        command.emplace_back("--data");
+        command.push_back(data.string());
+    }
+    command.insert(command.end(), args.begin(), args.end());
+    return command;
+}
+
+std::vector<DirEntry> list_directory(const std::filesystem::path &folder,
+                                     std::span<const std::string_view> extensions,
+                                     std::error_code &ec) {
+    std::vector<DirEntry> folders;
+    std::vector<DirEntry> files;
+    std::filesystem::directory_iterator it(folder, ec);
+    if (ec) return {};
+    for (const std::filesystem::directory_entry &entry : it) {
+        // u8string: names in any language survive on Windows.
+        const std::u8string name8 = entry.path().filename().u8string();
+        std::string name(name8.begin(), name8.end());
+        if (name.empty() || name[0] == '.') continue;
+        std::error_code entry_ec;
+        if (entry.is_directory(entry_ec)) {
+            folders.push_back({std::move(name), true});
+            continue;
+        }
+        if (!entry.is_regular_file(entry_ec)) continue;
+        const std::u8string ext8 = entry.path().extension().u8string();
+        const std::string ext =
+            lower(std::string_view(reinterpret_cast<const char *>(ext8.data()), ext8.size()));
+        if (std::find(extensions.begin(), extensions.end(), ext) != extensions.end())
+            files.push_back({std::move(name), false});
+    }
+    const auto by_name = [](const DirEntry &a, const DirEntry &b) {
+        const std::string la = lower(a.name);
+        const std::string lb = lower(b.name);
+        return la != lb ? la < lb : a.name < b.name;
+    };
+    std::sort(folders.begin(), folders.end(), by_name);
+    std::sort(files.begin(), files.end(), by_name);
+    folders.insert(folders.end(), std::make_move_iterator(files.begin()),
+                   std::make_move_iterator(files.end()));
+    return folders;
+}
+
+std::string format_duration(double seconds) {
+    if (!std::isfinite(seconds) || seconds < 0.0) seconds = 0.0;
+    const long long total = static_cast<long long>(seconds + 0.5);
+    char text[64];
+    if (total >= 3600) {
+        std::snprintf(text, sizeof text, "%lld h %02lld min", total / 3600, (total / 60) % 60);
+    } else if (total >= 60) {
+        std::snprintf(text, sizeof text, "%lld min %02lld s", total / 60, total % 60);
+    } else {
+        std::snprintf(text, sizeof text, "%lld s", total);
+    }
+    return text;
+}
+
+} // namespace mpo::launcher

@@ -31,8 +31,13 @@ what is missing.
            each one replacing its quick library. With --low-priority it
            yields the CPU to the game. The objects of an installed stage are
            deleted (the C++ stays).
+           <data>/stop-stages makes it stop after the stage it is on (the
+           launcher's Stop button).
   play     runs the game: mpo_boot in a window with <data>/overlays, the
            firmware fonts and the default save folder.
+  import-save <dir> / export-save <dir>
+           `mpo --import-save/--export-save` (F18c) with the installed disc:
+           a PSP or PPSSPP save into the port's save folder, and back.
   status   what is done, as text or --json (for the launcher).
 
 Usage:
@@ -44,6 +49,8 @@ Usage:
   python3 -I profiles/mpo/scripts/setup.py stages [--data <dir>] [--jobs N] [--low-priority]
       [--only st02,st03t1] [--keep-objects] [--level both|quick|optimized]
   python3 -I profiles/mpo/scripts/setup.py play [--data <dir>] [-- <mpo_boot options>...]
+  python3 -I profiles/mpo/scripts/setup.py import-save|export-save <dir> [--data <dir>]
+      [--overwrite]
   python3 -I profiles/mpo/scripts/setup.py status [--data <dir>] [--json]
 
 <data> defaults to %LOCALAPPDATA%\\mpo-pc-port\\install on Windows and
@@ -53,6 +60,7 @@ decrypted game, the generated C++ and the build: nothing in it may be shared.
 
 import argparse
 import concurrent.futures
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -219,6 +227,7 @@ class Setup:
     self.overlays = self.data / 'overlays'
     self.logs = self.data / 'logs'
     self.toolchain_dir = self.data / 'toolchain'
+    self.stop_file = self.data / 'stop-stages'
     self.state_path = self.data / 'state.json'
     self.state = self._load_state()
     self._use_toolchain_path()
@@ -250,6 +259,30 @@ class Setup:
     dirs = [d for d in toolchain.get('path', []) if d not in os.environ.get('PATH', '')]
     if dirs:
       os.environ['PATH'] = os.pathsep.join(dirs + [os.environ.get('PATH', '')])
+
+  @contextlib.contextmanager
+  def lock(self):
+    """One install or stage compile per <data> at a time.
+
+    An OS file lock, so it goes away with the process however it ends.
+    """
+    self.data.mkdir(parents=True, exist_ok=True)
+    handle = open(self.data / 'setup.lock', 'a+b')
+    try:
+      try:
+        if os.name == 'nt':
+          import msvcrt  # pylint: disable=import-outside-toplevel
+          handle.seek(0)
+          msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+          import fcntl  # pylint: disable=import-outside-toplevel
+          fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+      except OSError as error:
+        raise SetupError(f'another install or stage compile is running in {self.data}; wait for '
+                         'it to end (or end it) and try again') from error
+      yield
+    finally:
+      handle.close()
 
   # -- helpers ---------------------------------------------------------------
 
@@ -307,7 +340,7 @@ class Setup:
     toolchain = self.state.get('toolchain', {})
     command = [self.cmake, '-S', _ROOT, '-B', self.build, '-G', args.generator,
                '-DCMAKE_BUILD_TYPE=Release', '-DPSPRECOMP_BUILD_TESTS=OFF',
-               '-DPSPRECOMP_BUILD_PROFILE_TESTS=OFF']
+               '-DPSPRECOMP_BUILD_PROFILE_TESTS=OFF', '-DMPO_BUILD_LAUNCHER=OFF']
     cc = args.cc or toolchain.get('cc')
     cxx = args.cxx or toolchain.get('cxx')
     if cc:
@@ -606,6 +639,7 @@ class Setup:
     records = self.state.setdefault('stages', {})
     quick_records = self.state.setdefault('stages_quick', {})
     self.overlays.mkdir(parents=True, exist_ok=True)
+    self.stop_file.unlink(missing_ok=True)
     for stage in order:
       if self._stage_ready(stage, records.get(stage), optimized_key):
         self._drop_quick(stage)
@@ -623,6 +657,11 @@ class Setup:
         continue
       self._set_overlay_level(level)
       for index, stage in enumerate(pending, 1):
+        if self.stop_file.exists():
+          self._note('stages: stopped (asked to); run it again to go on')
+          self.stop_file.unlink(missing_ok=True)
+          self._save_state()
+          return
         started = time.monotonic()
         self._note(f'stages: compiling {stage} ({index}/{len(pending)}, {pass_name})')
         self._cmake_build([f'mpo_overlay_{stage}'], f'stage_{stage}',
@@ -688,6 +727,21 @@ class Setup:
     command += extra
     print('setup: ' + ' '.join(str(c) for c in command), flush=True)
     return subprocess.run([str(c) for c in command], check=False).returncode
+
+  # -- saves -----------------------------------------------------------------
+
+  def transfer_save(self, command, folder):
+    """mpo --import-save/--export-save with the installed disc (F18c)."""
+    if not self.mpo.is_file() or not (self.game / 'install.toml').is_file():
+      raise SetupError('the game is not installed yet: run `setup.py install` first')
+    argv = [self.mpo, f'--{command}', pathlib.Path(folder).resolve(), '--game-dir', self.game]
+    if self.args.overwrite:
+      argv.append('--overwrite')
+    print('setup: ' + ' '.join(str(c) for c in argv), flush=True)
+    result = subprocess.run([str(c) for c in argv], check=False)
+    if result.returncode != 0:
+      raise SetupError(f'{command} failed (exit {result.returncode}): see the lines above')
+    self._note(f'{command}: done')
 
   # -- status ----------------------------------------------------------------
 
@@ -785,6 +839,13 @@ def parse_args(argv):
   play.add_argument('extra', nargs=argparse.REMAINDER,
                     help='options for mpo_boot, after --')
 
+  for name, text in (('import-save', 'bring a PSP or PPSSPP save into the port'),
+                     ('export-save', 'encrypt the port\'s saves for a PSP or PPSSPP')):
+    transfer = sub.add_parser(name, help=text)
+    common(transfer)
+    transfer.add_argument('folder')
+    transfer.add_argument('--overwrite', action='store_true')
+
   status = sub.add_parser('status', help='what is done')
   common(status)
   status.add_argument('--json', action='store_true')
@@ -800,9 +861,13 @@ def main(argv):
       if args.json:
         print(json.dumps(toolchain, indent=2))
     elif args.command == 'install':
-      setup.install()
+      with setup.lock():
+        setup.install()
     elif args.command == 'stages':
-      setup.stages()
+      with setup.lock():
+        setup.stages()
+    elif args.command in ('import-save', 'export-save'):
+      setup.transfer_save(args.command, args.folder)
     elif args.command == 'play':
       extra = args.extra[1:] if args.extra[:1] == ['--'] else args.extra
       return setup.play(extra)
