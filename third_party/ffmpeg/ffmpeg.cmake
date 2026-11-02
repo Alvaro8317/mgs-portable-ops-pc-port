@@ -87,8 +87,9 @@ if(mpo_ffmpeg_mode STREQUAL "prebuilt")
     target_include_directories(mpo_ffmpeg SYSTEM INTERFACE "${MPO_FFMPEG_ROOT}/include")
     target_link_libraries(mpo_ffmpeg INTERFACE ${mpo_ffmpeg_libs})
     if(WIN32)
-        # libavutil's random seed (BCryptGenRandom).
-        target_link_libraries(mpo_ffmpeg INTERFACE bcrypt)
+        # What the .pc files of a MinGW build list: libavutil's random seed
+        # (BCryptGenRandom), and user32 and ole32.
+        target_link_libraries(mpo_ffmpeg INTERFACE bcrypt user32 ole32)
     else()
         find_package(Threads REQUIRED)
         target_link_libraries(mpo_ffmpeg INTERFACE Threads::Threads m)
@@ -223,7 +224,7 @@ file(MAKE_DIRECTORY "${mpo_ffmpeg_install}/include")
 target_include_directories(mpo_ffmpeg SYSTEM INTERFACE "${mpo_ffmpeg_install}/include")
 target_link_libraries(mpo_ffmpeg INTERFACE ${mpo_ffmpeg_libs} Threads::Threads)
 if(WIN32)
-    target_link_libraries(mpo_ffmpeg INTERFACE bcrypt)
+    target_link_libraries(mpo_ffmpeg INTERFACE bcrypt user32 ole32)
 else()
     target_link_libraries(mpo_ffmpeg INTERFACE m)
     # FFmpeg's configure adds -latomic where the toolchain has it.

@@ -44,10 +44,10 @@ modules:
       # /app/bin, launcher_core.hpp), copied before anything is built.
       - mkdir -p /app/share/mpo-pc-port/source
       - cp -a --no-preserve=ownership . /app/share/mpo-pc-port/source/
-      - cmake -S . -B /tmp/launcher-build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - cmake -S . -B _launcher-build -G Ninja -DCMAKE_BUILD_TYPE=Release
         -DPSPRECOMP_BUILD_TESTS=OFF -DPSPRECOMP_BUILD_PROFILE_TESTS=OFF -DMPO_FFMPEG=off
         -DMPO_ENABLE_VULKAN=OFF
-      - cmake --build /tmp/launcher-build --target mpo_launcher
-      - install -Dm755 /tmp/launcher-build/profiles/mpo/launcher/mpo_launcher /app/bin/mpo_launcher
+      - cmake --build _launcher-build --target mpo_launcher
+      - install -Dm755 _launcher-build/profiles/mpo/launcher/mpo_launcher /app/bin/mpo_launcher
       - install -Dm644 packaging/flatpak/io.github.alvaro8317.MpoPcPort.desktop
         /app/share/applications/io.github.alvaro8317.MpoPcPort.desktop
