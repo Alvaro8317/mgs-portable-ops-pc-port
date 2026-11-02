@@ -43,6 +43,17 @@ python3 -I profiles/mpo/scripts/setup.py status --json
 - Las fuentes del firmware (`ltn0.pgf`, `jpn0.pgf`) se buscan en `--fonts`, en `flash0/font` junto
   al ISO y en una instalación de PPSSPP, y se copian a `<data>/flash0/font`. Sin ellas, el juego
   arranca, pero no se ve el texto "Checking Memory Stick".
+- **F22b**:
+  - en Windows, `install` baja primero el toolchain portátil (`setup.py toolchain`: llvm-mingw,
+    CMake y Ninja, fijados en `config/toolchain.toml`);
+  - `stages` compila primero todas las etapas a `-O0` y después optimizadas
+    (`--level both|quick|optimized`). El juego toma la más optimizada que haya;
+  - `import-save` y `export-save` pasan saves de una PSP o de PPSSPP;
+  - el **launcher** (`launcher/`, `mpo_launcher`) hace todo esto desde una ventana, también con el
+    mando.
+
+  Los paquetes (el ZIP de Windows, el tarball y el Flatpak) los arma `packaging/make_release.py`
+  (ver `docs/analysis/distribution.md`).
 
 ## Instalar la copia del usuario
 

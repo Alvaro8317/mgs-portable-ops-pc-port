@@ -29,6 +29,12 @@
     `find_path`/`find_library` (vcpkg en Windows: `ffmpeg[avcodec,swscale]`). Un FFmpeg del sistema
     puede venir compilado con `--enable-gpl`; sigue siendo compatible con la GPLv3 del proyecto,
     pero las distribuciones se hacen con `bundled`;
+  - `prebuilt` (F22b; `auto` lo elige si se da `MPO_FFMPEG_ROOT`): un FFmpeg ya compilado con estos
+    mismos flags (`include/` y `lib/`), el que trae la release de Windows. Lo compila la CI de
+    release (`packaging/ffmpeg`) de forma cruzada con el llvm-mingw fijado en
+    `profiles/mpo/config/toolchain.toml`, y la release lo lleva junto con `ffmpeg-7.1.5.tar.xz` y un
+    `BUILD.txt` con la línea de `configure`. En Windows (nativo o cruzado) se usa
+    `--enable-w32threads --disable-pthreads` en vez de `--enable-pthreads`, y se enlaza `bcrypt`;
   - `off`: `mpo_video` se compila sin decoder de vídeo (el audio y el demuxer siguen) y
     `mpo_video_decode_test` se marca como omitido (código 77).
 - Sin red: `-DMPO_FFMPEG_SOURCE_DIR=<árbol 7.1.5 descomprimido>` o

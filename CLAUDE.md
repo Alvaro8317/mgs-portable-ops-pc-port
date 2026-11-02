@@ -116,7 +116,7 @@ híbrido hacia una decompilación parcial).
 |---|---|---|
 | Lenguaje del runtime | C++20 | Es lo que usa PSPRecomp. El C generado también vale. |
 | Build | CMake ≥ 3.22 + Ninja + ccache | Es el estándar de la escena. Los builds generados son pesados. |
-| Compiladores | Clang en Linux; MSVC 2022 o clang-cl en Windows | Hay que probar los dos, porque el código generado choca con los límites de cada compilador. |
+| Compiladores | Clang en Linux; MSVC 2022 o clang-cl en Windows; **llvm-mingw** en el Windows del jugador (F22b) | Hay que probar los dos, porque el código generado choca con los límites de cada compilador. El jugador compila con el llvm-mingw portátil que baja `setup.py toolchain` (`config/toolchain.toml`); la CI lo prueba en `windows-llvm-mingw`. |
 | Ventana, input y audio | SDL3 | Es multiplataforma y funciona con gamepads de Xbox y PlayStation. |
 | GPU | **Vulkan directo** (1.2 como mínimo, aprovechando 1.3 si está), con `volk` (loader) y VMA (memoria) | Decidido el 2026-10-24. Es un solo backend para Windows y Linux, con control total del estado que exige el GE (operaciones lógicas, clamp de profundidad, blending). Las referencias son PPSSPP (Vulkan) y Yakumo. Los shaders son un ubershader GLSL precompilado a SPIR-V (versionado) con specialization constants, sin glslang en el build (F14a). El blending, el dither, las operaciones lógicas y las máscaras van en el fragment shader leyendo el destino (input attachment con orden de rasterización o con barreras, o una copia del target); el blending fijo solo donde es exacto (F15a). Los triángulos y rectángulos texturizados se interpolan como softgpu en el fragment shader (aristas enteras, mismas operaciones `precise`), y sale idéntico a softgpu en el juego (F15b). |
 | Renderer de referencia | GE por software (portado del softgpu de PPSSPP) | Sirve para llegar a la pantalla de título (M2) y como "verdad" para comparar frames contra el renderer Vulkan. |
@@ -409,6 +409,10 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
   `mpo_boot --capture` (`soft` y `vulkan`, mismo input), con el umbral de F15a (F15b).
 - **Tests sin el juego** (`ctest` sin datos): decoder, emisor, formatos y HLE puro. Son los únicos que
   corren en CI pública.
+- **Releases**: `packaging/make_release.py check` revisa cada archivo de una release, por la ruta
+  y por el contenido (`~PSP`, ELF de MIPS, ISO 9660, PBP, PSF), y `release.yml` no sube nada que
+  no lo pase. El código del release deja fuera `framework/psprecomp/profiles/`: el perfil de
+  ejemplo de upstream trae código generado de otro juego (F22b).
 - **CI**: matriz de Windows (MSVC) y Linux (Clang + GCC), con ASan y UBSan en Linux.
 - **Smoke test manual**: antes de cada release se sigue una lista corta de pasos. **Nunca contra la
   carpeta de saves real del usuario**, y se hashean los saves antes y después.
@@ -515,6 +519,18 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
       captura y F1 lo suelta (`[mouse_camera]` en `input.toml`).
 
     El mando sigue con el mapeo de PPSSPP. Reasignar teclas desde el juego queda para F23+.
+
+### Tomadas (2026-11-01, F22b)
+
+12. **El launcher es C++ con SDL3 y Dear ImGui** (decidido por el usuario): se maneja con el mando
+    (el modo juego de la Steam Deck) y reusa el SDL3. Solo maneja `setup.py`, que hace el trabajo
+    (`profiles/mpo/launcher`). Se descartó Tkinter con PyInstaller: no se maneja con el mando y
+    el Python embebible no lo trae.
+13. **FFmpeg para Windows va precompilado en la release**, compilado por la CI con el mismo
+    llvm-mingw y con su código al lado (LGPL). En Windows no hay un shell POSIX para su
+    `configure`. Se descartó un MSYS2 portátil.
+14. **`setup.py play` usa `--unimplemented stop`**, y el launcher muestra las últimas líneas
+    cuando el juego se detiene: un NID que falta nunca pasa en silencio (§5).
 
 ### Abiertas
 

@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 ✅ → F22b → F22c | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22, F22b y F22c desde el 2026-11-01 (ver su ficha). |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 ✅ → F22b ✅ → F22c | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22, F22b y F22c desde el 2026-11-01 (ver su ficha). |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -118,7 +118,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F21 | Partida completa y estabilidad | M6 | 🟨 hecha en parte (las 92 etapas compiladas y tramos con saves; el recorrido pasa a F21b) |
 | F21b | Recorrido completo (Linux y Windows) | M6 | ⬜ pendiente (en paralelo con F22) |
 | F22 | Distribución: compilar en la máquina del jugador | M6 | ✅ hecha (modelo decidido, `setup.py` de punta a punta en Linux; el resto se partió en F22b y F22c) |
-| F22b | Toolchain portátil, launcher y paquetes | M6 | ⬜ pendiente |
+| F22b | Toolchain portátil, launcher y paquetes | M6 | ✅ hecha (Windows con llvm-mingw en la CI, launcher, etapas en dos niveles y release revisada; la prueba en Windows y en la Steam Deck: pendiente del usuario) |
 | F22c | README, aviso legal e instalaciones limpias | M6 | ⬜ pendiente |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
@@ -1503,12 +1503,34 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     la clave de `setup.py stages`, que tiene que incluir el nivel.
 - **Criterios de hecho**: en una máquina Windows y en una Linux sin herramientas de desarrollo, el
   launcher lleva del ISO al juego sin pasos manuales.
+- **Notas (cierre de F22b)**: ver `docs/sessions/F22b.md` y `docs/analysis/distribution.md`.
+  - **Decidido**: el launcher en C++ con SDL3 y Dear ImGui (el usuario); FFmpeg para Windows
+    precompilado por la CI con el mismo llvm-mingw; `--unimplemented stop`, con el error a la
+    vista en el launcher.
+  - `setup.py toolchain` baja llvm-mingw, CMake y Ninja fijados en `config/toolchain.toml`. Con
+    ellos, el proyecto compila y pasa los tests en la CI (`windows-llvm-mingw`). libc++ necesitó
+    `-include algorithm` (el header del framework se arregla en el fork más adelante, para no
+    recompilar el corpus).
+  - **Las etapas en dos niveles**: `stages` las compila primero a `-O0` (**las 92 en ~40 min**,
+    contra 6 h 45 min a `-O2`) y después optimizadas.
+    `OverlayManager` instala la más optimizada y vuelve a mirar la carpeta en cada carga. Con
+    `-O0`, la repetición de `tramo1` coincide entera (511/511); **con el intérprete se separa en
+    `st03t1`**.
+  - `packaging/make_release.py` arma el ZIP de Windows y el tarball (sin el perfil de ejemplo del
+    framework, que trae código generado de otro juego) y los revisa por ruta y por contenido.
+    `release.yml` hace eso, el Flatpak y un borrador de release.
+  - **Pendiente del usuario**: el ZIP en su Windows, del ISO al juego, y el Flatpak en Linux o en
+    la Steam Deck.
 
 ### F22c — README, aviso legal e instalaciones limpias
 
 - **Objetivo**: que alguien sin conocimientos técnicos pueda instalarlo y jugarlo siguiendo solo
   el README. **Cierra M6**, junto con F21b.
-- **Requisitos**: F22b.
+- **Requisitos**: F22b, y la prueba del usuario del ZIP de Windows (ver
+  `docs/sessions/F22b.md`, "Para la próxima sesión").
+- **Notas (F22b)**: el ZIP de Windows ya trae un `README.txt` corto
+  (`packaging/windows/README.txt`). El README de la raíz puede apuntar a él y al launcher. El
+  launcher dice "Not affiliated with Konami"; el aviso legal completo va en el README.
 - **Tareas**:
   - `README.md` en la raíz, para el jugador: qué hace falta (el ISO de `ULUS-10202`, las fuentes
     del firmware, espacio en disco y tiempo de la primera compilación), el launcher, los
@@ -1550,3 +1572,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     capturar y F1 para soltar. Queda para F23+ la cámara libre de verdad, sobre el RE de la cámara.
 - MPO+ (`ULUS-10290`).
 - macOS (MoltenVK).
+- **El intérprete no es exacto en `st03t1`** (F22b): la repetición de `tramo1` con las etapas en el
+  intérprete se separa de la grabación en el flip 7740 (con las etapas compiladas, a `-O0` o a
+  `-O2`, coincide). Hay que bisecar contra el código recompilado (probablemente la VFPU del
+  intérprete).
+- **`#include <algorithm>` en `allegrex_context.hpp`** (el fork, F22b): cuando convenga
+  recompilar todo el corpus; después se quitan el `-include algorithm` del `CMakeLists.txt` raíz y
+  el `CXXFLAGS` del job `windows-llvm-mingw`.
