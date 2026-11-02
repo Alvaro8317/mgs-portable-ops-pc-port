@@ -170,6 +170,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test
         shell: pwsh
+        # psprecomp_runtime_contract_tests configures a project of its own,
+        # which does not get the libc++ workaround of the root CMakeLists.txt
+        # (allegrex_context.hpp needs <algorithm>; pending in the fork, F22b).
+        env:
+          CXXFLAGS: -include algorithm
         run: |
           $tc = Get-Content toolchain.json | ConvertFrom-Json
           & $tc.ctest --test-dir build --output-on-failure --timeout 300
