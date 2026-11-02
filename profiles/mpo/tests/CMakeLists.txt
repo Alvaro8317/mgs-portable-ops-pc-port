@@ -64,7 +64,8 @@ endif()
 # Python tools in profiles/mpo/tools: tests with synthetic data only.
 if(Python3_FOUND)
     foreach(mpo_tool_test IN ITEMS tools_test zstd_lite_test ge_usage_test ge_frame_diff_test
-                                   overlay_scripts_test capture_compare_test setup_script_test)
+                                   overlay_scripts_test capture_compare_test setup_script_test
+                                   release_check_test)
         add_test(NAME mpo_${mpo_tool_test}
                  COMMAND Python3::Interpreter -I ${CMAKE_CURRENT_SOURCE_DIR}/${mpo_tool_test}.py)
     endforeach()

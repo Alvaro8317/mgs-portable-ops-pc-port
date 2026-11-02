@@ -1,0 +1,179 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The release (F22b, docs/analysis/distribution.md): only the port's code, the
+# launcher and the tools to compile the game on the player's machine. Nothing
+# of the game is ever downloaded, built or uploaded here (CLAUDE.md §1), and
+# every archive goes through `make_release.py check` before it is uploaded.
+#
+# - windows-ffmpeg: FFmpeg cross-compiled with the pinned llvm-mingw (Linux
+#   host), the same flags as the player's Linux builds (packaging/ffmpeg).
+# - windows-launcher: mpo_launcher.exe with the portable toolchain the player
+#   gets (setup.py toolchain).
+# - package: the Windows ZIP and the source tarball, checked.
+# - flatpak: the Linux and Steam Deck bundle (org.freedesktop.Sdk runtime).
+# - publish: on a v* tag, a draft GitHub release with the checked archives.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-ffmpeg:
+    name: FFmpeg for Windows (llvm-mingw cross)
+    timeout-minutes: 45
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build nasm
+      - name: llvm-mingw (pinned)
+        run: |
+          root=$(python3 -I packaging/fetch_pinned.py release-linux-x86_64 llvm-mingw \
+                 --out "$RUNNER_TEMP/tools" --extract)
+          echo "LLVM_MINGW=$root" >> "$GITHUB_ENV"
+      - name: Build
+        run: |
+          cmake -S packaging/ffmpeg -B build-ffmpeg -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchains/llvm-mingw.cmake" \
+            -DMPO_LLVM_MINGW_ROOT="$LLVM_MINGW" -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-ffmpeg
+          cmake --install build-ffmpeg --prefix ffmpeg-prebuilt
+          cp build-ffmpeg/third_party/ffmpeg/src/ffmpeg-*.tar.xz .
+          ls -la ffmpeg-prebuilt ffmpeg-prebuilt/lib ffmpeg-*.tar.xz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-ffmpeg
+          path: |
+            ffmpeg-prebuilt
+            ffmpeg-*.tar.xz
+          if-no-files-found: error
+
+  windows-launcher:
+    name: Launcher for Windows (llvm-mingw)
+    timeout-minutes: 45
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Portable toolchain (setup.py toolchain)
+        shell: pwsh
+        run: |
+          python -I profiles/mpo/scripts/setup.py toolchain --data "$env:RUNNER_TEMP\mpo" --json > toolchain.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tc = Get-Content toolchain.json | ConvertFrom-Json
+          foreach ($dir in $tc.path) { Add-Content $env:GITHUB_PATH $dir }
+      - name: Build
+        shell: pwsh
+        run: |
+          $tc = Get-Content toolchain.json | ConvertFrom-Json
+          & $tc.cmake -S . -B build -G Ninja "-DCMAKE_MAKE_PROGRAM=$($tc.ninja)" `
+            "-DCMAKE_C_COMPILER=$($tc.cc)" "-DCMAKE_CXX_COMPILER=$($tc.cxx)" `
+            -DCMAKE_BUILD_TYPE=Release -DPSPRECOMP_BUILD_TESTS=OFF `
+            -DPSPRECOMP_BUILD_PROFILE_TESTS=OFF -DMPO_FFMPEG=off -DMPO_ENABLE_VULKAN=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $tc.cmake --build build --target mpo_launcher
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # -static: the launcher must not need llvm-mingw's DLLs.
+          & "$(Split-Path $tc.cc)\llvm-objdump.exe" -p build\profiles\mpo\launcher\mpo_launcher.exe |
+            Select-String "DLL Name"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-launcher
+          path: build/profiles/mpo/launcher/mpo_launcher.exe
+          if-no-files-found: error
+
+  package:
+    name: Package and check
+    needs: [windows-ffmpeg, windows-launcher]
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+      - name: Archives
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || version="0.0.0-${GITHUB_SHA::8}"
+          python_zip=$(python3 -I packaging/fetch_pinned.py windows-x86_64 python --out dl)
+          mkdir -p dist
+          python3 -I packaging/make_release.py source "dist/mpo-pc-port-$version-source.tar.gz"
+          python3 -I packaging/make_release.py windows "dist/mpo-pc-port-$version-windows-x86_64.zip" \
+            --launcher artifacts/windows-launcher/mpo_launcher.exe --python-zip "$python_zip" \
+            --ffmpeg artifacts/windows-ffmpeg/ffmpeg-prebuilt \
+            --ffmpeg-source artifacts/windows-ffmpeg/ffmpeg-*.tar.xz
+          # Once more over everything that is uploaded.
+          python3 -I packaging/make_release.py check dist/*
+          (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release
+          path: dist
+          if-no-files-found: error
+
+  flatpak:
+    name: Flatpak (Linux, Steam Deck)
+    needs: [package]
+    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: release
+          path: dist
+      - name: Source for the manifest
+        run: cp dist/*-source.tar.gz packaging/flatpak/mpo-pc-port-source.tar.gz
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: mpo-pc-port.flatpak
+          manifest-path: packaging/flatpak/io.github.alvaro8317.MpoPcPort.yml
+          cache: false
+          upload-artifact: false
+      # The bundle is built only from the source tarball that `package`
+      # already checked, plus what the SDK compiles from it.
+      - name: Size
+        run: ls -la mpo-pc-port.flatpak
+      - uses: actions/upload-artifact@v7
+        with:
+          name: flatpak
+          path: mpo-pc-port.flatpak
+          if-no-files-found: error
+
+  publish:
+    name: Draft release
+    if: github.ref_type == 'tag'
+    needs: [package, flatpak]
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+      - name: Draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp artifacts/flatpak/mpo-pc-port.flatpak \
+             "artifacts/release/mpo-pc-port-${GITHUB_REF_NAME#v}-linux-x86_64.flatpak"
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft \
+            --title "$GITHUB_REF_NAME" --notes "Nothing of the game is included: you need your own ISO (ULUS-10202)." \
+            artifacts/release/*

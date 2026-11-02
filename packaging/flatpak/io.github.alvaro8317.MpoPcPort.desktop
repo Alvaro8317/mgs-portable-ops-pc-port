@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[Desktop Entry]
+Type=Application
+Name=MGS: Portable Ops (PC port)
+Comment=Unofficial PC port of Metal Gear Solid: Portable Ops, built from your own ISO
+Exec=mpo_launcher
+Icon=applications-games
+Categories=Game;
+Terminal=false

@@ -53,3 +53,15 @@ top = ""
 bin = ""
 license = "PSF-2.0"
 bundled = true
+
+# Only for the release workflow (not setup.py): the same llvm-mingw, hosted on
+# Linux, cross-compiles the FFmpeg that the Windows release carries
+# (packaging/ffmpeg), so it matches what the player's machine compiles with.
+[release-linux-x86_64.llvm-mingw]
+version = "20261020"
+url = "https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64.tar.xz"
+sha256 = "55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335"
+size = 84017268
+top = "llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64"
+bin = "bin"
+license = "Apache-2.0 WITH LLVM-exception (LLVM), ZPL-2.1 and others (mingw-w64)"

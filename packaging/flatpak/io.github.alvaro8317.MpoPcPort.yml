@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Flatpak of the launcher for Linux and the Steam Deck (F22b,
+# docs/analysis/distribution.md §3). The runtime is org.freedesktop.Sdk and
+# not Platform: the game is compiled on the player's machine, inside the
+# sandbox, with the SDK's GCC, CMake, Ninja, Python and headers (SteamOS has
+# a read-only root and no compilers). Built by .github/workflows/release.yml
+# from the source tarball of packaging/make_release.py, which it expects at
+# packaging/flatpak/mpo-pc-port-source.tar.gz.
+#
+# Nothing of the game is in the bundle: setup.py writes the decrypted game,
+# the generated code and the build to ~/.var/app/<id>/data.
+
+app-id: io.github.alvaro8317.MpoPcPort
+runtime: org.freedesktop.Sdk
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: mpo_launcher
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=all
+  # setup.py downloads the pinned sources CMake needs (SDL3, FFmpeg, the
+  # PPSSPP files) while it builds on the player's machine.
+  - --share=network
+  # The ISO and the fonts can be anywhere; read-only.
+  - --filesystem=home:ro
+  - --filesystem=/run/media:ro
+  - --filesystem=/media:ro
+modules:
+  - name: mpo-pc-port
+    buildsystem: simple
+    build-options:
+      # CMake downloads SDL3 and Dear ImGui to build the launcher.
+      build-args:
+        - --share=network
+    sources:
+      - type: archive
+        path: mpo-pc-port-source.tar.gz
+    build-commands:
+      # The source the player's build compiles (setup.py finds it next to
+      # /app/bin, launcher_core.hpp), copied before anything is built.
+      - mkdir -p /app/share/mpo-pc-port/source
+      - cp -a --no-preserve=ownership . /app/share/mpo-pc-port/source/
+      - cmake -S . -B /tmp/launcher-build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        -DPSPRECOMP_BUILD_TESTS=OFF -DPSPRECOMP_BUILD_PROFILE_TESTS=OFF -DMPO_FFMPEG=off
+        -DMPO_ENABLE_VULKAN=OFF
+      - cmake --build /tmp/launcher-build --target mpo_launcher
+      - install -Dm755 /tmp/launcher-build/profiles/mpo/launcher/mpo_launcher /app/bin/mpo_launcher
+      - install -Dm644 packaging/flatpak/io.github.alvaro8317.MpoPcPort.desktop
+        /app/share/applications/io.github.alvaro8317.MpoPcPort.desktop
