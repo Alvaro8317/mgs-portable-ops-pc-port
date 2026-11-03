@@ -1654,6 +1654,16 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     arriba, con un juego de íconos por dispositivo que se cambia en caliente;
   - los textos que nombran un botón con palabras (tutoriales, códec): habría que reemplazar
     cadenas en los datos del juego. Es lo más caro y lo último.
+  - **El spike (2026-11-03) lo resolvió**, ver `docs/analysis/button-prompts.md`. Los íconos
+    del HUD y de los menús son texturas sueltas (32×16, T4), iguales byte a byte en todas las
+    etapas. Los botones dentro del diálogo son glifos propios de cada script (`0x8C nn`).
+    START, SELECT, L y R van siempre como palabras [V]. Orden recomendado:
+    1. `last_device` en el frontend, un `PromptSet` para PPGe y un registro `p` en las
+       grabaciones;
+    2. el reemplazo de texturas por hash de contenido, en softgpu y Vulkan (sirve también para
+       las texturas HD);
+    3. los glifos de los GCX y de `codec.dat`;
+    4. las palabras se dejan fuera, o solo con reemplazos del mismo largo.
 - Versión EU (`ULES-00645`) y otras regiones.
 - Ad hoc (compatible con el servidor de PPSSPP) y online (SaveMGO).
 - Teclado y mouse, y cámara con el stick derecho (**hecha en F23a**: `[pad_camera]`, ver
