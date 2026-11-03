@@ -123,7 +123,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F22c | README, aviso legal e instalaciones limpias | M6 | 🟨 hecha en Linux (README en inglés y español, aviso legal, smoke test e instalaciones limpias en Linux; Windows y el Flatpak: pendientes del usuario) |
 | F23a | Cámara con el stick derecho (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; probarla con mando en el juego: pendiente del usuario) |
 | F23b | Resolución interna configurable, hasta 4K (autónomo) | M7 | 🟨 en curso (ola 5) |
-| F23c | Fuente libre de respaldo para los diálogos (autónomo) | M7 | 🟨 en curso (ola 5) |
+| F23c | Fuente libre de respaldo para los diálogos (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; `sceFont` sigue necesitando las PGF; Windows sin fuentes: pendiente del usuario) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
 Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se explica en la nota de sesión).
@@ -1644,6 +1644,9 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - Widescreen y ultrawide con el HUD ajustado (CWCheat `0x201E9728` como pista).
 - 60+ fps con **interpolación** (la lógica sigue a 20 o 30 fps).
 - Texturas HD en formato de PPSSPP.
+- **`sceFont` con la fuente de respaldo** (F23c): sin las PGF del firmware, solo falta el aviso
+  "Checking Memory Stick" del arranque. Las métricas de `sceFont` deciden el layout del juego,
+  así que habría que imitarlas con cuidado.
 - **Controles en pantalla según el dispositivo** (propuesto por el usuario el 2026-11-03): que
   el juego muestre START o Enter, A o Cruz, según lo último que se usó (mando, y de qué tipo, o
   teclado). El frontend ya sabe qué dispositivo mandó el último input. Va por partes:

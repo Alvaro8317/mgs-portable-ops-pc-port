@@ -213,7 +213,10 @@ los hilos y fibras, en vez de depender de `ulimit`.
   - los saves de PPSSPP y de la PSP (modo 5) se pasan al port con `mpo --import-save` y de vuelta
     con `mpo --export-save`; un save de PPSSPP importado carga con LOAD GAME (F18c [V]);
   - en los diálogos del juego, Círculo confirma (`buttonSwap = 0`) con el sistema en "Cruz
-    confirma" (F18b [V]).
+    confirma" (F18b [V]);
+  - sin las PGF del firmware, PPGe dibuja con una fuente libre de respaldo (GNU FreeFont
+    FreeSans, una tabla de glifos generada en `mpo_font`). `sceFont` sigue necesitando las PGF: sin
+    ellas solo falta el aviso "Checking Memory Stick" (F23c [V]).
 
 **Red (no hace falta para jugar):**
 - `sceNetAdhoc*`, `sceNetApctl*`, `sceHttp*`, `sceNpAuth`.
