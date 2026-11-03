@@ -19,6 +19,14 @@
 #                          shell to run configure on the player's machine)
 #   MPO_FFMPEG_URL         where to get ffmpeg-7.1.5.tar.xz (a local path works
 #                          too); the SHA-256 below is always checked
+#   MPO_FFMPEG_MIRROR_URLS tried in order when MPO_FFMPEG_URL fails (F22c:
+#                          ffmpeg.org was unreachable for a while during a
+#                          clean install). Gentoo's distfiles keep upstream's
+#                          tarball unchanged (same SHA-256 [V]); its folder is
+#                          the first byte of BLAKE2B-512 of the file name, so
+#                          it changes with the version:
+#                          python3 -c "import hashlib; print(hashlib.blake2b(
+#                          b'ffmpeg-<version>.tar.xz').hexdigest()[:2])"
 #   MPO_FFMPEG_SOURCE_DIR  an already unpacked FFmpeg 7.1.5 tree (offline)
 #   MPO_FFMPEG_JOBS        parallel jobs for the bundled build (default 3)
 #
@@ -41,6 +49,9 @@ set(MPO_FFMPEG_VERSION "7.1.5")
 set(MPO_FFMPEG_SHA256 "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f")
 set(MPO_FFMPEG_URL "https://ffmpeg.org/releases/ffmpeg-${MPO_FFMPEG_VERSION}.tar.xz"
     CACHE STRING "URL or local path of ffmpeg-${MPO_FFMPEG_VERSION}.tar.xz")
+set(MPO_FFMPEG_MIRROR_URLS
+    "https://distfiles.gentoo.org/distfiles/54/ffmpeg-${MPO_FFMPEG_VERSION}.tar.xz"
+    CACHE STRING "Fallback URLs of ffmpeg-${MPO_FFMPEG_VERSION}.tar.xz (; separated)")
 set(MPO_FFMPEG_SOURCE_DIR "" CACHE PATH "Unpacked FFmpeg ${MPO_FFMPEG_VERSION} tree (skips the download)")
 set(MPO_FFMPEG_JOBS "3" CACHE STRING "Parallel jobs for the bundled FFmpeg build")
 
@@ -203,7 +214,7 @@ if(MPO_FFMPEG_SOURCE_DIR)
     set(mpo_ffmpeg_source_args SOURCE_DIR "${MPO_FFMPEG_SOURCE_DIR}" DOWNLOAD_COMMAND "")
 else()
     set(mpo_ffmpeg_source_args
-        URL "${MPO_FFMPEG_URL}"
+        URL "${MPO_FFMPEG_URL}" ${MPO_FFMPEG_MIRROR_URLS}
         URL_HASH SHA256=${MPO_FFMPEG_SHA256}
         DOWNLOAD_EXTRACT_TIMESTAMP ON)
 endif()

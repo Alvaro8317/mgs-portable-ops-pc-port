@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 ✅ → F22b ✅ → F22c | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22, F22b y F22c desde el 2026-11-01 (ver su ficha). |
+| — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 ✅ → F22b ✅ → F22c 🟨 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22, F22b y F22c desde el 2026-11-01 (ver su ficha). |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
 (run `40260589237`). Se corrigió el 2026-10-26 y la CI lo confirma (run `40353663797`: MSVC Release y
@@ -119,7 +119,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F21b | Recorrido completo (Linux y Windows) | M6 | ⬜ pendiente (en paralelo con F22) |
 | F22 | Distribución: compilar en la máquina del jugador | M6 | ✅ hecha (modelo decidido, `setup.py` de punta a punta en Linux; el resto se partió en F22b y F22c) |
 | F22b | Toolchain portátil, launcher y paquetes | M6 | ✅ hecha (Windows con llvm-mingw en la CI, launcher, etapas en dos niveles y release revisada; la prueba en Windows y en la Steam Deck: pendiente del usuario) |
-| F22c | README, aviso legal e instalaciones limpias | M6 | ⬜ pendiente |
+| F22c | README, aviso legal e instalaciones limpias | M6 | 🟨 hecha en Linux (README en inglés y español, aviso legal, smoke test e instalaciones limpias en Linux; Windows y el Flatpak: pendientes del usuario) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
 Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se explica en la nota de sesión).
@@ -1542,6 +1542,18 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     README.
 - **Criterios de hecho**: las instalaciones limpias llegan a jugar siguiendo solo el README.
   **M6 cerrado** (con F21b).
+- **Notas (cierre de F22c)**: ver `docs/sessions/F22c.md`.
+  - `README.md` (inglés) y `README.es.md` (español), decidido por el usuario, con el aviso legal.
+    `docs/smoke-test.md` y `packaging/hash_saves.py` son el smoke test de `CLAUDE.md` §7.
+  - **Dos instalaciones limpias en Linux** siguiendo solo el README: en esta máquina desde el
+    tarball (20 min 05 s, y la repetición de `tramo3` coincide entera) y en un contenedor
+    `ubuntu:24.04` vacío con solo los paquetes del README.
+  - Arreglado en el camino: el navegador del launcher no llegaba a los saves de PPSSPP en Linux
+    (carpetas ocultas, ruta escrita y un botón a `SAVEDATA`); el Flatpak no podía exportar saves
+    (Descargas); sin los headers de audio, SDL3 sale sin sonido (la lista de paquetes); y FFmpeg
+    tiene un espejo, porque `ffmpeg.org` se cayó durante la prueba.
+  - **Pendiente del usuario**: el smoke test en Windows con el ZIP y en el Flatpak. Con eso y F21b
+    se cierra M6.
 
 ---
 
@@ -1576,6 +1588,10 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   intérprete se separa de la grabación en el flip 7740 (con las etapas compiladas, a `-O0` o a
   `-O2`, coincide). Hay que bisecar contra el código recompilado (probablemente la VFPU del
   intérprete).
+- **La repetición depende de la hora local de los archivos del `ms0` grabado** (F22c): copiado
+  sin conservar las fechas, o en otra zona horaria, `tramo3` se separa en el flip 1620 (el diálogo
+  de saves muestra la fecha del save). Que `--record-input` guarde las fechas y la zona, o que
+  `--replay-input` las fije.
 - **`#include <algorithm>` en `allegrex_context.hpp`** (el fork, F22b): cuando convenga
   recompilar todo el corpus; después se quitan el `-include algorithm` del `CMakeLists.txt` raíz y
   el `CXXFLAGS` del job `windows-llvm-mingw`.

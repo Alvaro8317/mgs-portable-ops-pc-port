@@ -135,10 +135,14 @@ jugador**. No se puede publicar un `mpo_boot` precompilado y compilar solo las e
 - Permisos: red (CMake baja SDL3, FFmpeg y los archivos de PPSSPP fijados), lectura de `home`, de
   `/run/media` y de `/media` (el ISO, también en la microSD de la Deck), Wayland/X11, audio y
   `--device=all` (los mandos).
+  - **Desde F22c, escritura en Descargas** (`--filesystem=xdg-download`): con `home:ro`, "Export my
+    saves" no tenía dónde escribir fuera del sandbox [?, sin probar en un Flatpak instalado].
 - La CI de release lo construye con `flatpak-builder` (sin probar todavía en la CI ni en una Deck).
 - Sin Flatpak (el tarball del código) hacen falta los paquetes del sistema: CMake ≥ 3.22, Ninja,
-  Clang o GCC con C++20, **Python ≥ 3.11** (`tomllib`), `libx11-dev` y `libxext-dev` (o los de
-  Wayland), `make` y `sh` para FFmpeg.
+  Clang o GCC con C++20, **Python ≥ 3.11** (`tomllib`), `make` y `sh` para FFmpeg, y los headers
+  que SDL3 busca al configurarse. **Sin los de audio, SDL3 compila solo con los drivers `dummy` y
+  `disk`: el juego no tiene sonido** (F22c). La lista de Debian y Ubuntu del `README.md` se probó
+  en un contenedor `ubuntu:24.04` vacío (ver `docs/sessions/F22c.md`).
 - **macOS**: fuera de alcance hasta F23+.
 
 ## 4. El launcher (hecho en F22b)
@@ -160,6 +164,10 @@ embebible no trae Tkinter). La release lo trae ya compilado: no tiene nada del j
   (`mpo_launcher_core`, probado sin ventana en `mpo_launcher_core_test`).
 - **Si el juego o un paso termina con error**, muestra sus últimas líneas (con un botón para
   copiarlas). Así, un import sin implementar no pasa en silencio (ver §5).
+- **El navegador** (F22c): se puede escribir la ruta, mostrar las carpetas ocultas (PPSSPP guarda
+  los saves en `~/.config/ppsspp` en Linux) y, al importar o exportar saves, saltar a las
+  carpetas `SAVEDATA` de PPSSPP que existan (`ppsspp_save_folders`: `Documents\PPSSPP` en
+  Windows; `~/.config/ppsspp` y el Flatpak de PPSSPP en Linux).
 - Busca `setup.py` en `--source`, en `source/` junto al ejecutable (el ZIP de Windows), en
   `../share/mpo-pc-port/source` (el Flatpak) y en el árbol del que se compiló; el Python, en
   `--python`, en `python/python.exe` (Windows) o `python3`.

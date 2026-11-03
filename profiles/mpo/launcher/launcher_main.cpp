@@ -16,10 +16,12 @@
 // implemented, CLAUDE.md §5) its last lines are shown, never hidden.
 //
 //   mpo_launcher [--data <dir>] [--source <repo>] [--python <exe>]
-//                [--screenshot <file.bmp>]
+//                [--screenshot <file.bmp>] [--browse-saves]
 //
 // --screenshot saves the window once the install state is read and quits
 // (with SDL_VIDEO_DRIVER=offscreen, for the evidence of a session).
+// --browse-saves opens the browser of "Import a save..." at start (with
+// --screenshot, the evidence of the browser, F22c).
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -32,6 +34,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "imgui.h"
@@ -70,14 +73,28 @@ fs::path home_folder() {
     return home != nullptr ? text_path(home) : fs::current_path();
 }
 
-// The built-in file browser (a modal popup).
+fs::path documents_folder() {
+    const char *documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
+    return documents != nullptr ? text_path(documents) : fs::path();
+}
+
+// A folder the browser offers as a button (PPSSPP's saves, F22c).
+struct Shortcut {
+    std::string label;
+    fs::path folder;
+};
+
+// The built-in file browser (a modal popup). The path can also be typed, and
+// hidden folders shown: PPSSPP keeps its saves under ~/.config on Linux.
 class Browser {
 public:
     enum class Mode { kIsoFile, kFolder };
 
-    void open(const char *title, Mode mode, const fs::path &start) {
+    void open(const char *title, Mode mode, const fs::path &start,
+              std::vector<Shortcut> shortcuts = {}) {
         title_ = title;
         mode_ = mode;
+        shortcuts_ = std::move(shortcuts);
         std::error_code ec;
         folder_ = !start.empty() && fs::is_directory(start, ec) ? start
                   : !start.empty() && fs::is_directory(start.parent_path(), ec)
@@ -100,7 +117,11 @@ public:
         ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         if (!ImGui::BeginPopupModal(title_.c_str(), nullptr, ImGuiWindowFlags_NoResize))
             return false;
-        ImGui::TextWrapped("%s", path_text(folder_).c_str());
+        ImGui::SetNextItemWidth(-ImGui::GetFontSize() * 4.0f);
+        const bool typed =
+            ImGui::InputText("##path", &path_input_, ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        if (ImGui::Button("Go") || typed) go_to(text_path(path_input_));
         if (ImGui::Button("Up") && folder_.has_parent_path() && folder_.parent_path() != folder_) {
             folder_ = folder_.parent_path();
             refresh();
@@ -122,6 +143,15 @@ public:
                 }
             }
         }
+        for (const Shortcut &shortcut : shortcuts_) {
+            ImGui::SameLine();
+            if (ImGui::Button(shortcut.label.c_str())) {
+                folder_ = shortcut.folder;
+                refresh();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Show hidden folders", &show_hidden_)) refresh();
         if (mode_ == Mode::kFolder) {
             ImGui::SameLine();
             if (ImGui::Button("Choose this folder")) {
@@ -164,6 +194,21 @@ public:
     [[nodiscard]] const fs::path &chosen() const noexcept { return chosen_; }
 
 private:
+    // A typed path: a folder opens; in the ISO mode an existing file is
+    // chosen, as a click on it would.
+    void go_to(const fs::path &path) {
+        std::error_code ec;
+        if (fs::is_directory(path, ec)) {
+            folder_ = path;
+            refresh();
+        } else if (mode_ == Mode::kIsoFile && fs::is_regular_file(path, ec)) {
+            folder_ = path.parent_path();
+            refresh();
+        } else {
+            error_ = "No such folder: " + path_text(path);
+        }
+    }
+
     void refresh() {
         static constexpr std::array<std::string_view, 1> kIso{".iso"};
         std::error_code ec;
@@ -171,8 +216,9 @@ private:
                                                  mode_ == Mode::kIsoFile
                                                      ? std::span<const std::string_view>(kIso)
                                                      : std::span<const std::string_view>(),
-                                                 ec);
+                                                 ec, show_hidden_);
         error_ = ec ? "Cannot open this folder: " + ec.message() : "";
+        path_input_ = path_text(folder_);
     }
 
     std::string title_;
@@ -180,9 +226,24 @@ private:
     fs::path folder_;
     fs::path chosen_;
     std::vector<mpo::launcher::DirEntry> entries_;
+    std::vector<Shortcut> shortcuts_;
     std::string error_;
+    std::string path_input_;
+    bool show_hidden_{};
     bool open_request_{};
 };
+
+// The PPSSPP save folders found on this machine, as browser buttons.
+std::vector<Shortcut> ppsspp_shortcuts() {
+    std::vector<Shortcut> shortcuts;
+    const std::vector<fs::path> folders =
+        mpo::launcher::ppsspp_save_folders(home_folder(), documents_folder(), kWindows);
+    for (const fs::path &folder : folders) {
+        const bool flatpak = path_text(folder).find("org.ppsspp.PPSSPP") != std::string::npos;
+        shortcuts.push_back({flatpak ? "PPSSPP saves (Flatpak)" : "PPSSPP saves", folder});
+    }
+    return shortcuts;
+}
 
 enum class Pick { kNone, kIso, kFonts, kImportSave, kExportSave };
 
@@ -339,8 +400,8 @@ struct Launcher {
         ImGui::Checkbox("Then compile every stage in the background",
                         &compile_stages_after_install);
         ImGui::TextWrapped(
-            "The first install takes 20 to 40 minutes and about 9 GB. You can play as soon as it "
-            "ends; the stages keep compiling while you play.");
+            "The first install takes 20 to 40 minutes and needs about 15 GB free (10 GB once "
+            "done). You can play as soon as it ends; the stages keep compiling while you play.");
         ImGui::BeginDisabled(iso.empty() || work.running() || stages.running());
         if (ImGui::Button("Install", ImVec2(220.0f, 0.0f))) {
             std::vector<std::string> args{"--iso", iso};
@@ -389,20 +450,24 @@ struct Launcher {
         }
     }
 
+    void open_import_browser() {
+        pick = Pick::kImportSave;
+        browser.open("Choose the save folder to import", Browser::Mode::kFolder, {},
+                     ppsspp_shortcuts());
+    }
+
     void draw_saves() {
         ImGui::SeparatorText("Saves");
         ImGui::TextWrapped(
             "Bring a save from a PSP or PPSSPP (the PSP/SAVEDATA/ULUS10202... folder), or take "
             "yours to them.");
         ImGui::BeginDisabled(work.running() || game.running());
-        if (ImGui::Button("Import a save...")) {
-            pick = Pick::kImportSave;
-            browser.open("Choose the save folder to import", Browser::Mode::kFolder, {});
-        }
+        if (ImGui::Button("Import a save...")) open_import_browser();
         ImGui::SameLine();
         if (ImGui::Button("Export my saves...")) {
             pick = Pick::kExportSave;
-            browser.open("Choose where to export the saves", Browser::Mode::kFolder, {});
+            browser.open("Choose where to export the saves", Browser::Mode::kFolder, {},
+                         ppsspp_shortcuts());
         }
         ImGui::EndDisabled();
     }
@@ -508,10 +573,14 @@ int run(int argc, char **argv) {
     fs::path python;
     fs::path data;
     fs::path screenshot;
+    bool browse_saves = false;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
-        if ((arg == "--source" || arg == "--python" || arg == "--data" || arg == "--screenshot") &&
-            i + 1 < argc) {
+        if (arg == "--browse-saves") {
+            browse_saves = true;
+        } else if ((arg == "--source" || arg == "--python" || arg == "--data" ||
+                    arg == "--screenshot") &&
+                   i + 1 < argc) {
             const fs::path value = text_path(argv[++i]);
             (arg == "--source"   ? source
              : arg == "--python" ? python
@@ -519,7 +588,8 @@ int run(int argc, char **argv) {
                                  : screenshot) = value;
         } else {
             std::fprintf(stderr, "usage: mpo_launcher [--data <dir>] [--source <repo>] "
-                                 "[--python <exe>] [--screenshot <file.bmp>]\n");
+                                 "[--python <exe>] [--screenshot <file.bmp>] "
+                                 "[--browse-saves]\n");
             return 2;
         }
     }
@@ -574,6 +644,7 @@ int run(int argc, char **argv) {
     launcher.paths = *paths;
     launcher.data = data;
     launcher.refresh_status();
+    if (browse_saves) launcher.open_import_browser();
 
     bool done = false;
     int frames_after_status = 0;

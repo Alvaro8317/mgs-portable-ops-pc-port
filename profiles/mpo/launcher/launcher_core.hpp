@@ -113,10 +113,19 @@ struct DirEntry {
 
 // Folders first, then the files whose extension is in `extensions` (lower
 // case, with the dot; empty: folders only), each group sorted
-// case-insensitively. Hidden entries (".name") are left out.
+// case-insensitively. Hidden entries (".name") are left out unless
+// `show_hidden` (PPSSPP's saves are under ~/.config on Linux, F22c).
 std::vector<DirEntry> list_directory(const std::filesystem::path &folder,
                                      std::span<const std::string_view> extensions,
-                                     std::error_code &ec);
+                                     std::error_code &ec, bool show_hidden = false);
+
+// The SAVEDATA folders of PPSSPP installs that exist on this machine, for the
+// browser's shortcut when importing or exporting saves (F22c): Windows keeps
+// them in Documents\PPSSPP; Linux in ~/.config/ppsspp, or in the PPSSPP
+// Flatpak's folder.
+std::vector<std::filesystem::path> ppsspp_save_folders(const std::filesystem::path &home,
+                                                       const std::filesystem::path &documents,
+                                                       bool windows);
 
 // "1 h 05 min", "12 min 30 s", "45 s".
 std::string format_duration(double seconds);

@@ -404,7 +404,7 @@ std::vector<std::string> setup_command(const LauncherPaths &paths, std::string_v
 
 std::vector<DirEntry> list_directory(const std::filesystem::path &folder,
                                      std::span<const std::string_view> extensions,
-                                     std::error_code &ec) {
+                                     std::error_code &ec, bool show_hidden) {
     std::vector<DirEntry> folders;
     std::vector<DirEntry> files;
     std::filesystem::directory_iterator it(folder, ec);
@@ -413,7 +413,7 @@ std::vector<DirEntry> list_directory(const std::filesystem::path &folder,
         // u8string: names in any language survive on Windows.
         const std::u8string name8 = entry.path().filename().u8string();
         std::string name(name8.begin(), name8.end());
-        if (name.empty() || name[0] == '.') continue;
+        if (name.empty() || (name[0] == '.' && !show_hidden)) continue;
         std::error_code entry_ec;
         if (entry.is_directory(entry_ec)) {
             folders.push_back({std::move(name), true});
@@ -436,6 +436,25 @@ std::vector<DirEntry> list_directory(const std::filesystem::path &folder,
     folders.insert(folders.end(), std::make_move_iterator(files.begin()),
                    std::make_move_iterator(files.end()));
     return folders;
+}
+
+std::vector<std::filesystem::path> ppsspp_save_folders(const std::filesystem::path &home,
+                                                       const std::filesystem::path &documents,
+                                                       bool windows) {
+    std::vector<std::filesystem::path> candidates;
+    if (windows) {
+        if (!documents.empty()) candidates.push_back(documents / "PPSSPP" / "PSP" / "SAVEDATA");
+    } else if (!home.empty()) {
+        candidates.push_back(home / ".config" / "ppsspp" / "PSP" / "SAVEDATA");
+        candidates.push_back(home / ".var" / "app" / "org.ppsspp.PPSSPP" / "config" / "ppsspp" /
+                             "PSP" / "SAVEDATA");
+    }
+    std::vector<std::filesystem::path> found;
+    for (const std::filesystem::path &folder : candidates) {
+        std::error_code ec;
+        if (std::filesystem::is_directory(folder, ec)) found.push_back(folder);
+    }
+    return found;
 }
 
 std::string format_duration(double seconds) {

@@ -163,6 +163,31 @@ void test_listing(const fs::path &tmp) {
     check(entries.size() == 2u, "folders only");
     entries = list_directory(folder / "missing", kIso, ec);
     check(ec && entries.empty(), "missing folder");
+    fs::create_directories(folder / ".config");
+    entries = list_directory(folder, {}, ec, /*show_hidden=*/true);
+    check(!ec && entries.size() == 3u && entries[0].name == ".config", "hidden folders shown");
+    entries = list_directory(folder, kIso, ec, /*show_hidden=*/true);
+    check(entries.size() == 6u, "hidden files shown");
+}
+
+void test_ppsspp_saves(const fs::path &tmp) {
+    const fs::path home = tmp / "home";
+    const fs::path documents = home / "Documents";
+    check(ppsspp_save_folders(home, documents, false).empty(), "no PPSSPP");
+    check(ppsspp_save_folders(home, documents, true).empty(), "no PPSSPP (Windows)");
+    const fs::path linux_saves = home / ".config" / "ppsspp" / "PSP" / "SAVEDATA";
+    const fs::path flatpak_saves =
+        home / ".var" / "app" / "org.ppsspp.PPSSPP" / "config" / "ppsspp" / "PSP" / "SAVEDATA";
+    const fs::path windows_saves = documents / "PPSSPP" / "PSP" / "SAVEDATA";
+    fs::create_directories(linux_saves);
+    fs::create_directories(flatpak_saves);
+    fs::create_directories(windows_saves);
+    const auto on_linux = ppsspp_save_folders(home, documents, false);
+    check(on_linux.size() == 2u && on_linux[0] == linux_saves && on_linux[1] == flatpak_saves,
+          "PPSSPP saves on Linux");
+    const auto on_windows = ppsspp_save_folders(home, documents, true);
+    check(on_windows.size() == 1u && on_windows[0] == windows_saves, "PPSSPP saves on Windows");
+    check(ppsspp_save_folders(home, {}, true).empty(), "no Documents folder");
 }
 
 void test_duration() {
@@ -188,6 +213,7 @@ int main(int argc, char **argv) {
     test_line_buffer();
     test_paths(tmp);
     test_listing(tmp);
+    test_ppsspp_saves(tmp);
     test_duration();
     fs::remove_all(tmp, ec);
     std::printf("mpo_launcher_core_test: %s\n", g_failures == 0 ? "ok" : "FAILED");

@@ -415,7 +415,10 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
   ejemplo de upstream trae código generado de otro juego (F22b).
 - **CI**: matriz de Windows (MSVC) y Linux (Clang + GCC), con ASan y UBSan en Linux.
 - **Smoke test manual**: antes de cada release se sigue una lista corta de pasos. **Nunca contra la
-  carpeta de saves real del usuario**, y se hashean los saves antes y después.
+  carpeta de saves real del usuario**, y se hashean los saves antes y después. La lista está en
+  `docs/smoke-test.md` y los hashes se sacan con `packaging/hash_saves.py` (F22c).
+- **El README del jugador** está en inglés (`README.md`) y en español (`README.es.md`), y se
+  cambian los dos a la vez (decidido por el usuario en F22c).
 
 ---
 

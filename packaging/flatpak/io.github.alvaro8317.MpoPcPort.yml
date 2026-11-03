@@ -29,6 +29,9 @@ finish-args:
   - --filesystem=home:ro
   - --filesystem=/run/media:ro
   - --filesystem=/media:ro
+  # "Export my saves" needs somewhere to write outside the sandbox (F22c):
+  # the Downloads folder, read-write over home:ro.
+  - --filesystem=xdg-download
 modules:
   - name: mpo-pc-port
     buildsystem: simple
