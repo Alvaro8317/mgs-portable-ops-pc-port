@@ -39,7 +39,15 @@ bool is_overlay_library(const std::filesystem::path &path) {
 
 void *open_library(const std::filesystem::path &path) {
 #if defined(_WIN32)
-    return reinterpret_cast<void *>(LoadLibraryW(path.c_str()));
+    // A damaged file would otherwise pop a "Bad Image" box and block until
+    // someone closes it (setup.py's check runs with no one watching, F22c).
+    DWORD previous = 0;
+    const BOOL quiet = SetThreadErrorMode(SEM_FAILCRITICALERRORS, &previous);
+    HMODULE module = LoadLibraryW(path.c_str());
+    const DWORD error = GetLastError(); // for library_error()
+    if (quiet) SetThreadErrorMode(previous, nullptr);
+    SetLastError(error);
+    return reinterpret_cast<void *>(module);
 #else
     return dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
 #endif
