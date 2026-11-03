@@ -821,11 +821,7 @@ class Setup:
         started = time.monotonic()
         self._note(f'stages: compiling {stage} ({index}/{len(pending)}, {pass_name})')
         self._regenerate_if_missing(stage)
-        self._cmake_build([f'mpo_overlay_{stage}'], f'stage_{stage}',
-                          low_priority=self.args.low_priority)
-        built = self.build / 'overlays' / library_name(stage)
-        if not built.is_file():
-          raise SetupError(f'{stage}: no library at {built}')
+        built = self._build_stage(stage)
         # Atomic: a running mpo_boot never sees half a library.
         name = library_name(stage, quick)
         tmp = self.overlays / f'.{name}.tmp'
@@ -841,13 +837,55 @@ class Setup:
           self._drop_quick(stage)
         self._save_state()
         if not self.args.keep_objects:
-          objects = self.build / 'profiles' / 'mpo' / 'host' / 'hle' / 'CMakeFiles' / \
-              f'mpo_overlay_{stage}.dir'
-          shutil.rmtree(objects, ignore_errors=True)
+          shutil.rmtree(self._stage_objects(stage), ignore_errors=True)
         self._note(f'stages: {stage} installed in {states[stage]["seconds"]:.0f} s '
                    f'({pass_name})')
     self._save_state()
     self._note('stages: all stages compiled')
+
+  def _stage_objects(self, stage):
+    return self.build / 'profiles' / 'mpo' / 'host' / 'hle' / 'CMakeFiles' / \
+        f'mpo_overlay_{stage}.dir'
+
+  def _build_stage(self, stage):
+    """Compiles one stage library and checks that it loads; returns its path.
+
+    On a player's Windows (F22c) an interrupted compile left objects that
+    Ninja took as up to date (the link then missed their symbols), and one
+    library crashed the game as soon as it was loaded. Each stage now starts
+    from no objects, and `mpo_boot --check-overlay` loads the library before it
+    is installed; a library that fails is compiled once more from scratch.
+    """
+    built = self.build / 'overlays' / library_name(stage)
+    for attempt in (1, 2):
+      if not self.args.keep_objects or attempt == 2:
+        shutil.rmtree(self._stage_objects(stage), ignore_errors=True)
+      built.unlink(missing_ok=True)
+      self._cmake_build([f'mpo_overlay_{stage}'], f'stage_{stage}',
+                        low_priority=self.args.low_priority)
+      if not built.is_file():
+        raise SetupError(f'{stage}: no library at {built}')
+      problem = self._check_library(built)
+      if problem is None:
+        return built
+      self._note(f'stages: {stage}: the library does not load ({problem})' +
+                 ('; compiling it again from scratch' if attempt == 1 else ''))
+    built.unlink(missing_ok=True)
+    raise SetupError(f'{stage}: the compiled library does not load ({problem}). Check that the '
+                     f'disk has free space. ' + antivirus_hint(built, self.data))
+
+  def _check_library(self, library):
+    """None when mpo_boot loads `library`; else what went wrong."""
+    try:
+      result = subprocess.run([str(self.mpo_boot), '--check-overlay', str(library)],
+                              capture_output=True, text=True, errors='replace', timeout=300,
+                              check=False)
+    except subprocess.TimeoutExpired:
+      return 'mpo_boot --check-overlay did not finish'
+    if result.returncode == 0:
+      return None
+    lines = (result.stdout + result.stderr).strip().splitlines()
+    return describe_exit(result.returncode) + (f': {lines[-1]}' if lines else '')
 
   def _regenerate_if_missing(self, stage):
     """Generates a stage again when files of its C++ are gone from disk."""

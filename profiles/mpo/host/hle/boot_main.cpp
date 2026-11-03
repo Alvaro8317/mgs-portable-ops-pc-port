@@ -36,6 +36,9 @@
 // are loaded at start; the report lists every stage the game loaded, whether
 // its corpus was installed and verified, and the instructions the
 // interpreter ran inside the stage windows.
+// `mpo_boot --check-overlay <library>` only loads that library and checks it
+// was built for this runtime (F22c): setup.py runs it on every stage it
+// compiles, before installing it.
 //
 // F10b: the display and the controller.
 //   --press start@15000+200   holds Start from 15 s to 15.2 s of PSP time
@@ -506,6 +509,7 @@ int main(int argc, char **argv) {
     std::uint64_t check_every = 60u;
     bool until_given = false;
     bool input_log = false;
+    std::string check_overlay;
     // Every option takes a value: a word left over is a mistake, not ignored
     // (F19: a whole --press list quoted as one word went unnoticed).
     if (argc % 2 == 0) return fail(std::string("option without a value: ") + argv[argc - 1]);
@@ -569,6 +573,8 @@ int main(int argc, char **argv) {
             linear_filter = value == "linear";
         } else if (option == "--input-map") {
             input_map = value;
+        } else if (option == "--check-overlay") {
+            check_overlay = value;
         } else if (option == "--overlays") {
             overlays_dir = value == "none" ? std::string() : value;
         } else if (option == "--renderer") {
@@ -611,6 +617,12 @@ int main(int argc, char **argv) {
         } else {
             return fail("unknown option " + option);
         }
+    }
+    if (!check_overlay.empty()) {
+        std::string why;
+        if (!mpo::hle::OverlayManager::check_library(check_overlay, &why)) return fail(why);
+        std::printf("overlay library: %s loads\n", check_overlay.c_str());
+        return 0;
     }
     if (elf_path.empty()) return fail("usage: see boot_main.cpp (--elf is required)");
     config.disc_iso = iso;

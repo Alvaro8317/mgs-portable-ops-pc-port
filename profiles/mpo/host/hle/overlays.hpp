@@ -95,6 +95,11 @@ public:
     // is remembered: every stage loaded later rescans it for libraries that
     // were not there (a library is only tried once).
     std::size_t load_libraries(const std::filesystem::path &directory);
+    // Loads one overlay library and checks that it was built for this runtime,
+    // with no System: setup.py runs it on every library it compiles before
+    // installing it (F22c: a damaged one crashed the game when it started).
+    // A library whose initialization crashes takes the process with it.
+    [[nodiscard]] static bool check_library(const std::filesystem::path &path, std::string *error);
     [[nodiscard]] const std::vector<OverlayCorpus> &corpora() const noexcept { return corpora_; }
 
     // ModuleManager::load, after relocating `file` at `base` and before

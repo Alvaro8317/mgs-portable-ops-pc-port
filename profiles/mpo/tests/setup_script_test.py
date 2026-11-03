@@ -263,6 +263,34 @@ class BuildFolderTest(unittest.TestCase):
       self.assertEqual(setup.missing_generated_files(out), [names[0]])
 
 
+  def test_stage_library_is_checked(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      s = setup.Setup(argparse.Namespace(data=tmp, keep_objects=False, low_priority=False))
+      built = s.build / 'overlays' / setup.library_name('st1402')
+      objects = s._stage_objects('st1402')
+      builds = []
+
+      def fake_build(targets, log_name, low_priority=False):
+        del log_name, low_priority
+        builds.append((targets, objects.exists()))
+        built.parent.mkdir(parents=True, exist_ok=True)
+        built.write_bytes(b'library')
+
+      s._cmake_build = fake_build
+      # An object left by an interrupted compile (F22c) goes before building.
+      objects.mkdir(parents=True)
+      answers = ['exit code 0xC0000005: it crashed (access violation)', None]
+      s._check_library = lambda library: answers.pop(0)
+      self.assertEqual(s._build_stage('st1402'), built)
+      self.assertEqual(builds, [(['mpo_overlay_st1402'], False)] * 2, 'built again from scratch')
+      # A library that never loads is not left behind to be installed.
+      s._check_library = lambda library: 'exit code 0xC0000005'
+      with self.assertRaises(setup.SetupError) as raised:
+        s._build_stage('st1402')
+      self.assertIn('does not load', str(raised.exception))
+      self.assertFalse(built.exists())
+
+
 class ExitTest(unittest.TestCase):
 
   def test_describe_exit(self):

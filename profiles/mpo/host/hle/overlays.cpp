@@ -74,6 +74,12 @@ std::map<std::string, LoadedLibrary> &loaded_libraries() {
     return libraries;
 }
 
+bool built_for_this_runtime(const OverlayModuleInfo *info) {
+    return info != nullptr && info->abi_version == kOverlayAbiVersion &&
+           info->runtime_size == sizeof(psprecomp::Runtime) &&
+           info->context_size == sizeof(psprecomp::AllegrexContext);
+}
+
 } // namespace
 
 void OverlayManager::add_corpus(const OverlayModuleInfo &info, OverlayInstallFunction install,
@@ -141,9 +147,7 @@ std::size_t OverlayManager::scan_libraries(const std::filesystem::path &director
                 loaded_libraries().emplace(key, LoadedLibrary{info_of(), install, opt_level}).first;
         }
         const OverlayModuleInfo *info = found->second.info;
-        if (info == nullptr || info->abi_version != kOverlayAbiVersion ||
-            info->runtime_size != sizeof(psprecomp::Runtime) ||
-            info->context_size != sizeof(psprecomp::AllegrexContext)) {
+        if (!built_for_this_runtime(info)) {
             std::fprintf(stderr, "mpo: %s was built for another build of the runtime; rebuild it\n",
                          path.string().c_str());
             continue;
@@ -152,6 +156,25 @@ std::size_t OverlayManager::scan_libraries(const std::filesystem::path &director
         ++added;
     }
     return added;
+}
+
+bool OverlayManager::check_library(const std::filesystem::path &path, std::string *error) {
+    void *handle = open_library(path);
+    if (handle == nullptr) {
+        *error = "cannot load " + path.string() + ": " + library_error();
+        return false;
+    }
+    const auto info_of =
+        reinterpret_cast<decltype(&mpo_overlay_info)>(library_symbol(handle, "mpo_overlay_info"));
+    if (info_of == nullptr || library_symbol(handle, "mpo_register_overlay") == nullptr) {
+        *error = path.string() + " is not an overlay library";
+        return false;
+    }
+    if (!built_for_this_runtime(info_of())) {
+        *error = path.string() + " was built for another build of the runtime";
+        return false;
+    }
+    return true;
 }
 
 std::string OverlayManager::text_sha256(const OverlayCorpus &corpus) const {

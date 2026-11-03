@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "hle/system.hpp"
@@ -86,6 +87,14 @@ int main(int argc, char **argv) {
         if (ext == ".so" || ext == ".dll" || ext == ".dylib") library = entry.path();
     }
     check(!library.empty(), "the test library");
+    // F22c: setup.py checks each library it compiles with mpo_boot --check-overlay.
+    std::string why;
+    check(mpo::hle::OverlayManager::check_library(library, &why), "the library checks out");
+    const std::filesystem::path junk = late / ("junk" + library.extension().string());
+    std::ofstream(junk, std::ios::binary) << "not a library";
+    check(!mpo::hle::OverlayManager::check_library(junk, &why) && !why.empty(),
+          "a file that is not a library fails the check");
+    std::filesystem::remove(junk, ec);
     std::filesystem::copy_file(library, late / ("late_overlay" + library.extension().string()), ec);
     check(!ec, "copy the library");
     const std::uint8_t unknown_prx[] = {1, 2, 3};
