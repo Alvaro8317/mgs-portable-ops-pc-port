@@ -13,7 +13,10 @@
 //
 // Text: PPSSPP renders it with the host's fonts (TextDrawer, an 18 px sans
 // serif); here it is the firmware's own PGF fonts (mpo_font, F17a), ltn0 and
-// jpn0 for what ltn0 lacks (the button symbols). Each string becomes a 4-bit
+// jpn0 for what ltn0 lacks (the button symbols). Without any of the two
+// (F23c), it is the bundled fallback font (font::FallbackFont, FreeSans
+// rasterized at ltn0's em), so the dialogs still show their text; with
+// either PGF there, nothing changes. Each string becomes a 4-bit
 // texture with a 16-level alpha palette (PPSSPP's format), laid out at the
 // font's size and scaled so that a style scale of 1 gives 18 px lines.
 // Differences from PPSSPP, on purpose:
@@ -98,8 +101,23 @@ public:
                       int wrap = kWrapNone, float wrap_width = 0.0f);
 
     [[nodiscard]] const Stats &stats() const noexcept { return stats_; }
-    // Whether the fonts are there (without them, text is not drawn).
+    // The guest memory the frame since begin() wrote (tests): the display
+    // list, the vertices and the text images, each as [start, end).
+    struct Output {
+        std::uint32_t list = 0, list_end = 0;
+        std::uint32_t data = 0, data_end = 0;
+        std::uint32_t text = 0, text_end = 0;
+    };
+    [[nodiscard]] Output output() const noexcept {
+        return {dl_, dl_write_, data_, data_write_, text_, text_write_};
+    }
+    // Whether a firmware PGF font is there (ltn0 or jpn0). Without one, the
+    // text is drawn with the fallback font (F23c).
     [[nodiscard]] bool has_fonts();
+    [[nodiscard]] bool uses_fallback_font() { return !has_fonts(); }
+    // What the text is drawn with, for reports ("the firmware fonts ltn0.pgf
+    // + jpn0.pgf", "the fallback font FreeSans ...").
+    [[nodiscard]] std::string text_font_name();
 
     // alphaMul and PSPDialog::CalcFadedColor.
     static std::uint32_t alpha_mul(std::uint32_t color, float factor);
@@ -139,6 +157,7 @@ private:
     void set_text_texture_state();
 
     const Glyph *glyph(char32_t code);
+    void check_fonts();
     // In font pixels; max_width <= 0: no limit.
     Layout layout(std::u32string_view text, float max_width, int wrap);
     TextImage text_image(std::string_view text, float max_width_px, int wrap, std::uint32_t align);

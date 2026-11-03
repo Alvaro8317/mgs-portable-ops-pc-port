@@ -36,7 +36,7 @@ translated game is never downloaded from anywhere and must never be shared (see
 | | |
 |---|---|
 | **The game** | An ISO of the **USA** release, **ULUS-10202** (disc version 1.02), made from your own UMD. Other regions and versions are rejected with a clear message. |
-| **PSP fonts** | The firmware fonts, `ltn0.pgf` and `jpn0.pgf` (from `flash0:/font` of a PSP). If PPSSPP is installed, its `assets/flash0/font` folder works too. **Needed in practice**: without them the game runs, but the save screens and the on-screen keyboard (soldier names, passwords) show no text at all. |
+| **PSP fonts** | The firmware fonts, `ltn0.pgf` and `jpn0.pgf` (from `flash0:/font` of a PSP). If PPSSPP is installed, its `assets/flash0/font` folder works too. **Recommended**: without them the game runs, and the save screens and the on-screen keyboard (soldier names, passwords) show their text with a free substitute font (FreeSans) instead of the PSP's. The game's own brief "Checking Memory Stick" notice at start does not show without them. |
 | **Disk space** | About **15 GB** free while the game compiles, and about 10 GB after. |
 | **Memory** | 8 GB of RAM or more. |
 | **Graphics** | A GPU with **Vulkan 1.2** (any GPU from the last ~8 years with up-to-date drivers). |
@@ -254,7 +254,7 @@ Without the launcher, use `setup.py import-save <folder>` and `setup.py export-s
 | What you see | What to do |
 |---|---|
 | The ISO is rejected ("Unsupported disc" or "Rejected: this image does not match") | The port only takes the USA release ULUS-10202 (disc 1.02), dumped whole and unchanged. Make sure it's that version and not a patched, translated or compressed (CSO) copy. |
-| "no PSP firmware fonts found", or the save screens and the on-screen keyboard are blank | In the launcher, press **Add the fonts...** and choose the `font` folder (see [What you need](#what-you-need)). It only copies them; you don't need to install again. |
+| "no PSP firmware fonts found", or the save screens and the on-screen keyboard use a different font from the PSP's | Without the firmware fonts, those screens use a substitute font: the game works the same. To get the PSP's look, press **Add the fonts...** in the launcher and choose the `font` folder (see [What you need](#what-you-need)). It only copies them; you don't need to install again. |
 | Windows: "the compiler does not run" or "an antivirus may have removed" a file | Your antivirus quarantined part of the compiler. It's a false positive: see [If your antivirus removes a file](#if-your-antivirus-removes-a-file). |
 | Windows: the game stops at once and the launcher says "a DLL it needs is missing", or "generated files are missing" | Also the antivirus, this time on the port's files. Add the exception from [If your antivirus removes a file](#if-your-antivirus-removes-a-file) and press Install again: it redoes only what's missing. |
 | The install stops with an error | The launcher shows the last lines. Press Install again: it picks up where it stopped, and a network hiccup is often all it was. The full logs are in the install folder's `logs` folder (see [Uninstall](#uninstall)). |

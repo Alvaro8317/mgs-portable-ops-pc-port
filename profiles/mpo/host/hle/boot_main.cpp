@@ -31,6 +31,8 @@
 // F17b: --fonts is the folder with the firmware fonts (flash0:/font/*.pgf),
 // by default flash0/font next to the ISO (game/flash0/font). The report
 // adds the fonts loaded and the glyphs sceLibFont drew.
+// F23c: without them, the sceUtility dialogs (PPGe) draw their text with the
+// bundled fallback font; the report says which font the dialogs used.
 //
 // F13: the stage overlay libraries in --overlays (default: <build>/overlays)
 // are loaded at start; the report lists every stage the game loaded, whether
@@ -156,6 +158,7 @@
 #include <psapi.h>
 #endif
 
+#include "fallback_font.h"
 #include "framebuffer.h"
 #include "guest_memory.h"
 #include "hle/system.hpp"
@@ -699,7 +702,9 @@ int main(int argc, char **argv) {
     }
     config.font_dir = fonts;
     if (fonts.empty())
-        std::printf("fonts: no firmware font folder (--fonts): the game's text will not show\n");
+        std::printf("fonts: no firmware font folder (--fonts): the game's own text will not show "
+                    "and the system dialogs use the fallback font %s\n",
+                    mpo::font::FallbackFont::kName);
 #if !MPO_BOOT_SDL
     if (window) return fail("--window needs a build with the SDL frontend (mpo_frontend_sdl)");
 #endif
@@ -1300,6 +1305,8 @@ int main(int argc, char **argv) {
                         static_cast<unsigned long long>(fonts_hle.stats().glyphs_drawn),
                         static_cast<unsigned long long>(fonts_hle.stats().guest_allocs),
                         static_cast<unsigned long long>(fonts_hle.stats().guest_frees));
+            std::printf("fonts: the system dialogs draw with %s\n",
+                        system.utility().ppge().text_font_name().c_str());
         }
         {
             const mpo::hle::Utility::Stats &us = system.utility().stats();

@@ -2249,6 +2249,111 @@ void run_test(const char *name, void (*test)()) {
 // closed with Abort, an OSK the script types into, and the system
 // parameters. The dialogs draw with PPGe: lists without GE interrupts, and
 // the volatile memory lock taken and given back.
+// F23c: draws one PPGe frame (a rectangle, two lines, a wrapped text and a
+// measure) and returns the SHA-256 of what it wrote: the display list, the
+// vertices, the text images and the measured size.
+std::string ppge_frame_sha256(mh::System &system, psprecomp::Runtime &rt) {
+    mh::Ppge &ppge = system.utility().ppge();
+    mh::Ppge::Style style;
+    style.align = mh::Ppge::kHCenter;
+    style.scale = 0.6f;
+    style.color = 0xFF3060FFu;
+    style.shadow = true;
+    CHECK(ppge.begin());
+    ppge.draw_rect(10.0f, 10.0f, 100.0f, 40.0f, 0x80FFFFFFu);
+    ppge.draw_text("AB?A", 240.0f, 100.0f, style);
+    ppge.draw_text("AXB \xE2\x97\x8B", 31.0f, 10.0f, mh::Ppge::Style{});
+    ppge.draw_text_wrapped("AB BA AB BA AB BA AB BA AB BA AB", 240.0f, 132.0f, 40.0f, 0.0f, style);
+    float width = 0.0f;
+    float height = 0.0f;
+    ppge.measure_text(&width, &height, "ABBA AB", 0.5f, mh::Ppge::kWrapWord, 20.0f);
+    ppge.end();
+    const mh::Ppge::Output out = ppge.output();
+    char size[64];
+    std::snprintf(size, sizeof(size), " %a %a", static_cast<double>(width),
+                  static_cast<double>(height));
+    const std::string all = guest_sha256(rt, out.list, out.list_end - out.list) + " " +
+                            guest_sha256(rt, out.data, out.data_end - out.data) + " " +
+                            guest_sha256(rt, out.text, out.text_end - out.text) + size;
+    return psprecomp::sha256_bytes(std::span<const std::uint8_t>(
+        reinterpret_cast<const std::uint8_t *>(all.data()), all.size()));
+}
+
+// F23c: with the firmware fonts, PPGe draws exactly what it drew before the
+// fallback font existed (the hash was taken from the F18b code); without
+// them, it draws with the fallback (FreeSans) instead of drawing no text.
+void test_ppge_fonts() {
+    namespace ft = mpo::font::test;
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "mpo_hle_test_ppge_fonts";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const ft::Font font = ft::BuildFont(2);
+    for (const char *name : {"ltn0.pgf", "jpn0.pgf"}) {
+        std::ofstream out(dir / name, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char *>(font.bytes.data()),
+                  static_cast<std::streamsize>(font.bytes.size()));
+        CHECK(out.good());
+        if (!out.good()) return;
+    }
+    {
+        mh::SystemConfig config;
+        config.font_dir = dir;
+        Fixture f(config);
+        const std::string hash = ppge_frame_sha256(*f.system, f.runtime);
+        CHECK(hash == "933a09d33a1599335687f13d1f88ac25ff59825828c13a238da042df1d1929ae");
+        mh::Ppge &ppge = f.system->utility().ppge();
+        CHECK(ppge.has_fonts());
+        CHECK(!ppge.uses_fallback_font());
+        CHECK(ppge.text_font_name() == "the firmware fonts ltn0.pgf + jpn0.pgf");
+        CHECK_EQ(ppge.stats().texts, 3u);
+    }
+    // Only jpn0: it is the font, as before F23c (no fallback).
+    std::filesystem::remove(dir / "ltn0.pgf");
+    {
+        mh::SystemConfig config;
+        config.font_dir = dir;
+        Fixture f(config);
+        (void)ppge_frame_sha256(*f.system, f.runtime);
+        mh::Ppge &ppge = f.system->utility().ppge();
+        CHECK(!ppge.uses_fallback_font());
+        CHECK(ppge.text_font_name() == "the firmware font jpn0.pgf");
+        CHECK_EQ(ppge.stats().texts, 3u);
+    }
+    // No firmware font: the same frame draws with the fallback font.
+    std::filesystem::remove(dir / "jpn0.pgf");
+    for (const bool empty_dir : {false, true}) {
+        mh::SystemConfig config;
+        if (!empty_dir) config.font_dir = dir;
+        Fixture f(config);
+        mh::System &system = *f.system;
+        psprecomp::Runtime &rt = f.runtime;
+        mh::Ppge &ppge = system.utility().ppge();
+        CHECK(!ppge.has_fonts());
+        CHECK(ppge.uses_fallback_font());
+        CHECK(ppge.text_font_name().starts_with("the fallback font FreeSans"));
+        float width = 0.0f;
+        float height = 0.0f;
+        ppge.measure_text(&width, &height, "Save", 1.0f);
+        // A line is 18 px at scale 1, as with the PGF fonts.
+        CHECK(height == 18.0f);
+        CHECK(width > 20.0f && width < 60.0f);
+        ppge.measure_text(&width, &height, "AB AB AB AB", 1.0f, mh::Ppge::kWrapWord, 40.0f);
+        CHECK(height == 4.0f * 18.0f);
+        (void)ppge_frame_sha256(system, rt);
+        CHECK_EQ(ppge.stats().texts, 3u);
+        CHECK_EQ(ppge.stats().text_overflow, 0u);
+        // The text images hold glyph coverage.
+        const mh::Ppge::Output out = ppge.output();
+        std::uint32_t lit = 0;
+        for (std::uint32_t a = out.text; a < out.text_end; ++a) lit += rt.memory().load8(a) != 0u;
+        CHECK(lit > 50u);
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    CHECK(!ec);
+}
+
 void test_utility() {
     namespace sd = mpo::savedata;
     const std::filesystem::path ms0 = std::filesystem::temp_directory_path() / "mpo_hle_test_ms0";
@@ -2781,6 +2886,7 @@ int main() {
     run_test("test_audio", &test_audio);
     run_test("test_mpeg_decode", &test_mpeg_decode);
     run_test("test_font", &test_font);
+    run_test("test_ppge_fonts", &test_ppge_fonts);
     run_test("test_utility", &test_utility);
     run_test("test_net", &test_net);
     std::printf("mpo_hle_test: %d checks, %d failures\n", g_checks, g_failures);

@@ -740,9 +740,9 @@ class Setup:
       if (target / _FONTS[0]).is_file():
         return
       self._note('fonts: no PSP firmware fonts found (flash0/font/ltn0.pgf). The game runs '
-                 'without them, but the save screens and the on-screen keyboard show no text. '
-                 'Put them in '
-                 f'{target} or pass --fonts.')
+                 'without them: the save screens and the on-screen keyboard use a substitute '
+                 'font, and the game\'s own "Checking Memory Stick" notice does not show. For '
+                 f'the PSP\'s look, put them in {target} or pass --fonts.')
       return
     if found.resolve() == target.resolve():
       return
