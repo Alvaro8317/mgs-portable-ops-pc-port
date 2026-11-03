@@ -24,6 +24,7 @@ translated game is never downloaded from anywhere and must never be shared (see
 - [Install on Windows](#install-on-windows)
 - [Install on Linux and Steam Deck](#install-on-linux-and-steam-deck)
 - [Playing](#playing)
+- [Settings](#settings)
 - [Controls](#controls)
 - [Saves](#saves)
 - [If something goes wrong](#if-something-goes-wrong)
@@ -165,6 +166,33 @@ fails or you close the terminal, just run the same command again.
 - **GPS** answers "no receiver", as on a PSP without one.
 - **Multiplayer** (ad hoc and online) isn't supported yet: the game finds nobody around.
 
+## Settings
+
+The launcher's **Settings** section (with the mouse or the gamepad) chooses how the game runs. Each
+change is saved at once and applies the next time you press **Play**:
+
+- **Renderer**: Vulkan (the GPU), or Software, which is slower and is there to find out whether a
+  problem comes from the GPU.
+- **Resolution**: the game's internal resolution, from 1x (the PSP's 480x272) to 8x (3840x2176).
+  Vulkan only. A higher one is sharper and asks more of the GPU.
+- **Window**: the size of the window, from 1x (480x272) to 8x. You can still resize it by hand.
+- **Fullscreen**: borderless, at your desktop's resolution.
+
+They're kept in `settings.toml`, next to `input.toml` (see [Changing the
+controls](#changing-the-controls)):
+
+```toml
+renderer = "vulkan"   # or "soft"
+render_scale = 1      # 1 to 8
+window_scale = 2      # 1 to 8
+fullscreen = false
+```
+
+If the file is damaged or a value isn't valid, the game starts with the default for it, and the
+launcher says what was wrong. Without the launcher, `setup.py settings` shows what `setup.py play`
+will use. Options after `--` win over the file (for example
+`setup.py play -- --render-scale 2`), and so do `MPO_RENDERER` and `MPO_RENDER_SCALE`.
+
 ## Controls
 
 The game's menus confirm with **Circle** and go back with **Cross**, as on the PSP.
@@ -260,7 +288,7 @@ Without the launcher, use `setup.py import-save <folder>` and `setup.py export-s
 | The install stops with an error | The launcher shows the last lines. Press Install again: it picks up where it stopped, and a network hiccup is often all it was. The full logs are in the install folder's `logs` folder (see [Uninstall](#uninstall)). |
 | The game stops and says a function is "unimplemented" | You reached a part of the game the port can't handle yet. It stops on purpose rather than risk damaging your save. Please [open an issue](https://github.com/Alvaro8317/mgs-portable-ops-pc-port/issues) with the lines the launcher shows and say where you were in the game. |
 | Low FPS in some scenes | That stage may not be compiled yet. Look at the launcher's count and let the background compile finish. |
-| No window, or a Vulkan error | Update your GPU drivers. Under WSL or in a virtual machine there's often no real GPU. There, start the game with `MPO_RENDERER=soft` (a slower software renderer). |
+| No window, or a Vulkan error | Update your GPU drivers. Under WSL or in a virtual machine there's often no real GPU. There, choose **Software** as the renderer in the launcher's [Settings](#settings) (slower), or start the game with `MPO_RENDERER=soft`. |
 | No sound | The game uses your system's default audio device. Pick it before starting the game. If you built it from the source code, check that the sound packages are installed. |
 
 When you report a problem, **never attach the ISO, the install folder or files from the game**:

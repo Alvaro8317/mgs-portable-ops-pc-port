@@ -2,12 +2,14 @@
 //
 // mpo_launcher_core_test (F22b): the launcher's logic without a window. What
 // `setup.py status --json` prints, the progress lines of the steps, the
-// release layouts, the folder listing of the built-in browser.
+// release layouts, the folder listing of the built-in browser. F24a: the
+// game settings (from `status --json`, and settings.toml written back).
 
 #include <array>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 
@@ -83,6 +85,86 @@ void test_status() {
     check(unknown && unknown->stages_total == -1 && !unknown->playable && !unknown->fonts,
           "unknown total");
     check(!parse_status("[]"), "not an object");
+}
+
+void test_settings_in_status() {
+    // As setup.py status --json prints them (F24a).
+    const auto status = parse_status(R"({
+  "playable": true,
+  "settings_file": "/home/p/.config/mpo-pc-port/settings.toml",
+  "settings": {"renderer": "soft", "render_scale": 4, "window_scale": 3, "fullscreen": true},
+  "settings_notices": ["settings.toml: window_scale = 30 is not valid (1 to 8): using 2", 7]
+})");
+    check(status.has_value(), "settings status parses");
+    if (!status) return;
+    check(status->settings_file == "/home/p/.config/mpo-pc-port/settings.toml", "settings file");
+    const GameSettings expected{"soft", 4, 3, true};
+    check(status->settings == expected, "settings values");
+    check(status->settings_notices.size() == 1u &&
+              status->settings_notices[0].find("window_scale") != std::string::npos,
+          "notices (strings only)");
+    // Before F24a, or with values setup.py would not write: the defaults.
+    const auto old = parse_status(R"({"playable": true})");
+    check(old && old->settings == GameSettings{} && old->settings_file.empty() &&
+              old->settings_notices.empty(),
+          "no settings: defaults");
+    const auto bad = parse_status(R"({"settings": {"renderer": "opengl", "render_scale": 9,
+                                                   "window_scale": 0, "fullscreen": "yes"}})");
+    check(bad && bad->settings == GameSettings{}, "invalid values: defaults");
+    const auto edge = parse_status(R"({"settings": {"render_scale": 8, "window_scale": 1}})");
+    check(edge && edge->settings.render_scale == 8 && edge->settings.window_scale == 1 &&
+              edge->settings.renderer == "vulkan",
+          "range ends");
+    check(GameSettings{} == (GameSettings{"vulkan", 1, 2, false}), "defaults");
+}
+
+std::string read_text(const fs::path &path) {
+    std::ifstream in(path, std::ios::binary);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    // A Windows checkout may have turned the golden file into CRLF.
+    std::string lf;
+    for (const char c : text)
+        if (c != '\r') lf += c;
+    return lf;
+}
+
+void test_settings_file(const fs::path &tmp, const fs::path &golden) {
+    // setup_script_test.py reads the same golden file with setup.py's
+    // load_settings: what the launcher writes is what play reads.
+    const GameSettings settings{"vulkan", 4, 3, true};
+    const std::string text = format_settings(settings);
+    check(text == read_text(golden), "format_settings matches settings_golden.txt");
+    check(format_settings(GameSettings{}).find("render_scale = 1\nwindow_scale") ==
+              std::string::npos,
+          "a comment between keys");
+    check(format_settings(GameSettings{}).find("renderer = \"vulkan\"") != std::string::npos &&
+              format_settings(GameSettings{}).find("fullscreen = false") != std::string::npos,
+          "defaults formatted");
+    // Out of range values never reach the file.
+    const std::string clamped = format_settings(GameSettings{"opengl", 20, 0, false});
+    check(clamped.find("renderer = \"vulkan\"") != std::string::npos &&
+              clamped.find("render_scale = 8") != std::string::npos &&
+              clamped.find("window_scale = 1") != std::string::npos,
+          "clamped");
+
+    const fs::path file = tmp / "config" / "mpo-pc-port" / "settings.toml";
+    std::string error;
+    check(save_settings(file, settings, error), "save creates the folder");
+    check(read_text(file) == text, "saved text");
+    check(save_settings(file, GameSettings{}, error), "save replaces");
+    check(read_text(file) == format_settings(GameSettings{}), "replaced text");
+    check(!fs::exists(fs::path(file) += ".tmp"), "no temporary file left");
+    // A file where the folder should be.
+    touch(tmp / "blocked");
+    error.clear();
+    check(!save_settings(tmp / "blocked" / "settings.toml", settings, error) && !error.empty(),
+          "save fails with a reason");
+}
+
+void test_pixel_size() {
+    check(pixel_size(1) == "480x272", "1x");
+    check(pixel_size(4) == "1920x1088", "4x");
+    check(pixel_size(8) == "3840x2176", "8x");
 }
 
 void test_progress() {
@@ -202,8 +284,9 @@ void test_duration() {
 } // namespace
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        std::fprintf(stderr, "usage: mpo_launcher_core_test <scratch directory>\n");
+    if (argc != 3) {
+        std::fprintf(stderr,
+                     "usage: mpo_launcher_core_test <scratch directory> <settings_golden.txt>\n");
         return 2;
     }
     const fs::path tmp = fs::path(argv[1]) / "launcher_core_test";
@@ -211,6 +294,9 @@ int main(int argc, char **argv) {
     fs::remove_all(tmp, ec);
     test_json();
     test_status();
+    test_settings_in_status();
+    test_settings_file(tmp, fs::path(argv[2]));
+    test_pixel_size();
     test_progress();
     test_line_buffer();
     test_paths(tmp);

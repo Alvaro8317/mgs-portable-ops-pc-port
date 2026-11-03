@@ -10,7 +10,8 @@
 //            [--unimplemented stop|continue] [--interpreter 0|1]
 //            [--fiber-stack-mib N] [--preempt-interval N] [--us-per-preempt N]
 //            [--press <buttons>@<ms>[+<ms>]]... [--capture <dir>] [--capture-every N]
-//            [--window 0|1] [--scale N] [--filter nearest|linear] [--input-map <input.toml>]
+//            [--window 0|1] [--scale N] [--fullscreen 0|1] [--filter nearest|linear]
+//            [--input-map <input.toml>]
 //            [--overlays <dir>|none] [--renderer soft|vulkan] [--render-scale N]
 //            [--capture-window 0|1]
 //            [--audio 0|1] [--audio-wav <file>] [--fonts <dir>] [--osk-text <text>]...
@@ -58,6 +59,9 @@
 //                             the camera ([mouse_camera]: motion turns it
 //                             with the d-pad); F1 releases it. The gamepad's
 //                             right stick turns it too ([pad_camera], F23a).
+//   --fullscreen 1            opens the window fullscreen, borderless at the
+//                             desktop's resolution (SDL3's fullscreen without
+//                             a display mode); --scale is then ignored (F24a).
 //   --filter linear           scales the 480x272 image to the window with
 //                             bilinear filtering instead of the nearest
 //                             pixel (F22). --capture (VRAM) is not affected;
@@ -505,6 +509,7 @@ int main(int argc, char **argv) {
     std::uint64_t capture_every = 60u;
     bool window = false;
     int window_scale = 2;
+    bool fullscreen = false;
     bool linear_filter = false;
     std::string input_map;
     std::string overlays_dir = MPO_DEFAULT_OVERLAYS;
@@ -578,6 +583,8 @@ int main(int argc, char **argv) {
             window = value != "0";
         } else if (option == "--scale") {
             window_scale = std::max(1, std::atoi(value.c_str()));
+        } else if (option == "--fullscreen") {
+            fullscreen = value != "0";
         } else if (option == "--filter") {
             if (value != "nearest" && value != "linear")
                 return fail("--filter takes nearest or linear");
@@ -870,6 +877,7 @@ int main(int argc, char **argv) {
             SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
             mpo::frontend::PresenterConfig presenter_config;
             presenter_config.scale = window_scale;
+            presenter_config.fullscreen = fullscreen;
             presenter_config.linear_filter = linear_filter;
 #if MPO_BOOT_VULKAN
             if (vulkan) {

@@ -159,7 +159,14 @@ embebible no trae Tkinter). La release lo trae ya compilado: no tiene nada del j
      optimizadas, y la compilación de las etapas en segundo plano (`stages --low-priority`), que
      arranca sola al terminar la instalación, con **Stop** (para después de la etapa en curso,
      con el archivo `<data>/stop-stages`);
-  3. **Import a save** y **Export my saves** (`setup.py import-save/export-save`, F18c).
+  3. **Import a save** y **Export my saves** (`setup.py import-save/export-save`, F18c);
+  4. **Settings** (F24a): el renderer, la resolución interna (1× a 8×, con los píxeles), el
+     tamaño de la ventana y la pantalla completa. `status --json` trae la ruta de
+     `settings.toml` (en la carpeta de configuración, junto a `input.toml`), sus valores y los
+     avisos de lo que estaba mal; el launcher reescribe el archivo en cada cambio
+     (`save_settings`, por un temporal) y `setup.py play` lo convierte en opciones de `mpo_boot`
+     (`settings_options`). Lo que se pase después de `--` gana, y también `MPO_RENDERER` y
+     `MPO_RENDER_SCALE`.
 - Lee el estado con `setup.py status --json` y el progreso de las líneas `setup: <paso>: …`
   (`mpo_launcher_core`, probado sin ventana en `mpo_launcher_core_test`).
 - **Si el juego o un paso termina con error**, muestra sus últimas líneas (con un botón para

@@ -339,7 +339,7 @@ void Usage() {
                  "  --mapping FILE                     TOML input mapping\n"
                  "  --synthetic-input                  inject scripted keyboard/gamepad input\n"
                  "  --print-mapping                    print the input mapping as TOML and exit\n"
-                 "  --scale N --integer --linear --hidden --renderer NAME --vsync\n");
+                 "  --scale N --fullscreen --integer --linear --hidden --renderer NAME --vsync\n");
 }
 
 bool ParseArgs(int argc, char **argv, Options *o) {
@@ -401,6 +401,8 @@ bool ParseArgs(int argc, char **argv, Options *o) {
             const char *v = next();
             if (!v) return false;
             o->presenter.scale = std::atoi(v);
+        } else if (a == "--fullscreen") {
+            o->presenter.fullscreen = true; // as mpo_boot --fullscreen 1 (F24a)
         } else if (a == "--integer") {
             o->presenter.integer_scaling = true;
         } else if (a == "--linear") {

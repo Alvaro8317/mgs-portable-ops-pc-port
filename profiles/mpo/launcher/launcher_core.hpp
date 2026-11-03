@@ -8,6 +8,10 @@
 //
 // The launcher only drives setup.py (docs/analysis/distribution.md §4): every
 // step, its logs and its resumability stay in Python.
+//
+// F24a: the game settings. setup.py reads settings.toml (and says what is
+// wrong with it) in `status --json`; the launcher shows them and writes the
+// file back, which `setup.py play` turns into mpo_boot options.
 
 #pragma once
 
@@ -41,6 +45,38 @@ struct JsonValue {
 // Nullopt on malformed input or nesting deeper than 32.
 std::optional<JsonValue> parse_json(std::string_view text);
 
+// What settings.toml holds (setup.py's DEFAULT_SETTINGS are these defaults).
+struct GameSettings {
+    static constexpr int kMaxRenderScale = 8;
+    static constexpr int kMaxWindowScale = 8;
+
+    // "vulkan", or "soft" (softgpu: slower, for diagnosis).
+    std::string renderer{"vulkan"};
+    // Vulkan draws at 480x272 times this (mpo_boot --render-scale).
+    int render_scale{1};
+    // The window opens at 480x272 times this (--scale).
+    int window_scale{2};
+    // Borderless, at the desktop's resolution (--fullscreen).
+    bool fullscreen{};
+
+    bool operator==(const GameSettings &) const = default;
+};
+
+// The settings in a JSON object as `status --json` prints them; a key that is
+// missing or not valid keeps its default (setup.py already checked them).
+GameSettings parse_settings(const JsonValue &object);
+
+// settings.toml, with a comment per key for whoever opens it.
+std::string format_settings(const GameSettings &settings);
+
+// Writes settings.toml (creating its folder) through a temporary file, so a
+// crash never leaves half a file. False with `error` when it cannot.
+bool save_settings(const std::filesystem::path &file, const GameSettings &settings,
+                   std::string &error);
+
+// "1920x1088": the pixels a scale gives (480x272 times it).
+std::string pixel_size(int scale);
+
 struct InstallStatus {
     std::string data;
     std::string iso;
@@ -54,6 +90,11 @@ struct InstallStatus {
     int stages_installed{};
     int stages_optimized{};
     int stages_quick_only{};
+    // F24a: settings.toml, what it says and what setup.py found wrong in it
+    // (the defaults are used then, and the game still starts).
+    std::string settings_file;
+    GameSettings settings;
+    std::vector<std::string> settings_notices;
 };
 
 std::optional<InstallStatus> parse_status(std::string_view json);

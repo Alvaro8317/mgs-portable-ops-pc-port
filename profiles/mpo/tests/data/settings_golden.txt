@@ -1,0 +1,12 @@
+# Settings of the MGS: Portable Ops PC port. The launcher writes this file and
+# `setup.py play` reads it; a value that is not valid falls back to its
+# default. Options given to `setup.py play -- <options>` win over it.
+
+# "vulkan", or "soft" (slower, for diagnosis).
+renderer = "vulkan"
+# 1 to 8: Vulkan draws at 480x272 times this (8: 3840x2176).
+render_scale = 4
+# 1 to 8: the window opens at 480x272 times this.
+window_scale = 3
+# Borderless, at the desktop's resolution.
+fullscreen = true

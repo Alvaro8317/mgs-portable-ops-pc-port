@@ -181,6 +181,29 @@ void PushKey(SDL_Scancode code, bool down, bool repeat = false) {
     Expect(SDL_PushEvent(&e), "SDL_PushEvent");
 }
 
+// mpo_boot --fullscreen 1 (F24a): the window is fullscreen with no display
+// mode, which in SDL3 is borderless at the desktop's resolution.
+void TestFullscreen() {
+    PresenterConfig config;
+    config.hidden = true;
+    config.fullscreen = true;
+    config.render_driver = "software";
+    std::string error;
+    auto presenter = SdlPresenter::Create(config, &error);
+    if (!presenter) {
+        Expect(false, "SdlPresenter::Create (fullscreen): " + error);
+        return;
+    }
+    const SDL_WindowFlags flags = SDL_GetWindowFlags(presenter->window());
+    Expect((flags & SDL_WINDOW_FULLSCREEN) != 0, "fullscreen flag");
+    Expect(SDL_GetWindowFullscreenMode(presenter->window()) == nullptr,
+           "borderless desktop fullscreen (no exclusive mode)");
+    config.fullscreen = false;
+    auto windowed = SdlPresenter::Create(config, &error);
+    Expect(windowed && (SDL_GetWindowFlags(windowed->window()) & SDL_WINDOW_FULLSCREEN) == 0,
+           "windowed by default");
+}
+
 void TestKeyboard() {
     InputTranslator translator;
     SdlInput input(&translator);
@@ -550,6 +573,7 @@ int main(int argc, char **argv) {
     const char *input_toml = argc > 1 ? argv[1] : nullptr;
     TestFitRect();
     TestPresenter();
+    TestFullscreen();
     TestKeyboard();
     TestVirtualGamepad();
     TestMappingFile(input_toml);

@@ -19,6 +19,7 @@ python3 -I profiles/mpo/scripts/setup.py install --iso ULUS-10202.iso   # ~22 mi
 python3 -I profiles/mpo/scripts/setup.py play                           # ya se puede jugar
 python3 -I profiles/mpo/scripts/setup.py stages --low-priority          # las etapas, en segundo plano
 python3 -I profiles/mpo/scripts/setup.py status --json
+python3 -I profiles/mpo/scripts/setup.py settings                       # los ajustes de play (F24a)
 ```
 
 - `install`:
