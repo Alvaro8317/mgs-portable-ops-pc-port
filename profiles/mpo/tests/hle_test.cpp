@@ -30,6 +30,7 @@
 // counts, the native struct, char info, glyph images, close and done).
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -2270,8 +2271,10 @@ std::string ppge_frame_sha256(mh::System &system, psprecomp::Runtime &rt) {
     ppge.end();
     const mh::Ppge::Output out = ppge.output();
     char size[64];
-    std::snprintf(size, sizeof(size), " %a %a", static_cast<double>(width),
-                  static_cast<double>(height));
+    // The float bits, not %a: the UCRT prints %a differently from glibc.
+    std::snprintf(size, sizeof(size), " %08x %08x",
+                  static_cast<unsigned>(std::bit_cast<std::uint32_t>(width)),
+                  static_cast<unsigned>(std::bit_cast<std::uint32_t>(height)));
     const std::string all = guest_sha256(rt, out.list, out.list_end - out.list) + " " +
                             guest_sha256(rt, out.data, out.data_end - out.data) + " " +
                             guest_sha256(rt, out.text, out.text_end - out.text) + size;
@@ -2301,7 +2304,7 @@ void test_ppge_fonts() {
         config.font_dir = dir;
         Fixture f(config);
         const std::string hash = ppge_frame_sha256(*f.system, f.runtime);
-        CHECK(hash == "933a09d33a1599335687f13d1f88ac25ff59825828c13a238da042df1d1929ae");
+        CHECK(hash == "822ad2b069402142c3ed37f6dca685f792bd083e6e3d52a49cdf7c53b2413ed6");
         mh::Ppge &ppge = f.system->utility().ppge();
         CHECK(ppge.has_fonts());
         CHECK(!ppge.uses_fallback_font());
