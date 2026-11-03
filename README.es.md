@@ -25,6 +25,7 @@ juego traducido no se descarga de ningún lado y nunca se debe compartir (ver
 - [Instalar en Windows](#instalar-en-windows)
 - [Instalar en Linux y Steam Deck](#instalar-en-linux-y-steam-deck)
 - [Jugar](#jugar)
+- [Ajustes](#ajustes)
 - [Controles](#controles)
 - [Saves](#saves)
 - [Si algo falla](#si-algo-falla)
@@ -173,6 +174,33 @@ la terminal, basta con volver a correr el mismo comando.
 - **El GPS** responde "no hay receptor", como una PSP sin él.
 - **El multijugador** (ad hoc y online) todavía no está: el juego no encuentra a nadie alrededor.
 
+## Ajustes
+
+La sección **Settings** del launcher (con el mouse o con el mando) elige cómo corre el juego. Cada
+cambio se guarda en el acto y vale desde la próxima vez que pulses **Play**:
+
+- **Renderer**: Vulkan (la GPU), o Software, que es más lento y sirve para saber si un problema
+  viene de la GPU.
+- **Resolution**: la resolución interna del juego, de 1x (los 480x272 de la PSP) a 8x
+  (3840x2176). Solo con Vulkan. Una más alta se ve más nítida y le pide más a la GPU.
+- **Window**: el tamaño de la ventana, de 1x (480x272) a 8x. Se puede seguir cambiando a mano.
+- **Fullscreen**: pantalla completa sin bordes, a la resolución del escritorio.
+
+Se guardan en `settings.toml`, junto a `input.toml` (ver [Cambiar los
+controles](#cambiar-los-controles)):
+
+```toml
+renderer = "vulkan"   # o "soft"
+render_scale = 1      # de 1 a 8
+window_scale = 2      # de 1 a 8
+fullscreen = false
+```
+
+Si el archivo está dañado o un valor no vale, el juego arranca con el valor por defecto de ese
+ajuste, y el launcher dice qué estaba mal. Sin el launcher, `setup.py settings` muestra lo que va a
+usar `setup.py play`. Las opciones después de `--` ganan sobre el archivo (por ejemplo,
+`setup.py play -- --render-scale 2`), y también `MPO_RENDERER` y `MPO_RENDER_SCALE`.
+
 ## Controles
 
 En los menús del juego se confirma con **Círculo** y se vuelve con **Cruz**, como en la PSP.
@@ -269,7 +297,7 @@ Sin el launcher, usa `setup.py import-save <carpeta>` y `setup.py export-save <c
 | La instalación se para con un error | El launcher muestra las últimas líneas. Vuelve a pulsar Install: sigue donde quedó, y muchas veces era solo un corte de la red. Los logs completos están en la carpeta `logs` de la carpeta de instalación (ver [Desinstalar](#desinstalar)). |
 | El juego se detiene y dice que una función es "unimplemented" | Llegaste a una parte del juego que el port todavía no sabe manejar. Se detiene a propósito, para no arriesgar tu save. Por favor, [abre un issue](https://github.com/Alvaro8317/mgs-portable-ops-pc-port/issues) con las líneas que muestra el launcher y di en qué parte del juego estabas. |
 | Pocos FPS en algunas escenas | Puede que esa etapa todavía no esté compilada. Mira el contador del launcher y deja que termine la compilación en segundo plano. |
-| No sale la ventana, o sale un error de Vulkan | Actualiza los drivers de la GPU. En WSL o en una máquina virtual muchas veces no hay una GPU de verdad. Ahí, arranca el juego con `MPO_RENDERER=soft` (un renderer por software, más lento). |
+| No sale la ventana, o sale un error de Vulkan | Actualiza los drivers de la GPU. En WSL o en una máquina virtual muchas veces no hay una GPU de verdad. Ahí, elige **Software** como renderer en los [Ajustes](#ajustes) del launcher (más lento), o arranca el juego con `MPO_RENDERER=soft`. |
 | No hay sonido | El juego usa el dispositivo de audio por defecto del sistema. Elígelo antes de abrir el juego. Si lo compilaste desde el código, revisa que estén los paquetes del sonido. |
 
 Cuando reportes un problema, **nunca adjuntes el ISO, la carpeta de instalación ni archivos del

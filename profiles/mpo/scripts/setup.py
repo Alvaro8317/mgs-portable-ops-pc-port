@@ -34,7 +34,9 @@ what is missing.
            <data>/stop-stages makes it stop after the stage it is on (the
            launcher's Stop button).
   play     runs the game: mpo_boot in a window with <data>/overlays, the
-           firmware fonts and the default save folder.
+           firmware fonts and the default save folder, with the player's
+           settings (F24a, below).
+  settings the settings `play` uses, and what is wrong with them.
   import-save <dir> / export-save <dir>
            `mpo --import-save/--export-save` (F18c) with the installed disc:
            a PSP or PPSSPP save into the port's save folder, and back.
@@ -48,7 +50,9 @@ Usage:
       [--cc clang --cxx clang++] [--toolchain auto|portable|system] [--ffmpeg-root <dir>]
   python3 -I profiles/mpo/scripts/setup.py stages [--data <dir>] [--jobs N] [--low-priority]
       [--only st02,st03t1] [--keep-objects] [--level both|quick|optimized]
-  python3 -I profiles/mpo/scripts/setup.py play [--data <dir>] [-- <mpo_boot options>...]
+  python3 -I profiles/mpo/scripts/setup.py play [--data <dir>] [--settings <file>]
+      [-- <mpo_boot options>...]
+  python3 -I profiles/mpo/scripts/setup.py settings [--settings <file>] [--json]
   python3 -I profiles/mpo/scripts/setup.py import-save|export-save <dir> [--data <dir>]
       [--overwrite]
   python3 -I profiles/mpo/scripts/setup.py status [--data <dir>] [--json]
@@ -56,6 +60,20 @@ Usage:
 <data> defaults to %LOCALAPPDATA%\\mpo-pc-port\\install on Windows and
 $XDG_DATA_HOME/mpo-pc-port/install (~/.local/share/...) elsewhere. It holds the
 decrypted game, the generated C++ and the build: nothing in it may be shared.
+
+The settings (F24a) are <config>/settings.toml, next to input.toml:
+%APPDATA%\\mpo-pc-port on Windows, $XDG_CONFIG_HOME/mpo-pc-port
+(~/.config/...) elsewhere. The launcher writes it; by hand it is:
+
+  renderer = "vulkan"   # or "soft" (softgpu, slower: for diagnosis)
+  render_scale = 1      # 1 to 8: Vulkan draws at 480x272 times this
+  window_scale = 2      # 1 to 8: the window opens at 480x272 times this
+  fullscreen = false    # borderless, at the desktop's resolution
+
+`play` turns them into mpo_boot options. A missing file means the defaults
+above; a damaged one, or a value that is not valid, too, with a notice: it
+never stops the game. MPO_RENDERER and MPO_RENDER_SCALE win over the file,
+and the options after `--` win over everything.
 """
 
 import argparse
@@ -98,6 +116,17 @@ QUICK_LEVEL = '0'
 # The release layout next to the source tree (packaging/windows): the FFmpeg
 # the CI built with the pinned llvm-mingw.
 _RELEASE_FFMPEG = _ROOT.parent / 'ffmpeg'
+
+SETTINGS_NAME = 'settings.toml'
+DEFAULT_SETTINGS = {
+    'renderer': 'vulkan',
+    'render_scale': 1,
+    'window_scale': 2,
+    'fullscreen': False,
+}
+_RENDERERS = ('vulkan', 'soft')
+_MAX_RENDER_SCALE = 8
+_MAX_WINDOW_SCALE = 8
 
 
 class SetupError(Exception):
@@ -179,6 +208,100 @@ def default_data_dir(environ=None, system=None):
     return pathlib.Path(base) / 'mpo-pc-port' / 'install'
   base = environ.get('XDG_DATA_HOME') or str(pathlib.Path.home() / '.local' / 'share')
   return pathlib.Path(base) / 'mpo-pc-port' / 'install'
+
+
+def default_config_dir(environ=None, system=None):
+  """The folder of input.toml and settings.toml.
+
+  The same as mpo_boot's (host/savedata/save_paths.cpp, default_config_dir).
+  """
+  environ = os.environ if environ is None else environ
+  system = platform.system() if system is None else system
+  if system == 'Windows':
+    base = environ.get('APPDATA') or str(pathlib.Path.home() / 'AppData' / 'Roaming')
+    return pathlib.Path(base) / 'mpo-pc-port'
+  # XDG: a relative XDG_CONFIG_HOME is invalid and must be ignored.
+  base = environ.get('XDG_CONFIG_HOME')
+  if not base or not pathlib.PurePosixPath(base).is_absolute():
+    base = str(pathlib.Path(environ.get('HOME') or pathlib.Path.home()) / '.config')
+  return pathlib.Path(base) / 'mpo-pc-port'
+
+
+def _valid_setting(key, value):
+  if key == 'renderer':
+    return isinstance(value, str) and value in _RENDERERS
+  if key == 'fullscreen':
+    return isinstance(value, bool)
+  top = _MAX_RENDER_SCALE if key == 'render_scale' else _MAX_WINDOW_SCALE
+  # TOML's true is a Python bool, which is an int: not a scale.
+  return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= top
+
+
+_SETTING_RANGES = {
+    'renderer': ' or '.join(f'"{r}"' for r in _RENDERERS),
+    'render_scale': f'1 to {_MAX_RENDER_SCALE}',
+    'window_scale': f'1 to {_MAX_WINDOW_SCALE}',
+    'fullscreen': 'true or false',
+}
+
+
+def load_settings(path):
+  """Reads settings.toml: (settings, notices).
+
+  Never raises: a missing file gives the defaults; a damaged one, or a value
+  that is not valid, its default and a notice that says so.
+  """
+  settings = dict(DEFAULT_SETTINGS)
+  name = pathlib.Path(path).name
+  try:
+    with open(path, 'rb') as f:
+      table = tomllib.load(f)
+  except FileNotFoundError:
+    return settings, []
+  except (OSError, ValueError) as error:
+    # tomllib.TOMLDecodeError is a ValueError, also for text that is not UTF-8.
+    return settings, [f'{name} cannot be read ({error}): using the default settings']
+  notices = []
+  for key, value in table.items():
+    if key not in DEFAULT_SETTINGS:
+      notices.append(f'{name}: unknown setting {key!r}, ignored')
+    elif not _valid_setting(key, value):
+      # As TOML writes it (true, "text"); a date or a table as Python's str.
+      shown = json.dumps(value, default=str)
+      shown = shown if len(shown) <= 40 else shown[:37] + '...'
+      notices.append(f'{name}: {key} = {shown} is not valid ({_SETTING_RANGES[key]}): '
+                     f'using {json.dumps(DEFAULT_SETTINGS[key])}')
+    else:
+      settings[key] = value
+  return settings, notices
+
+
+def settings_options(settings, extra=(), environ=None):
+  """The mpo_boot options for these settings (from load_settings).
+
+  An option that `extra` (what the player passed after --) also gives is left
+  out, so theirs wins; so do MPO_RENDERER and MPO_RENDER_SCALE over the file.
+  --render-scale only goes with the Vulkan renderer (mpo_boot refuses it with
+  softgpu).
+  """
+  environ = os.environ if environ is None else environ
+  extra = [str(e) for e in extra]
+  # mpo_boot reads --option value pairs, the last one winning.
+  given = {extra[i]: extra[i + 1] for i in range(0, len(extra) - 1, 2)}
+  renderer = environ.get('MPO_RENDERER') or settings['renderer']
+  options = []
+  if '--renderer' in given:
+    renderer = given['--renderer']
+  else:
+    options += ['--renderer', renderer]
+  if '--scale' not in given:
+    options += ['--scale', str(settings['window_scale'])]
+  if '--fullscreen' not in given:
+    options += ['--fullscreen', '1' if settings['fullscreen'] else '0']
+  if ('--render-scale' not in given and renderer == 'vulkan' and
+      not environ.get('MPO_RENDER_SCALE')):
+    options += ['--render-scale', str(settings['render_scale'])]
+  return options
 
 
 def natural_key(name):
@@ -324,6 +447,9 @@ class Setup:
     self.toolchain_dir = self.data / 'toolchain'
     self.stop_file = self.data / 'stop-stages'
     self.state_path = self.data / 'state.json'
+    settings = getattr(args, 'settings', None)
+    self.settings_path = (pathlib.Path(settings) if settings else
+                          default_config_dir() / SETTINGS_NAME)
     self.state = self._load_state()
     self._use_toolchain_path()
 
@@ -918,6 +1044,21 @@ class Setup:
 
   # -- play ------------------------------------------------------------------
 
+  def play_command(self, extra):
+    """The mpo_boot command line for `play`, with the settings (F24a)."""
+    settings, notices = load_settings(self.settings_path)
+    self._note(f'settings: {self.settings_path}' if self.settings_path.is_file() else
+               f'settings: the defaults ({self.settings_path} does not exist)')
+    for notice in notices:
+      self._note(f'settings: {notice}')
+    command = [self.mpo_boot, '--elf', self.game / 'elf' / 'mgp_main.elf',
+               '--iso', self.state.get('iso'), '--window', '1', '--overlays', self.overlays]
+    command += settings_options(settings, extra)
+    fonts = self.data / 'flash0' / 'font'
+    if fonts.is_dir():
+      command += ['--fonts', fonts]
+    return [str(c) for c in command + list(extra)]
+
   def play(self, extra):
     if not self.mpo_boot.is_file():
       raise SetupError('mpo_boot is not built yet: run `setup.py install` first')
@@ -934,15 +1075,9 @@ class Setup:
       self._note(f'play: {ready} of {len(kept)} stages compiled; the rest run on the interpreter '
                  '(slower, FPS drops in heavy scenes). Compile them, also while playing, with: '
                  f'setup.py stages --data "{self.data}" --low-priority')
-    command = [self.mpo_boot, '--elf', self.game / 'elf' / 'mgp_main.elf', '--iso', iso,
-               '--window', '1', '--overlays', self.overlays,
-               '--renderer', os.environ.get('MPO_RENDERER', 'vulkan')]
-    fonts = self.data / 'flash0' / 'font'
-    if fonts.is_dir():
-      command += ['--fonts', fonts]
-    command += extra
-    print('setup: ' + ' '.join(str(c) for c in command), flush=True)
-    code = subprocess.run([str(c) for c in command], check=False).returncode
+    command = self.play_command(extra)
+    print('setup: ' + ' '.join(command), flush=True)
+    code = subprocess.run(command, check=False).returncode
     if code != 0:
       # A DLL that fails to load stops mpo_boot before it prints anything.
       print(f'setup: mpo_boot ended with {describe_exit(code)}', flush=True)
@@ -979,6 +1114,7 @@ class Setup:
       total = len(self.stage_corpora(_load_script('build_overlays'), _load_script('generate'))[0])
     except (OSError, ValueError, SetupError):
       total = None
+    settings, notices = load_settings(self.settings_path)
     return {
         'data': str(self.data),
         'iso': self.state.get('iso'),
@@ -993,6 +1129,10 @@ class Setup:
         'stages_quick_only': len(quick_names - optimized_names),
         'stages_compiled_seconds': round(sum(s.get('seconds', 0) for s in stages.values()) +
                                          sum(s.get('seconds', 0) for s in quick.values())),
+        # F24a: what the launcher's Settings show, and where it saves them.
+        'settings_file': str(self.settings_path),
+        'settings': settings,
+        'settings_notices': notices,
     }
 
 
@@ -1072,8 +1212,12 @@ def parse_args(argv):
   common(fonts)
   fonts.add_argument('--fonts', help='folder with the fonts (default: look for them)')
 
+  def settings_option(p):
+    p.add_argument('--settings', help=f'the settings file (default: <config>/{SETTINGS_NAME})')
+
   play = sub.add_parser('play', help='run the game')
   common(play)
+  settings_option(play)
   play.add_argument('extra', nargs=argparse.REMAINDER,
                     help='options for mpo_boot, after --')
 
@@ -1086,7 +1230,13 @@ def parse_args(argv):
 
   status = sub.add_parser('status', help='what is done')
   common(status)
+  settings_option(status)
   status.add_argument('--json', action='store_true')
+
+  settings = sub.add_parser('settings', help='the settings that play uses')
+  common(settings)
+  settings_option(settings)
+  settings.add_argument('--json', action='store_true')
   return parser.parse_args(argv)
 
 
@@ -1111,6 +1261,17 @@ def main(argv):
     elif args.command == 'play':
       extra = args.extra[1:] if args.extra[:1] == ['--'] else args.extra
       return setup.play(extra)
+    elif args.command == 'settings':
+      settings, notices = load_settings(setup.settings_path)
+      if args.json:
+        print(json.dumps({'file': str(setup.settings_path), 'settings': settings,
+                          'notices': notices}, indent=2))
+      else:
+        print(f'file: {setup.settings_path}')
+        for key, value in settings.items():
+          print(f'{key}: {json.dumps(value)}')
+        for notice in notices:
+          print(f'notice: {notice}')
     elif args.command == 'status':
       status = setup.status()
       if args.json:

@@ -5,14 +5,15 @@
 // the swapchain, scaled with the 480x272 aspect ratio. Manual test of the
 // presentation path; the output holds game pixels (CLAUDE.md §1.1).
 //
-//   mpo_vulkan_view [--frames N] [--scale S] [--integer] [--linear] [--vsync]
-//                   [--capture out.png] <dump.ppdmp>
+//   mpo_vulkan_view [--frames N] [--scale S] [--fullscreen] [--integer] [--linear]
+//                   [--vsync] [--capture out.png] <dump.ppdmp>
 //
 // --frames N exits after N presented frames (0 = until the window closes).
 // --capture writes the last swapchain image as PNG (when the surface allows
 // reading it back). Validation follows MPO_VK_VALIDATION / the build type;
 // any validation error makes the exit code 1. MPO_RENDER_SCALE=N renders and
-// shows the target at N x (F23b).
+// shows the target at N x (F23b). --fullscreen opens the window as
+// mpo_boot --fullscreen 1 does (borderless, at the desktop's resolution, F24a).
 
 #include <cstdio>
 #include <cstdlib>
@@ -31,8 +32,8 @@
 namespace {
 
 void Usage() {
-    std::fprintf(stderr, "usage: mpo_vulkan_view [--frames N] [--scale S] [--integer] [--linear]"
-                         " [--vsync] [--capture out.png] <dump.ppdmp>\n");
+    std::fprintf(stderr, "usage: mpo_vulkan_view [--frames N] [--scale S] [--fullscreen] "
+                         "[--integer] [--linear] [--vsync] [--capture out.png] <dump.ppdmp>\n");
 }
 
 } // namespace
@@ -50,6 +51,8 @@ int main(int argc, char **argv) {
             frames = std::atoi(argv[++i]);
         } else if (arg == "--scale" && i + 1 < argc) {
             config.scale = std::atoi(argv[++i]);
+        } else if (arg == "--fullscreen") {
+            config.fullscreen = true;
         } else if (arg == "--integer") {
             config.integer_scaling = true;
         } else if (arg == "--linear") {
@@ -161,7 +164,8 @@ int main(int argc, char **argv) {
         if (last) running = false;
     }
     vkDeviceWaitIdle(ctx->device());
-    std::printf("presented %d frame(s)\n", presented);
+    std::printf("presented %d frame(s), swapchain %dx%d at the end\n", presented,
+                presenter->width(), presenter->height());
 
     if (!capture_path.empty()) {
         if (capture.empty()) {

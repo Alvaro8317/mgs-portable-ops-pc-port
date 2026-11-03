@@ -26,6 +26,9 @@ struct PresenterConfig {
     std::string title = "MGS: Portable Ops";
     // Initial window size: 480x272 times this.
     int scale = 2;
+    // Borderless at the desktop's resolution: SDL3's fullscreen when no
+    // display mode is set (SDL_SetWindowFullscreenMode(nullptr)). The
+    // SdlVulkanWindow does the same (mpo_boot --fullscreen, F24a).
     bool fullscreen = false;
     bool hidden = false;
     bool integer_scaling = false;

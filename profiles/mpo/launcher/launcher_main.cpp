@@ -10,7 +10,11 @@
 //   3. Play (`setup.py play`), while `setup.py stages --low-priority`
 //      compiles the stages in the background (quick -O0 first, then
 //      optimized), with Stop (after the current stage);
-//   4. import and export saves (`setup.py import-save/export-save`, F18c).
+//   4. import and export saves (`setup.py import-save/export-save`, F18c);
+//   5. the game settings (F24a): the renderer, the internal resolution, the
+//      window size and fullscreen, saved in settings.toml (the path and the
+//      values come from `setup.py status --json`), which `setup.py play`
+//      turns into mpo_boot options.
 //
 // When the game stops with an error (for example an HLE import that is not
 // implemented, CLAUDE.md §5) its last lines are shown, never hidden.
@@ -279,6 +283,8 @@ struct Launcher {
     std::string failure_title;
     std::vector<std::string> failure_lines;
     bool failure_request{};
+    // Why settings.toml could not be written, until the next change.
+    std::string settings_error;
 
     std::vector<std::string> command(std::string_view subcommand,
                                      const std::vector<std::string> &args) const {
@@ -470,6 +476,104 @@ struct Launcher {
         }
     }
 
+    // A row of radio buttons, 1x to `top`x; true when the player picked one.
+    static bool scale_buttons(const char *id, int top, int &value) {
+        bool changed = false;
+        ImGui::PushID(id);
+        for (int n = 1; n <= top; ++n) {
+            if (n > 1) ImGui::SameLine();
+            const std::string label = std::to_string(n) + "x";
+            if (ImGui::RadioButton(label.c_str(), value == n)) {
+                changed = value != n;
+                value = n;
+            }
+        }
+        ImGui::PopID();
+        return changed;
+    }
+
+    void draw_settings() {
+        ImGui::SeparatorText("Settings");
+        for (const std::string &notice : status->settings_notices)
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "%s", notice.c_str());
+        if (status->settings_file.empty()) {
+            ImGui::TextDisabled("This setup.py does not know the settings.");
+            return;
+        }
+        using mpo::launcher::GameSettings;
+        GameSettings settings = status->settings;
+        const bool vulkan = settings.renderer == "vulkan";
+        ImGui::BeginDisabled(game.running());
+        if (ImGui::BeginTable("settings", 2, ImGuiTableFlags_SizingFixedFit)) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Renderer");
+            ImGui::TableNextColumn();
+            if (ImGui::RadioButton("Vulkan", vulkan)) settings.renderer = "vulkan";
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Software (slow, for diagnosis)", !vulkan))
+                settings.renderer = "soft";
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Resolution");
+            ImGui::TableNextColumn();
+            ImGui::BeginDisabled(!vulkan);
+            scale_buttons("render", GameSettings::kMaxRenderScale, settings.render_scale);
+            ImGui::SameLine();
+            if (vulkan)
+                ImGui::TextDisabled("%s pixels",
+                                    mpo::launcher::pixel_size(settings.render_scale).c_str());
+            else
+                ImGui::TextDisabled("(Vulkan only)");
+            ImGui::EndDisabled();
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Window");
+            ImGui::TableNextColumn();
+            ImGui::BeginDisabled(settings.fullscreen);
+            scale_buttons("window", GameSettings::kMaxWindowScale, settings.window_scale);
+            ImGui::SameLine();
+            if (settings.fullscreen)
+                ImGui::TextDisabled("(fullscreen)");
+            else
+                ImGui::TextDisabled("%s pixels",
+                                    mpo::launcher::pixel_size(settings.window_scale).c_str());
+            ImGui::EndDisabled();
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();
+            ImGui::Checkbox("Fullscreen (borderless, at the desktop's resolution)",
+                            &settings.fullscreen);
+            ImGui::EndTable();
+        }
+        ImGui::EndDisabled();
+        if (!(settings == status->settings)) {
+            // Kept even when the file cannot be written, so it is tried once
+            // per change, not once per frame.
+            status->settings = settings;
+            settings_error.clear();
+            // The file is rewritten with valid values only.
+            if (mpo::launcher::save_settings(text_path(status->settings_file), settings,
+                                             settings_error))
+                status->settings_notices.clear();
+        }
+        if (!settings_error.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "Not saved: %s",
+                               settings_error.c_str());
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        if (game.running())
+            ImGui::TextWrapped("They apply the next time you press Play.");
+        else
+            ImGui::TextWrapped("Changes are saved at once, in %s", status->settings_file.c_str());
+        ImGui::PopStyleColor();
+    }
+
     void open_import_browser() {
         pick = Pick::kImportSave;
         browser.open("Choose the save folder to import", Browser::Mode::kFolder, {},
@@ -600,6 +704,7 @@ struct Launcher {
             draw_install();
         } else {
             draw_play();
+            draw_settings();
             draw_saves();
             draw_fonts();
             ImGui::SeparatorText("Install");

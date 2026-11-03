@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Tests for setup.py and the versioned analysis hints (F22), without the game."""
+"""Tests for setup.py and the versioned analysis hints (F22), without the game.
+
+F24a: the settings (settings.toml) and the mpo_boot options they become.
+"""
 
 import argparse
 import hashlib
@@ -10,6 +13,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 _PROFILE = pathlib.Path(__file__).resolve().parent.parent
@@ -133,7 +137,8 @@ class StageLibraryTest(unittest.TestCase):
 
   def test_status_counts_each_stage_once(self):
     with tempfile.TemporaryDirectory() as tmp:
-      args = argparse.Namespace(data=tmp)
+      # Never the player's own settings.toml.
+      args = argparse.Namespace(data=tmp, settings=str(pathlib.Path(tmp) / 'settings.toml'))
       s = setup.Setup(args)
       s.overlays.mkdir(parents=True)
       for name in ('stage_st02.so', 'stage_st02-O0.so', 'stage_st03-O0.so', 'stage_st04.so',
@@ -144,7 +149,211 @@ class StageLibraryTest(unittest.TestCase):
       self.assertEqual(status['stages_optimized'], 2)
       self.assertEqual(status['stages_quick_only'], 1)
       self.assertEqual(status['stages_total'], 92)
+      self.assertEqual(status['settings'], setup.DEFAULT_SETTINGS)
+      self.assertEqual(status['settings_notices'], [])
+      self.assertEqual(status['settings_file'], args.settings)
       json.dumps(status)
+
+
+class ConfigDirTest(unittest.TestCase):
+  """The folder of input.toml, as mpo_boot's default_config_dir (save_paths.cpp)."""
+
+  def test_windows(self):
+    path = setup.default_config_dir({'APPDATA': r'C:\Users\p\AppData\Roaming'}, 'Windows')
+    self.assertEqual(path.name, 'mpo-pc-port')
+    self.assertTrue(str(path).startswith(r'C:\Users\p\AppData\Roaming'))
+
+  def test_xdg(self):
+    path = setup.default_config_dir({'XDG_CONFIG_HOME': '/cfg', 'HOME': '/home/p'}, 'Linux')
+    self.assertEqual(path, pathlib.Path('/cfg/mpo-pc-port'))
+
+  def test_relative_xdg_is_ignored(self):
+    path = setup.default_config_dir({'XDG_CONFIG_HOME': 'cfg', 'HOME': '/home/p'}, 'Linux')
+    self.assertEqual(path, pathlib.Path('/home/p/.config/mpo-pc-port'))
+
+  def test_default_settings_file(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      env = {'APPDATA': tmp, 'XDG_CONFIG_HOME': tmp}
+      with mock.patch.dict(setup.os.environ, env):
+        s = setup.Setup(argparse.Namespace(data=tmp))
+      self.assertEqual(s.settings_path, pathlib.Path(tmp) / 'mpo-pc-port' / 'settings.toml')
+
+
+class SettingsTest(unittest.TestCase):
+  """settings.toml (F24a): read, checked, and turned into mpo_boot options."""
+
+  def setUp(self):
+    self._tmp = tempfile.TemporaryDirectory()
+    self.tmp = pathlib.Path(self._tmp.name)
+    self.path = self.tmp / 'settings.toml'
+
+  def tearDown(self):
+    self._tmp.cleanup()
+
+  def load(self, text):
+    self.path.write_bytes(text if isinstance(text, bytes) else text.encode('utf-8'))
+    return setup.load_settings(self.path)
+
+  def test_missing_file_is_the_defaults(self):
+    settings, notices = setup.load_settings(self.tmp / 'nothing.toml')
+    self.assertEqual(settings, setup.DEFAULT_SETTINGS)
+    self.assertEqual(notices, [])
+    self.assertEqual(setup.DEFAULT_SETTINGS, {'renderer': 'vulkan', 'render_scale': 1,
+                                              'window_scale': 2, 'fullscreen': False})
+
+  def test_reads_what_the_launcher_writes(self):
+    # launcher_core_test.cpp checks that format_settings writes exactly this.
+    golden = _PROFILE / 'tests' / 'data' / 'settings_golden.txt'
+    settings, notices = setup.load_settings(golden)
+    self.assertEqual(notices, [])
+    self.assertEqual(settings, {'renderer': 'vulkan', 'render_scale': 4, 'window_scale': 3,
+                                'fullscreen': True})
+    # And as a Windows checkout may leave it.
+    crlf = golden.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
+    self.assertEqual(self.load(crlf), (settings, []))
+
+  def test_every_valid_value(self):
+    for scale in range(1, 9):
+      settings, notices = self.load(f'render_scale = {scale}\nwindow_scale = {scale}\n')
+      self.assertEqual(notices, [])
+      self.assertEqual((settings['render_scale'], settings['window_scale']), (scale, scale))
+    settings, notices = self.load('renderer = "soft"\nfullscreen = true\n')
+    self.assertEqual(notices, [])
+    self.assertEqual((settings['renderer'], settings['fullscreen']), ('soft', True))
+
+  def test_invalid_values_fall_back_one_by_one(self):
+    settings, notices = self.load('renderer = "opengl"\nrender_scale = 9\nwindow_scale = 0\n'
+                                  'fullscreen = "yes"\n')
+    self.assertEqual(settings, setup.DEFAULT_SETTINGS)
+    self.assertEqual(len(notices), 4)
+    self.assertIn('renderer = "opengl" is not valid ("vulkan" or "soft"): using "vulkan"',
+                  notices[0])
+    self.assertIn('render_scale = 9 is not valid (1 to 8): using 1', notices[1])
+    self.assertIn('window_scale = 0 is not valid (1 to 8): using 2', notices[2])
+    self.assertIn('fullscreen = "yes" is not valid (true or false): using false', notices[3])
+    # The good ones stay.
+    settings, notices = self.load('render_scale = 4\nwindow_scale = 2.5\n')
+    self.assertEqual((settings['render_scale'], settings['window_scale']), (4, 2))
+    self.assertEqual(len(notices), 1)
+
+  def test_types_toml_could_confuse(self):
+    # true is a Python int; 2.0 and "2" are not integers; a table is not a value.
+    for text in ('render_scale = true', 'render_scale = 2.0', 'render_scale = "2"',
+                 'render_scale = [2]', 'fullscreen = 1', 'renderer = ["vulkan"]',
+                 '[render_scale]\nvalue = 2', 'render_scale = 1979-05-27'):
+      settings, notices = self.load(text + '\n')
+      self.assertEqual(settings, setup.DEFAULT_SETTINGS, text)
+      self.assertEqual(len(notices), 1, text)
+
+  def test_unknown_keys_are_ignored(self):
+    settings, notices = self.load('render_scale = 3\nshader = "crt"\n')
+    self.assertEqual(settings['render_scale'], 3)
+    self.assertEqual(notices, ["settings.toml: unknown setting 'shader', ignored"])
+
+  def test_damaged_file_is_the_defaults(self):
+    for data in (b'render_scale = \n', b'render_scale = 4\nrender_scale = 5\n',
+                 b'\xff\xfe r\x00', b'[unclosed\n', b'\x00' * 64):
+      settings, notices = self.load(data)
+      self.assertEqual(settings, setup.DEFAULT_SETTINGS, data)
+      self.assertEqual(len(notices), 1, data)
+      self.assertIn('cannot be read', notices[0])
+      self.assertIn('using the default settings', notices[0])
+
+  def test_unreadable_file_is_the_defaults(self):
+    # A folder where the file should be.
+    self.path.mkdir()
+    settings, notices = setup.load_settings(self.path)
+    self.assertEqual(settings, setup.DEFAULT_SETTINGS)
+    self.assertEqual(len(notices), 1)
+
+  def test_long_values_are_shortened(self):
+    _, notices = self.load('renderer = "' + 'x' * 200 + '"\n')
+    self.assertLess(len(notices[0]), 160)
+    self.assertIn('...', notices[0])
+
+  def options(self, settings=None, extra=(), environ=None):
+    return setup.settings_options(dict(setup.DEFAULT_SETTINGS, **(settings or {})), extra,
+                                  environ or {})
+
+  def test_options(self):
+    self.assertEqual(self.options(), ['--renderer', 'vulkan', '--scale', '2', '--fullscreen', '0',
+                                      '--render-scale', '1'])
+    self.assertEqual(self.options({'render_scale': 8, 'window_scale': 4, 'fullscreen': True}),
+                     ['--renderer', 'vulkan', '--scale', '4', '--fullscreen', '1',
+                      '--render-scale', '8'])
+
+  def test_render_scale_is_vulkan_only(self):
+    # mpo_boot refuses --render-scale above 1 with softgpu.
+    self.assertEqual(self.options({'renderer': 'soft', 'render_scale': 4}),
+                     ['--renderer', 'soft', '--scale', '2', '--fullscreen', '0'])
+    self.assertNotIn('--render-scale',
+                     self.options({'render_scale': 4}, extra=['--renderer', 'soft']))
+
+  def test_options_after_dashes_win(self):
+    extra = ['--scale', '5', '--render-scale', '2', '--fullscreen', '1', '--renderer', 'vulkan']
+    self.assertEqual(self.options({'render_scale': 6, 'renderer': 'soft'}, extra), [])
+    # The last of a repeated option is the one mpo_boot keeps.
+    options = self.options({'render_scale': 6},
+                           ['--renderer', 'vulkan', '--renderer', 'soft'])
+    self.assertNotIn('--render-scale', options)
+    # Others pass through untouched and leave the settings alone.
+    self.assertEqual(self.options({'window_scale': 3}, ['--filter', 'linear']),
+                     ['--renderer', 'vulkan', '--scale', '3', '--fullscreen', '0',
+                      '--render-scale', '1'])
+
+  def test_environment_wins_over_the_file(self):
+    self.assertEqual(self.options({'renderer': 'vulkan', 'render_scale': 4},
+                                  environ={'MPO_RENDERER': 'soft'}),
+                     ['--renderer', 'soft', '--scale', '2', '--fullscreen', '0'])
+    # mpo_boot reads MPO_RENDER_SCALE itself when --render-scale is not given.
+    self.assertNotIn('--render-scale', self.options({'render_scale': 4},
+                                                    environ={'MPO_RENDER_SCALE': '2'}))
+    self.assertIn('--render-scale', self.options(environ={'MPO_RENDERER': ''}))
+
+  def play_setup(self, settings_text=None):
+    data = self.tmp / 'data'
+    iso = self.tmp / 'game.iso'
+    iso.write_bytes(b'')
+    if settings_text is not None:
+      self.path.write_text(settings_text, encoding='utf-8')
+    s = setup.Setup(argparse.Namespace(data=str(data), settings=str(self.path)))
+    s.state['iso'] = str(iso)
+    return s
+
+  def test_play_command(self):
+    s = self.play_setup('render_scale = 4\nwindow_scale = 4\nfullscreen = true\n')
+    with mock.patch.dict(setup.os.environ, clear=False) as env:
+      env.pop('MPO_RENDERER', None)
+      env.pop('MPO_RENDER_SCALE', None)
+      command = s.play_command(['--scale', '1', '--filter', 'linear'])
+    self.assertEqual(command[0], str(s.mpo_boot))
+    joined = ' '.join(command)
+    self.assertIn('--window 1', joined)
+    self.assertIn('--renderer vulkan --fullscreen 1 --render-scale 4', joined)
+    self.assertTrue(joined.endswith('--scale 1 --filter linear'))
+    self.assertEqual(command.count('--scale'), 1)
+
+  def test_play_command_with_a_damaged_file(self):
+    s = self.play_setup('render_scale = [\n')
+    with mock.patch.dict(setup.os.environ, clear=False) as env:
+      env.pop('MPO_RENDERER', None)
+      env.pop('MPO_RENDER_SCALE', None)
+      with mock.patch('sys.stdout') as out:
+        command = s.play_command([])
+    printed = ''.join(c.args[0] for c in out.write.call_args_list)
+    self.assertIn('setup: settings: settings.toml cannot be read', printed)
+    self.assertIn('--renderer vulkan --scale 2 --fullscreen 0 --render-scale 1',
+                  ' '.join(command))
+
+  def test_settings_command(self):
+    self.path.write_text('window_scale = 99\n', encoding='utf-8')
+    with mock.patch('sys.stdout') as out:
+      code = setup.main(['settings', '--settings', str(self.path), '--json'])
+    self.assertEqual(code, 0)
+    report = json.loads(''.join(c.args[0] for c in out.write.call_args_list))
+    self.assertEqual(report['settings'], setup.DEFAULT_SETTINGS)
+    self.assertEqual(len(report['notices']), 1)
+    self.assertEqual(report['file'], str(self.path))
 
 
 class LockTest(unittest.TestCase):

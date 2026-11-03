@@ -445,4 +445,6 @@ add_test(NAME mpo_savedata_transfer_test COMMAND mpo_savedata_transfer_test)
 add_executable(mpo_launcher_core_test launcher_core_test.cpp)
 target_link_libraries(mpo_launcher_core_test PRIVATE mpo_launcher_core)
 mpo_target_warnings(mpo_launcher_core_test)
-add_test(NAME mpo_launcher_core_test COMMAND mpo_launcher_core_test "${CMAKE_CURRENT_BINARY_DIR}")
+add_test(NAME mpo_launcher_core_test
+         COMMAND mpo_launcher_core_test "${CMAKE_CURRENT_BINARY_DIR}"
+                 "${CMAKE_CURRENT_SOURCE_DIR}/data/settings_golden.txt")

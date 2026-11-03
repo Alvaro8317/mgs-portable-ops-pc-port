@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 
 namespace mpo::launcher {
 
@@ -239,6 +240,13 @@ private:
     std::size_t pos_{};
 };
 
+// UTF-8, so names in any language survive on Windows (path::string() would
+// convert them to the ANSI code page, or throw).
+std::string utf8(const std::filesystem::path &path) {
+    const std::u8string text = path.u8string();
+    return std::string(text.begin(), text.end());
+}
+
 std::string lower(std::string_view text) {
     std::string out(text);
     std::transform(out.begin(), out.end(), out.begin(),
@@ -290,7 +298,91 @@ std::optional<InstallStatus> parse_status(std::string_view json) {
     status.stages_installed = int_field(*root, "stages_installed", 0);
     status.stages_optimized = int_field(*root, "stages_optimized", 0);
     status.stages_quick_only = int_field(*root, "stages_quick_only", 0);
+    status.settings_file = string_field(*root, "settings_file");
+    if (const JsonValue *settings = root->find("settings");
+        settings != nullptr && settings->kind == JsonValue::Kind::kObject)
+        status.settings = parse_settings(*settings);
+    if (const JsonValue *notices = root->find("settings_notices");
+        notices != nullptr && notices->kind == JsonValue::Kind::kArray) {
+        for (const JsonValue &notice : notices->items)
+            if (notice.kind == JsonValue::Kind::kString)
+                status.settings_notices.push_back(notice.string);
+    }
     return status;
+}
+
+GameSettings parse_settings(const JsonValue &object) {
+    GameSettings settings;
+    const std::string renderer = string_field(object, "renderer");
+    if (renderer == "vulkan" || renderer == "soft") settings.renderer = renderer;
+    const int render_scale = int_field(object, "render_scale", 0);
+    if (render_scale >= 1 && render_scale <= GameSettings::kMaxRenderScale)
+        settings.render_scale = render_scale;
+    const int window_scale = int_field(object, "window_scale", 0);
+    if (window_scale >= 1 && window_scale <= GameSettings::kMaxWindowScale)
+        settings.window_scale = window_scale;
+    settings.fullscreen = bool_field(object, "fullscreen");
+    return settings;
+}
+
+std::string format_settings(const GameSettings &settings) {
+    char text[1024];
+    std::snprintf(text, sizeof text,
+                  "# Settings of the MGS: Portable Ops PC port. The launcher writes this file and\n"
+                  "# `setup.py play` reads it; a value that is not valid falls back to its\n"
+                  "# default. Options given to `setup.py play -- <options>` win over it.\n"
+                  "\n"
+                  "# \"vulkan\", or \"soft\" (slower, for diagnosis).\n"
+                  "renderer = \"%s\"\n"
+                  "# 1 to %d: Vulkan draws at 480x272 times this (8: 3840x2176).\n"
+                  "render_scale = %d\n"
+                  "# 1 to %d: the window opens at 480x272 times this.\n"
+                  "window_scale = %d\n"
+                  "# Borderless, at the desktop's resolution.\n"
+                  "fullscreen = %s\n",
+                  settings.renderer == "soft" ? "soft" : "vulkan", GameSettings::kMaxRenderScale,
+                  std::clamp(settings.render_scale, 1, GameSettings::kMaxRenderScale),
+                  GameSettings::kMaxWindowScale,
+                  std::clamp(settings.window_scale, 1, GameSettings::kMaxWindowScale),
+                  settings.fullscreen ? "true" : "false");
+    return text;
+}
+
+bool save_settings(const std::filesystem::path &file, const GameSettings &settings,
+                   std::string &error) {
+    std::error_code ec;
+    if (file.has_parent_path()) std::filesystem::create_directories(file.parent_path(), ec);
+    if (ec) {
+        error = "cannot create " + utf8(file.parent_path()) + ": " + ec.message();
+        return false;
+    }
+    std::filesystem::path tmp = file;
+    tmp += ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        out << format_settings(settings);
+        out.flush();
+        if (!out) {
+            error = "cannot write " + utf8(tmp);
+            out.close();
+            std::filesystem::remove(tmp, ec);
+            return false;
+        }
+    }
+    // Replaces the old file (MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows).
+    std::filesystem::rename(tmp, file, ec);
+    if (ec) {
+        error = "cannot replace " + utf8(file) + ": " + ec.message();
+        std::filesystem::remove(tmp, ec);
+        return false;
+    }
+    return true;
+}
+
+std::string pixel_size(int scale) {
+    char text[32];
+    std::snprintf(text, sizeof text, "%dx%d", 480 * scale, 272 * scale);
+    return text;
 }
 
 std::optional<Progress> parse_progress_line(std::string_view line) {
