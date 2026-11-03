@@ -1756,6 +1756,11 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   sin conservar las fechas, o en otra zona horaria, `tramo3` se separa en el flip 1620 (el diálogo
   de saves muestra la fecha del save). Que `--record-input` guarde las fechas y la zona, o que
   `--replay-input` las fije.
+- **Leaks intermitentes de lavapipe en la CI** (2026-11-03): el job `Linux gcc asan-ubsan` falló dos
+  veces seguidas en los `mpo_vulkan_*` con fugas pequeñas (224 a 560 bytes) desde módulos ya
+  descargados (`<unknown module>`, el driver o las capas) y pasó al repetirlo, con la misma Mesa
+  (25.2.8-0ubuntu0.24.04.4). En local no se reproduce. Si sigue, una supresión de LSan o
+  `LSAN_OPTIONS` para esos tests.
 - **`#include <algorithm>` en `allegrex_context.hpp`** (el fork, F22b): cuando convenga
   recompilar todo el corpus; después se quitan el `-include algorithm` del `CMakeLists.txt` raíz y
   el `CXXFLAGS` del job `windows-llvm-mingw`.
