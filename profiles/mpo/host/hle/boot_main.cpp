@@ -131,6 +131,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -229,6 +230,37 @@ MemoryUse memory_use() {
 #endif
     return use;
 }
+
+#if defined(_WIN32)
+// A crash on a player's PC ends with only an NTSTATUS exit code; this says
+// where it happened (F22c).
+LONG WINAPI report_crash(EXCEPTION_POINTERS *info) {
+    const EXCEPTION_RECORD *record = info->ExceptionRecord;
+    char module[MAX_PATH] = "?";
+    std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(record->ExceptionAddress);
+    HMODULE handle = nullptr;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           static_cast<LPCSTR>(record->ExceptionAddress), &handle)) {
+        GetModuleFileNameA(handle, module, sizeof(module));
+        offset -= reinterpret_cast<std::uintptr_t>(handle);
+    }
+    std::fprintf(stderr, "mpo_boot: crashed with exception 0x%08lX at %s+0x%llx",
+                 static_cast<unsigned long>(record->ExceptionCode), module,
+                 static_cast<unsigned long long>(offset));
+    if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
+        const ULONG_PTR kind = record->ExceptionInformation[0];
+        std::fprintf(stderr, " (%s 0x%llx)",
+                     kind == 0   ? "reading"
+                     : kind == 8 ? "executing"
+                                 : "writing",
+                     static_cast<unsigned long long>(record->ExceptionInformation[1]));
+    }
+    std::fprintf(stderr, "\n");
+    std::fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
 
 void print_memory(const char *when, const MemoryUse &use) {
     if (use.known)
@@ -440,6 +472,9 @@ int main(int argc, char **argv) {
     // The launcher reads stdout through a pipe, which the C runtime buffers
     // fully: a crash would lose every line printed before it (F22c).
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+#if defined(_WIN32)
+    SetUnhandledExceptionFilter(report_crash);
+#endif
     std::string elf_path;
     std::string iso;
     std::string ms0;
