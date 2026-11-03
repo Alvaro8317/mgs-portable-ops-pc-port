@@ -7,6 +7,7 @@
 #include <bit>
 #include <cmath>
 
+#include "fallback_font.h"
 #include "hle/system.hpp"
 
 namespace mpo::hle {
@@ -157,14 +158,27 @@ bool Ppge::init() {
     return true;
 }
 
+void Ppge::check_fonts() {
+    if (fonts_checked_) return;
+    fonts_checked_ = true;
+    font_ = system_.fonts().firmware_font("ltn0.pgf");
+    fallback_ = system_.fonts().firmware_font("jpn0.pgf");
+    if (font_ == nullptr) std::swap(font_, fallback_);
+    system_.hle().trace_event("ppge: text with %s", text_font_name().c_str());
+}
+
 bool Ppge::has_fonts() {
-    if (!fonts_checked_) {
-        fonts_checked_ = true;
-        font_ = system_.fonts().firmware_font("ltn0.pgf");
-        fallback_ = system_.fonts().firmware_font("jpn0.pgf");
-        if (font_ == nullptr) std::swap(font_, fallback_);
-    }
+    check_fonts();
     return font_ != nullptr;
+}
+
+std::string Ppge::text_font_name() {
+    check_fonts();
+    if (font_ == nullptr) return std::string("the fallback font ") + font::FallbackFont::kName;
+    // font_ is ltn0 unless only jpn0 is there.
+    if (fallback_ != nullptr) return "the firmware fonts ltn0.pgf + jpn0.pgf";
+    return font_ == system_.fonts().firmware_font("ltn0.pgf") ? "the firmware font ltn0.pgf"
+                                                              : "the firmware font jpn0.pgf";
 }
 
 void Ppge::write_cmd(std::uint8_t cmd, std::uint32_t data) {
@@ -294,13 +308,17 @@ void Ppge::draw_rect(float x1, float y1, float x2, float y2, std::uint32_t color
 // ---- Text ------------------------------------------------------------------
 
 float Ppge::line_height() {
-    if (!has_fonts()) return 1.0f;
+    if (!has_fonts()) {
+        return std::max(1.0f, static_cast<float>(font::FallbackFont::ascender() -
+                                                 font::FallbackFont::descender()) /
+                                  64.0f);
+    }
     const font::PgfHeader &h = font_->header();
     return std::max(1.0f, static_cast<float>(h.maxAscender - h.maxDescender) / 64.0f);
 }
 
 float Ppge::ascent() {
-    if (!has_fonts()) return 0.0f;
+    if (!has_fonts()) return static_cast<float>(font::FallbackFont::ascender()) / 64.0f;
     return static_cast<float>(font_->header().maxAscender) / 64.0f;
 }
 
@@ -312,6 +330,14 @@ const Ppge::Glyph *Ppge::glyph(char32_t code) {
     const auto found = glyphs_.find(code);
     if (found != glyphs_.end()) return found->second.valid ? &found->second : nullptr;
     Glyph g;
+    if (!has_fonts()) {
+        // The fallback font (F23c). A space has no bitmap.
+        if (const font::FallbackGlyph *f = font::FallbackFont::find(code); f != nullptr) {
+            g.advance = static_cast<float>(f->advance) / 64.0f;
+            (void)font::FallbackFont::rasterize(code, &g.bitmap);
+            g.valid = true;
+        }
+    }
     for (const font::Pgf *pgf : {font_, fallback_}) {
         if (pgf == nullptr || !pgf->HasGlyph(static_cast<int>(code))) continue;
         font::PgfCharInfo info{};
@@ -403,7 +429,6 @@ void Ppge::measure_text(float *width, float *height, std::string_view text, floa
                         float wrap_width) {
     if (width != nullptr) *width = 0.0f;
     if (height != nullptr) *height = 0.0f;
-    if (!has_fonts()) return;
     const float k = pixel_scale(scale);
     const Layout l =
         layout(decode_utf8(text), (wrap_width <= 0.0f ? 480.0f : wrap_width) / k, wrap);
@@ -557,7 +582,7 @@ void Ppge::draw_text_image(const TextImage &im, float x, float y, const Style &s
 }
 
 void Ppge::draw_text(std::string_view text, float x, float y, const Style &style) {
-    if (!drawing_ || text.empty() || !has_fonts()) return;
+    if (!drawing_ || text.empty()) return;
     const float k = pixel_scale(style.scale);
     const TextImage im = text_image(text, (480.0f - x) / k, kEllipsis, style.align);
     draw_text_image(im, x, y, style);
@@ -565,7 +590,7 @@ void Ppge::draw_text(std::string_view text, float x, float y, const Style &style
 
 void Ppge::draw_text_wrapped(std::string_view text, float x, float y, float wrap_width,
                              float wrap_height, const Style &style) {
-    if (!drawing_ || text.empty() || !has_fonts()) return;
+    if (!drawing_ || text.empty()) return;
     std::string s(text);
     if (wrap_height != 0.0f) {
         while (!s.empty() && (s.back() == ' ' || s.back() == '\n' || s.back() == '\t'))

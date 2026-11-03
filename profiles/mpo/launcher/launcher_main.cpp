@@ -399,8 +399,8 @@ struct Launcher {
         ImGui::SeparatorText("2. PSP firmware fonts");
         ImGui::TextWrapped(
             "The folder flash0/font of a PSP or of PPSSPP. If it is next to the ISO, it is found "
-            "by itself. Without it the game runs, but the save screens and the on-screen keyboard "
-            "show no text.");
+            "by itself. Without it the game runs, and the save screens and the on-screen keyboard "
+            "use a substitute font.");
         ImGui::SetNextItemWidth(-160.0f);
         ImGui::InputText("##fonts", &fonts);
         ImGui::SameLine();
@@ -499,8 +499,8 @@ struct Launcher {
             ImGui::TextDisabled("Installed.");
         } else {
             ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
-                               "Missing: the save screens and the on-screen keyboard show no "
-                               "text.");
+                               "Missing: the save screens and the on-screen keyboard use a "
+                               "substitute font.");
             ImGui::TextWrapped("Choose the flash0/font folder of a PSP, or assets/flash0/font in "
                                "the PPSSPP folder.");
         }

@@ -54,6 +54,26 @@ add_executable(mpo_font_pgf_test font_pgf_test.cpp)
 target_link_libraries(mpo_font_pgf_test PRIVATE mpo_font)
 mpo_target_warnings(mpo_font_pgf_test)
 add_test(NAME mpo_font_pgf_test COMMAND mpo_font_pgf_test)
+# F23c: the fallback font of the PPGe dialogs, and whether its committed glyph
+# table is fresh. The table is regenerated and compared only when the font is
+# given (MPO_FREEFONT_ZIP, freefont-ttf-20120503.zip); otherwise the check
+# only compares the generator's hash.
+add_executable(mpo_font_fallback_test font_fallback_test.cpp)
+target_link_libraries(mpo_font_fallback_test PRIVATE mpo_font)
+mpo_target_warnings(mpo_font_fallback_test)
+add_test(NAME mpo_font_fallback_test COMMAND mpo_font_fallback_test)
+set(MPO_FREEFONT_ZIP "" CACHE FILEPATH
+    "freefont-ttf-20120503.zip, to regenerate the fallback font in mpo_font_fallback_fresh")
+if(Python3_FOUND)
+    set(mpo_freefont_args "")
+    if(MPO_FREEFONT_ZIP)
+        set(mpo_freefont_args --zip "${MPO_FREEFONT_ZIP}")
+    endif()
+    add_test(NAME mpo_font_fallback_fresh
+             COMMAND Python3::Interpreter -I
+                     ${CMAKE_CURRENT_SOURCE_DIR}/../host/font/make_fallback_font.py --check
+                     ${mpo_freefont_args})
+endif()
 
 option(MPO_AUDIO_PPSSPP_DIFFTEST
        "Build mpo_audio_ppsspp_difftest from the PPSSPP sources in MPO_PPSSPP_SOURCE_DIR" OFF)
@@ -65,7 +85,7 @@ endif()
 if(Python3_FOUND)
     foreach(mpo_tool_test IN ITEMS tools_test zstd_lite_test ge_usage_test ge_frame_diff_test
                                    overlay_scripts_test capture_compare_test setup_script_test
-                                   release_check_test hash_saves_test)
+                                   release_check_test hash_saves_test make_fallback_font_test)
         add_test(NAME mpo_${mpo_tool_test}
                  COMMAND Python3::Interpreter -I ${CMAKE_CURRENT_SOURCE_DIR}/${mpo_tool_test}.py)
     endforeach()
