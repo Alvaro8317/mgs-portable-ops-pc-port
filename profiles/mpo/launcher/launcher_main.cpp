@@ -122,11 +122,20 @@ public:
             ImGui::InputText("##path", &path_input_, ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::SameLine();
         if (ImGui::Button("Go") || typed) go_to(text_path(path_input_));
+        // The next item on this row, or on a new one when it does not fit:
+        // Windows adds a button per drive (F22c: Cancel ended up off the window).
+        const auto next_in_row = [](const char *label, float extra) {
+            const ImGuiStyle &style = ImGui::GetStyle();
+            const float width =
+                ImGui::CalcTextSize(label, nullptr, true).x + style.FramePadding.x * 2.0f + extra;
+            ImGui::SameLine();
+            if (ImGui::GetContentRegionAvail().x < width) ImGui::NewLine();
+        };
         if (ImGui::Button("Up") && folder_.has_parent_path() && folder_.parent_path() != folder_) {
             folder_ = folder_.parent_path();
             refresh();
         }
-        ImGui::SameLine();
+        next_in_row("Home", 0.0f);
         if (ImGui::Button("Home")) {
             folder_ = home_folder();
             refresh();
@@ -136,7 +145,7 @@ public:
                 const std::string root = std::string(1, drive) + ":\\";
                 std::error_code ec;
                 if (!fs::exists(root, ec)) continue;
-                ImGui::SameLine();
+                next_in_row(root.c_str(), 0.0f);
                 if (ImGui::Button(root.c_str())) {
                     folder_ = root;
                     refresh();
@@ -144,28 +153,21 @@ public:
             }
         }
         for (const Shortcut &shortcut : shortcuts_) {
-            ImGui::SameLine();
+            next_in_row(shortcut.label.c_str(), 0.0f);
             if (ImGui::Button(shortcut.label.c_str())) {
                 folder_ = shortcut.folder;
                 refresh();
             }
         }
-        ImGui::SameLine();
-        if (ImGui::Checkbox("Show hidden folders", &show_hidden_)) refresh();
-        if (mode_ == Mode::kFolder) {
-            ImGui::SameLine();
-            if (ImGui::Button("Choose this folder")) {
-                chosen_ = folder_;
-                done = true;
-                ImGui::CloseCurrentPopup();
-            }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        constexpr const char *kHidden = "Show hidden folders";
+        next_in_row(kHidden, ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x);
+        if (ImGui::Checkbox(kHidden, &show_hidden_)) refresh();
         if (!error_.empty())
             ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s", error_.c_str());
         ImGui::Separator();
-        if (ImGui::BeginChild("entries", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None)) {
+        // The buttons go below the list, always in view.
+        if (ImGui::BeginChild("entries", ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing()),
+                              ImGuiChildFlags_None)) {
             std::optional<fs::path> next;
             for (const mpo::launcher::DirEntry &entry : entries_) {
                 const std::string label = (entry.directory ? "[folder]  " : "") + entry.name;
@@ -187,6 +189,15 @@ public:
             }
         }
         ImGui::EndChild();
+        if (mode_ == Mode::kFolder) {
+            if (ImGui::Button("Choose this folder")) {
+                chosen_ = folder_;
+                done = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+        }
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
         return done;
     }
@@ -245,7 +256,7 @@ std::vector<Shortcut> ppsspp_shortcuts() {
     return shortcuts;
 }
 
-enum class Pick { kNone, kIso, kFonts, kImportSave, kExportSave };
+enum class Pick { kNone, kIso, kFonts, kAddFonts, kImportSave, kExportSave };
 
 struct Launcher {
     mpo::launcher::LauncherPaths paths;
@@ -481,6 +492,26 @@ struct Launcher {
         ImGui::EndDisabled();
     }
 
+    // After the install: the fonts can be added (or changed) at any time.
+    void draw_fonts() {
+        ImGui::SeparatorText("PSP firmware fonts");
+        if (status->fonts) {
+            ImGui::TextDisabled("Installed.");
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
+                               "Missing: the save screens and the on-screen keyboard show no "
+                               "text.");
+            ImGui::TextWrapped("Choose the flash0/font folder of a PSP, or assets/flash0/font in "
+                               "the PPSSPP folder.");
+        }
+        ImGui::BeginDisabled(work.running() || game.running());
+        if (ImGui::Button(status->fonts ? "Change the fonts..." : "Add the fonts...")) {
+            pick = Pick::kAddFonts;
+            browser.open("Choose the fonts folder", Browser::Mode::kFolder, {});
+        }
+        ImGui::EndDisabled();
+    }
+
     void draw_work() {
         ImGui::SeparatorText(work_name.c_str());
         float fraction = 0.0f;
@@ -534,6 +565,9 @@ struct Launcher {
         case Pick::kFonts:
             fonts = path_text(chosen);
             break;
+        case Pick::kAddFonts:
+            start_work("Fonts", command("fonts", {"--fonts", path_text(chosen)}));
+            break;
         case Pick::kImportSave:
             start_work("Import save", command("import-save", {path_text(chosen)}));
             break;
@@ -567,6 +601,7 @@ struct Launcher {
         } else {
             draw_play();
             draw_saves();
+            draw_fonts();
             ImGui::SeparatorText("Install");
             ImGui::TextDisabled("Folder: %s", status->data.c_str());
             ImGui::TextDisabled("ISO: %s", status->iso.c_str());

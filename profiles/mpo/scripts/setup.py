@@ -727,9 +727,15 @@ class Setup:
     self.state['main'] = {'mpo_boot': str(self.mpo_boot), 'built': time.time()}
     self._save_state()
 
-  def step_fonts(self):
+  def fonts_installed(self):
+    return all((self.data / 'flash0' / 'font' / f).is_file() for f in _FONTS)
+
+  def step_fonts(self, required=False):
     found = find_fonts(self.args.fonts, self.state.get('iso'))
     target = self.data / 'flash0' / 'font'
+    if found is None and required and not self.fonts_installed():
+      raise SetupError(f'no PSP firmware fonts found ({" and ".join(_FONTS)}): choose the '
+                       'flash0/font folder of a PSP, or assets/flash0/font of PPSSPP')
     if found is None:
       if (target / _FONTS[0]).is_file():
         return
@@ -979,6 +985,7 @@ class Setup:
         'toolchain': self.state.get('toolchain', {}).get('versions'),
         'disc_installed': (self.game / 'install.toml').is_file(),
         'playable': self.mpo_boot.is_file() and 'main' in self.state,
+        'fonts': self.fonts_installed(),
         'stages_total': total,
         # A stage with either library runs compiled; `optimized` is the end state.
         'stages_installed': len(optimized_names | quick_names),
@@ -989,6 +996,18 @@ class Setup:
     }
 
 
+def ppsspp_windows_font_dirs(environ=None):
+  """PPSSPP's assets/flash0/font where its Windows installer puts it."""
+  environ = os.environ if environ is None else environ
+  roots = [environ.get(k) for k in ('ProgramFiles', 'ProgramW6432', 'ProgramFiles(x86)')]
+  if environ.get('LOCALAPPDATA'):
+    roots.append(str(pathlib.Path(environ['LOCALAPPDATA']) / 'Programs'))
+  folders = []
+  for root in dict.fromkeys(r for r in roots if r):
+    folders.append(pathlib.Path(root) / 'PPSSPP' / 'assets' / 'flash0' / 'font')
+  return folders
+
+
 def find_fonts(explicit, iso):
   """Returns a folder with the firmware fonts, or None."""
   candidates = []
@@ -997,6 +1016,7 @@ def find_fonts(explicit, iso):
   if iso:
     candidates.append(pathlib.Path(iso).parent / 'flash0' / 'font')
   candidates += [pathlib.Path(p).expanduser() for p in _PPSSPP_FONT_DIRS]
+  candidates += ppsspp_windows_font_dirs()
   for folder in candidates:
     if all((folder / font).is_file() for font in _FONTS):
       return folder
@@ -1048,6 +1068,10 @@ def parse_args(argv):
   stages.add_argument('--level', choices=('both', 'quick', 'optimized'), default='both',
                       help='both: every stage at -O0 first, then optimized (default)')
 
+  fonts = sub.add_parser('fonts', help='copy the PSP firmware fonts into the install')
+  common(fonts)
+  fonts.add_argument('--fonts', help='folder with the fonts (default: look for them)')
+
   play = sub.add_parser('play', help='run the game')
   common(play)
   play.add_argument('extra', nargs=argparse.REMAINDER,
@@ -1077,6 +1101,8 @@ def main(argv):
     elif args.command == 'install':
       with setup.lock():
         setup.install()
+    elif args.command == 'fonts':
+      setup.step_fonts(required=True)
     elif args.command == 'stages':
       with setup.lock():
         setup.stages()

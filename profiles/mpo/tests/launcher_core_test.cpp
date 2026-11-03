@@ -64,6 +64,7 @@ void test_status() {
   "toolchain": {"llvm-mingw": "20261020"},
   "disc_installed": true,
   "playable": true,
+  "fonts": true,
   "stages_total": 92,
   "stages_installed": 7,
   "stages_optimized": 5,
@@ -74,12 +75,13 @@ void test_status() {
     if (!status) return;
     check(status->data == "C:\\Users\\p\\AppData\\Local\\mpo-pc-port\\install", "data");
     check(status->iso.empty(), "null ISO");
-    check(status->disc_installed && status->playable, "flags");
+    check(status->disc_installed && status->playable && status->fonts, "flags");
     check(status->stages_total == 92 && status->stages_installed == 7 &&
               status->stages_optimized == 5 && status->stages_quick_only == 2,
           "stage counts");
     const auto unknown = parse_status(R"({"stages_total": null})");
-    check(unknown && unknown->stages_total == -1 && !unknown->playable, "unknown total");
+    check(unknown && unknown->stages_total == -1 && !unknown->playable && !unknown->fonts,
+          "unknown total");
     check(!parse_status("[]"), "not an object");
 }
 

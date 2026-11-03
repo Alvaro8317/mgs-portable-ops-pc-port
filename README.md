@@ -250,7 +250,7 @@ Without the launcher, use `setup.py import-save <folder>` and `setup.py export-s
 | What you see | What to do |
 |---|---|
 | The ISO is rejected ("Unsupported disc" or "Rejected: this image does not match") | The port only takes the USA release ULUS-10202 (disc 1.02), dumped whole and unchanged. Make sure it's that version and not a patched, translated or compressed (CSO) copy. |
-| "no PSP firmware fonts found", or the save screens and the on-screen keyboard are blank | Put the fonts in a `flash0/font` folder next to the ISO (see [What you need](#what-you-need)) and run Install again. Only that step is redone. |
+| "no PSP firmware fonts found", or the save screens and the on-screen keyboard are blank | In the launcher, press **Add the fonts...** and choose the `font` folder (see [What you need](#what-you-need)). It only copies them; you don't need to install again. |
 | Windows: "the compiler does not run" or "an antivirus may have removed" a file | Your antivirus quarantined part of the compiler. It's a false positive: see [If your antivirus removes a file](#if-your-antivirus-removes-a-file). |
 | Windows: the game stops at once and the launcher says "a DLL it needs is missing", or "generated files are missing" | Also the antivirus, this time on the port's files. Add the exception from [If your antivirus removes a file](#if-your-antivirus-removes-a-file) and press Install again: it redoes only what's missing. |
 | The install stops with an error | The launcher shows the last lines. Press Install again: it picks up where it stopped, and a network hiccup is often all it was. The full logs are in the install folder's `logs` folder (see [Uninstall](#uninstall)). |

@@ -46,6 +46,8 @@ struct InstallStatus {
     std::string iso;
     bool disc_installed{};
     bool playable{};
+    // The firmware fonts are in the install (the dialogs need them, F22c).
+    bool fonts{};
     // -1 when setup.py could not count them.
     int stages_total{-1};
     int stages_installed{};

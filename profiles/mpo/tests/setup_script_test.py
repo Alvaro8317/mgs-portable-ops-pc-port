@@ -94,6 +94,33 @@ class FontsTest(unittest.TestCase):
       with self.assertRaises(setup.SetupError):
         setup.find_fonts(tmp, None)
 
+  def test_ppsspp_on_windows(self):
+    folders = setup.ppsspp_windows_font_dirs({'ProgramFiles': 'C:\\Program Files',
+                                              'ProgramW6432': 'C:\\Program Files',
+                                              'LOCALAPPDATA': 'C:\\Users\\p\\AppData\\Local'})
+    for folder in folders:
+      self.assertEqual(folder.parts[-4:], ('PPSSPP', 'assets', 'flash0', 'font'))
+    self.assertEqual(len(folders), 2, 'one folder per distinct root')
+
+  def test_fonts_command(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      root = pathlib.Path(tmp)
+      s = setup.Setup(argparse.Namespace(data=str(root / 'data'), fonts=None))
+      if setup.find_fonts(None, None) is None:
+        # Nothing on this machine: the `fonts` command says so (the launcher shows it).
+        with self.assertRaises(setup.SetupError):
+          s.step_fonts(required=True)
+      self.assertFalse(s.status()['fonts'] and not s.fonts_installed())
+      source = root / 'font'
+      source.mkdir()
+      for name in ('ltn0.pgf', 'jpn0.pgf', 'ltn1.pgf'):
+        (source / name).write_bytes(b'pgf')
+      s.args.fonts = str(source)
+      s.step_fonts(required=True)
+      self.assertTrue(s.fonts_installed())
+      self.assertTrue(s.status()['fonts'])
+      self.assertTrue((s.data / 'flash0' / 'font' / 'ltn1.pgf').is_file())
+
 
 class StageLibraryTest(unittest.TestCase):
 
