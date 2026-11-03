@@ -68,6 +68,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
 | 5 ✅ | F23a, F23b, F23c | Adelantadas a pedido del usuario el 2026-11-03, antes de cerrar M6 (F21b y F22c siguen abiertas). **No cambian el ABI del runtime** (`psprecomp::Runtime`, `AllegrexContext`, `kOverlayAbiVersion`) ni los headers del framework: las etapas que el jugador ya compiló tienen que seguir cargando. F23a: F22 · F23b: F15b · F23c: F18b (F23c se sumó el mismo día). Integrada el 2026-11-03, junto con el spike de los controles en pantalla (`docs/analysis/button-prompts.md`). |
+| 6 🟨 | F24a, F24b, F24c y un spike de widescreen | Pedidas por el usuario el 2026-11-03, con las mismas reglas que la ola 5: **no cambian el ABI del runtime** ni los headers del framework. F24a: F23b · F24b: el spike de los controles (`docs/analysis/button-prompts.md`) y F23c · F24c: F15b y el mismo spike. |
 | — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 ✅ → F22b ✅ → F22c 🟨 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22, F22b y F22c desde el 2026-11-01 (ver su ficha). |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
@@ -124,6 +125,9 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F23a | Cámara con el stick derecho (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; probarla con mando en el juego: pendiente del usuario) |
 | F23b | Resolución interna configurable, hasta 4K (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; `--render-scale 1..8`; la prueba con GPU real en Windows y el selector del launcher: pendientes) |
 | F23c | Fuente libre de respaldo para los diálogos (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; `sceFont` sigue necesitando las PGF; Windows sin fuentes: pendiente del usuario) |
+| F24a | Ajustes del juego en el launcher (autónomo) | M7 | 🟨 en curso (ola 6) |
+| F24b | Controles en pantalla según el dispositivo, parte I (autónomo) | M7 | 🟨 en curso (ola 6) |
+| F24c | Reemplazo de texturas por hash (autónomo) | M7 | 🟨 en curso (ola 6) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
 Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se explica en la nota de sesión).
@@ -1562,6 +1566,67 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 ---
 
 ## F23+ — Mejoras (se planifican cuando M6 esté cerrado)
+
+### F24a — Ajustes del juego en el launcher, autónomo (ola 6)
+
+- **Objetivo**: elegir en el launcher, con mouse o con mando, cómo corre el juego, sin variables
+  de entorno.
+- **Requisitos**: F23b (`--render-scale`), F22b (el launcher).
+- **Tareas**:
+  - Una sección "Settings" en el launcher instalado:
+    - la resolución interna de 1× a 8×, mostrando los píxeles (8× = 3840×2176);
+    - el tamaño de la ventana (`--scale`) y la pantalla completa (si `mpo_boot` no la tiene,
+      añadirla con SDL3);
+    - el renderer (Vulkan o software, para diagnóstico).
+  - Se guardan en un archivo de ajustes de la carpeta de configuración (`%APPDATA%\mpo-pc-port`
+    o `~/.config/mpo-pc-port`), que `setup.py play` lee y convierte en opciones de `mpo_boot`. Lo
+    que el jugador pase a mano después de `--` gana.
+  - Con un valor inválido o un archivo dañado, se usan los valores por defecto con un aviso; nunca
+    se impide jugar.
+  - README.md y README.es.md a la vez.
+- **Criterios de hecho**: tests de `setup.py` (leer, validar y convertir en opciones) y del
+  núcleo del launcher (sin ventana). Una captura del launcher con la sección nueva. `ctest`
+  completo en Clang y GCC.
+
+### F24b — Controles en pantalla según el dispositivo, parte I, autónomo (ola 6)
+
+- **Objetivo**: el paso 1 del spike (`docs/analysis/button-prompts.md`): saber cuál fue el último
+  dispositivo, y que nuestros diálogos muestren sus botones.
+- **Requisitos**: el spike y F23c (PPGe con la fuente de respaldo).
+- **Tareas**:
+  - `last_device` en el frontend: teclado, o el tipo de mando (Xbox, PlayStation, Nintendo,
+    genérico) con `SDL_GetGamepadType`. Cambia con el último input real, no con ruido del stick.
+  - Un `PromptSet` sacado del `input.toml` activo (las teclas y botones que de verdad están
+    asignados). PPGe y `hle_utility.cpp` lo usan en vez de los ○ × △ □ fijos.
+  - Una opción `--prompts auto|psp|xbox|playstation|keyboard` (`auto` por defecto).
+  - Las grabaciones guardan el cambio de juego de botones en un registro `p <muestra> <juego>`. Las
+    viejas se repiten con el juego de la PSP, y la repetición sigue siendo determinista.
+- **Criterios de hecho**: tests sin el juego (el último dispositivo, el `PromptSet` según el
+  mapeo, el registro `p` al grabar y al repetir, y que las grabaciones viejas no cambian). Una
+  captura local de un diálogo con cada juego de botones. `ctest` completo en Clang y GCC.
+
+### F24c — Reemplazo de texturas por hash, autónomo (ola 6)
+
+- **Objetivo**: la capa que sustituye texturas del juego por PNG propios, en softgpu y en Vulkan.
+  Es la base de las texturas HD y de los íconos por dispositivo (paso 2 del spike).
+- **Requisitos**: F15b y el spike (§7.2 de `docs/analysis/button-prompts.md`).
+- **Tareas**:
+  - Una clave por contenido, sin la dirección: los texels más la CLUT, con xxh64, como el
+    `ignoreAddress` de PPSSPP v1.20.4 (`GPU/Common/TextureReplacer`). Un `textures.ini` compatible
+    en lo posible con el de PPSSPP. Si hace falta xxHash, va en `third_party/` con su licencia.
+  - Una carpeta de reemplazos (`--textures <dir>`, por defecto en la carpeta de datos del
+    jugador) y un modo para volcar las texturas que se usan (`--dump-textures <dir>`), para hacer
+    los packs. Los volcados no van al repo.
+  - softgpu usa el reemplazo a la resolución nativa (lo reduce si el PNG es mayor) y Vulkan a la
+    resolución del PNG. A 1×, con un PNG nativo, los dos renderers quedan iguales.
+  - Sin carpeta de reemplazos, todo exactamente como hoy. Con reemplazos, las capturas y los hashes
+    de las repeticiones pueden cambiar; se documenta.
+  - Dejar listo el cambio en caliente entre dos juegos de reemplazos (lo usará F24b para los
+    íconos), aunque la regla que elige cuál quede para después.
+- **Criterios de hecho**: tests sin el juego (la clave, el parseo de `textures.ini`, que sin
+  carpeta no cambia nada, el reemplazo en los dos renderers y el cambio en caliente). En el juego,
+  un reemplazo de prueba de un ícono (el △ del menú de pausa, del spike) visible en softgpu y en
+  Vulkan, con capturas locales. `ctest` completo en Clang y GCC.
 
 ### F23a — Cámara con el stick derecho, autónomo (ola 5)
 
