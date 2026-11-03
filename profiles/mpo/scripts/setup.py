@@ -69,6 +69,7 @@ import pathlib
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -122,6 +123,51 @@ def _load_script(name):
   module = importlib.util.module_from_spec(spec)
   spec.loader.exec_module(module)
   return module
+
+
+# Windows reports a process that died as an NTSTATUS exit code; these are the
+# ones a player can act on.
+_WINDOWS_EXIT_CODES = {
+    0xC0000005: 'it crashed (access violation)',
+    0xC000001D: 'it crashed (illegal instruction)',
+    0xC00000FD: 'it crashed (stack overflow)',
+    0xC0000409: 'it crashed (fail fast)',
+    0xC000007B: 'a DLL is damaged or for another architecture',
+    0xC0000135: 'a DLL it needs is missing',
+    0xC0000139: 'a DLL it needs is of another version',
+    0xC0000142: 'a DLL it needs failed to start',
+}
+
+
+def describe_exit(code, system=None):
+  """Says how a process ended, from its subprocess return code."""
+  system = platform.system() if system is None else system
+  if code < 0:
+    try:
+      name = signal.Signals(-code).name
+    except ValueError:
+      name = f'signal {-code}'
+    return f'killed by {name}'
+  if system == 'Windows' and code > 0xFFFF:
+    meaning = _WINDOWS_EXIT_CODES.get(code & 0xFFFFFFFF)
+    text = f'exit code 0x{code & 0xFFFFFFFF:08X}'
+    return f'{text}: {meaning}' if meaning else text
+  return f'exit code {code}'
+
+
+def missing_generated_files(out):
+  """The files a corpus's generate.json lists that are not on disk.
+
+  None when there is no readable manifest. A file that vanished after
+  generating (an antivirus, F22c) would otherwise drop out of CMake's glob and
+  fail the link with undefined `register_*_unit_N` symbols.
+  """
+  try:
+    manifest = json.loads((pathlib.Path(out) / 'generate.json').read_text(encoding='utf-8'))
+  except (OSError, ValueError):
+    return None
+  names = manifest.get('generated', {})
+  return sorted(n for n in names if not (pathlib.Path(out) / 'generated' / n).is_file())
 
 
 def default_data_dir(environ=None, system=None):
@@ -619,7 +665,8 @@ class Setup:
       return False
     expected = _sha256_bytes(generate.strip_profile_header(hints.read_bytes()))
     return (manifest.get('inputs', {}).get(f'{name}.hints.txt') == expected and
-            manifest.get('tools', {}).get('psp_recomp') == _sha256(self.psp_recomp))
+            manifest.get('tools', {}).get('psp_recomp') == _sha256(self.psp_recomp) and
+            not missing_generated_files(out))
 
   def _generate_one(self, name, argv, out):
     """Runs generate.py for one corpus in its own process; returns its log."""
@@ -773,6 +820,7 @@ class Setup:
           return
         started = time.monotonic()
         self._note(f'stages: compiling {stage} ({index}/{len(pending)}, {pass_name})')
+        self._regenerate_if_missing(stage)
         self._cmake_build([f'mpo_overlay_{stage}'], f'stage_{stage}',
                           low_priority=self.args.low_priority)
         built = self.build / 'overlays' / library_name(stage)
@@ -800,6 +848,20 @@ class Setup:
                    f'({pass_name})')
     self._save_state()
     self._note('stages: all stages compiled')
+
+  def _regenerate_if_missing(self, stage):
+    """Generates a stage again when files of its C++ are gone from disk."""
+    out = self.generated / 'overlays' / stage
+    missing = missing_generated_files(out)
+    if not missing:
+      return
+    self._note(f'stages: {stage}: {len(missing)} generated files are missing (e.g. '
+               f'{missing[0]}); generating it again. ' + antivirus_hint(out, self.data))
+    self._generate_one(f'stage_{stage}', ['--stage', stage], out)
+    still = missing_generated_files(out)
+    if still:
+      raise SetupError(f'{stage}: {len(still)} generated files are still missing after '
+                       f'generating it again (e.g. {still[0]}). ' + antivirus_hint(out, self.data))
 
   def _stage_ready(self, stage, state, key, quick=False):
     if not state or state.get('runtime_key') != key:
@@ -835,7 +897,11 @@ class Setup:
       command += ['--fonts', fonts]
     command += extra
     print('setup: ' + ' '.join(str(c) for c in command), flush=True)
-    return subprocess.run([str(c) for c in command], check=False).returncode
+    code = subprocess.run([str(c) for c in command], check=False).returncode
+    if code != 0:
+      # A DLL that fails to load stops mpo_boot before it prints anything.
+      print(f'setup: mpo_boot ended with {describe_exit(code)}', flush=True)
+    return code
 
   # -- saves -----------------------------------------------------------------
 

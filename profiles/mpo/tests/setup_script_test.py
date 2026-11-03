@@ -247,6 +247,32 @@ class BuildFolderTest(unittest.TestCase):
       self.assertNotIn('old error', str(raised.exception))
       self.assertIn('old error', (s.logs / 'step.log').read_text(encoding='utf-8'))
 
+  def test_missing_generated_files(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      out = pathlib.Path(tmp) / 'st1403'
+      self.assertIsNone(setup.missing_generated_files(out))
+      (out / 'generated').mkdir(parents=True)
+      names = ['generated_unit_0000.cpp', 'generated_unit_0001.cpp', 'stage_registry.cpp']
+      (out / 'generate.json').write_text(
+          json.dumps({'generated': {n: '0' * 64 for n in names}}), encoding='utf-8')
+      for name in names:
+        (out / 'generated' / name).write_text('', encoding='utf-8')
+      self.assertEqual(setup.missing_generated_files(out), [])
+      # Files that vanished after generating (an antivirus on a player's PC, F22c).
+      (out / 'generated' / names[0]).unlink()
+      self.assertEqual(setup.missing_generated_files(out), [names[0]])
+
+
+class ExitTest(unittest.TestCase):
+
+  def test_describe_exit(self):
+    self.assertEqual(setup.describe_exit(1, 'Windows'), 'exit code 1')
+    self.assertEqual(setup.describe_exit(0xC0000135, 'Windows'),
+                     'exit code 0xC0000135: a DLL it needs is missing')
+    self.assertEqual(setup.describe_exit(0xC0000001, 'Windows'), 'exit code 0xC0000001')
+    self.assertEqual(setup.describe_exit(-11, 'Linux'), 'killed by SIGSEGV')
+    self.assertEqual(setup.describe_exit(-200, 'Linux'), 'killed by signal 200')
+
 
 class ProfileHintsTest(unittest.TestCase):
 

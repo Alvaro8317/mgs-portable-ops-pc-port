@@ -437,6 +437,9 @@ static_call_sites(mpo::hle::System &system) {
 } // namespace
 
 int main(int argc, char **argv) {
+    // The launcher reads stdout through a pipe, which the C runtime buffers
+    // fully: a crash would lose every line printed before it (F22c).
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::string elf_path;
     std::string iso;
     std::string ms0;
