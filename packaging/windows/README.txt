@@ -13,6 +13,11 @@ an ISO file. The port is compiled on this computer, from your ISO.
    20 to 40 minutes. Then press Play. The stages keep compiling in the
    background while you play.
 
+If the install says that an antivirus may have removed a file, allow it in
+Windows Security > Virus & threat protection > Protection history, add an
+exclusion for the folder %LOCALAPPDATA%\mpo-pc-port and press Install again.
+The full guide is source\README.md (in Spanish: source\README.es.md).
+
 What is in this folder:
 - mpo_launcher.exe: the launcher (GPL-3.0-or-later).
 - source/: the port's source code (GPL-3.0-or-later, see LICENSE.txt).

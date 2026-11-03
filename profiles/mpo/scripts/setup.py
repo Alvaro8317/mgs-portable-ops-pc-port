@@ -203,6 +203,33 @@ def check_archive_members(names):
       raise SetupError(f'unsafe path in the archive: {name!r}')
 
 
+# The list of the files a toolchain archive unpacked (F22c), next to its
+# .mpo-sha256 stamp: an antivirus can quarantine one of them after unpacking
+# (clang-23.exe, the real compiler behind llvm-mingw's 13 KB clang.exe, on a
+# player's Windows), and the stamp alone would call the folder complete.
+_TOOLCHAIN_FILES = '.mpo-files'
+
+
+def missing_toolchain_files(folder):
+  """The files of an unpacked toolchain folder that are gone.
+
+  Returns None when the folder has no list of its files (unpacked before
+  F22c): it cannot be checked, so it is unpacked again.
+  """
+  listing = pathlib.Path(folder) / _TOOLCHAIN_FILES
+  try:
+    names = listing.read_text(encoding='utf-8').splitlines()
+  except OSError:
+    return None
+  return [n for n in names if n and not (pathlib.Path(folder) / n).is_file()]
+
+
+def antivirus_hint(folder, data):
+  return (f'An antivirus may have removed or blocked it: look for it in Windows Security > '
+          f'Virus & threat protection > Protection history and allow it, add an exclusion '
+          f'for the folder {data}, and press Install again. ({folder})')
+
+
 def library_name(stage, quick=False, system=None):
   """The file of a stage library in <data>/overlays.
 
@@ -423,8 +450,15 @@ class Setup:
       check_archive_members(z.namelist())
       self._note(f'toolchain: unpacking {name}')
       z.extractall(tmp)
+      files = [i.filename for i in z.infolist() if not i.is_dir()]
+    (tmp / _TOOLCHAIN_FILES).write_text('\n'.join(files) + '\n', encoding='utf-8')
     shutil.rmtree(folder, ignore_errors=True)
     os.replace(tmp, folder)
+    missing = missing_toolchain_files(folder)
+    if missing:
+      raise SetupError(f'toolchain: {len(missing)} files of {name} were gone right after '
+                       f'unpacking (the first: {missing[0]}). ' +
+                       antivirus_hint(folder, self.data))
 
   def toolchain(self):
     """Downloads and unpacks the portable toolchain (toolchain.toml)."""
@@ -434,10 +468,23 @@ class Setup:
                        'and Clang or GCC (docs/analysis/distribution.md §3)')
     tools = load_toolchain(_PROFILE / 'config' / 'toolchain.toml', key)
     roots = {}
+    folders = {}
     for name, spec in tools.items():
       folder = self.toolchain_dir / f'{name}-{spec["version"]}'
+      folders[name] = folder
       stamp = folder / '.mpo-sha256'
-      if not (stamp.is_file() and stamp.read_text(encoding='utf-8').strip() == spec['sha256']):
+      complete = stamp.is_file() and stamp.read_text(encoding='utf-8').strip() == spec['sha256']
+      if complete:
+        missing = missing_toolchain_files(folder)
+        if missing:
+          self._note(f'toolchain: {len(missing)} files of {name} are missing (the first: '
+                     f'{missing[0]}; an antivirus may have removed them): unpacking it again')
+          complete = False
+        elif missing is None:
+          self._note(f'toolchain: {name} has no list of its files: unpacking it again')
+          complete = False
+      if not complete:
+        stamp.unlink(missing_ok=True)
         archive = self.toolchain_dir / 'downloads' / pathlib.PurePosixPath(spec['url']).name
         self._note(f'toolchain: downloading {name} {spec["version"]}')
         self._download(name, spec, archive)
@@ -465,12 +512,30 @@ class Setup:
     for field in ('cc', 'cxx', 'cmake', 'ninja'):
       if not pathlib.Path(toolchain[field]).is_file():
         raise SetupError(f'toolchain: no {toolchain[field]} after unpacking')
+    self._check_compiler(toolchain['cc'], folders['llvm-mingw'])
     self.state['toolchain'] = toolchain
     self._save_state()
     self._use_toolchain_path()
     self._note('toolchain: ready (' + ', '.join(f'{n} {v}' for n, v in
                                                 toolchain['versions'].items()) + ')')
     return toolchain
+
+  def _check_compiler(self, cc, folder):
+    """Runs `<cc> --version`: the wrapper clang.exe needs clang-<N>.exe and the LLVM DLLs."""
+    try:
+      result = subprocess.run([cc, '--version'], capture_output=True, text=True,
+                              errors='replace', timeout=120, check=False)
+      output = (result.stdout + result.stderr).strip()
+      ok = result.returncode == 0
+    except OSError as e:
+      output, ok = str(e), False
+    if not ok:
+      # The next Install unpacks it again (the stamp says it is not complete).
+      (pathlib.Path(folder) / '.mpo-sha256').unlink(missing_ok=True)
+      last = output.splitlines()[-1] if output else '(no output)'
+      raise SetupError(f'toolchain: the compiler does not run: {last}. ' +
+                       antivirus_hint(folder, self.data))
+    self._note(f'toolchain: compiler: {output.splitlines()[0] if output else cc}')
 
   # -- install ---------------------------------------------------------------
 

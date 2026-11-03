@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -176,6 +177,37 @@ class ToolchainTest(unittest.TestCase):
         s._download('tool', bad, root / 'downloads' / 'bad.zip')
       self.assertFalse((root / 'downloads' / 'bad.zip').exists())
       self.assertFalse((root / 'downloads' / 'bad.zip.part').exists())
+
+
+  def test_unpack_lists_its_files(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      root = pathlib.Path(tmp)
+      archive, _ = self._archive(root)
+      s = setup.Setup(argparse.Namespace(data=str(root / 'data')))
+      folder = root / 'tool-1.0'
+      s._unpack('tool', archive, folder)
+      self.assertEqual(setup.missing_toolchain_files(folder), [])
+      # What an antivirus did to clang-23.exe on a player's Windows (F22c).
+      (folder / 'tool-1.0' / 'bin' / 'tool.exe').unlink()
+      self.assertEqual(setup.missing_toolchain_files(folder), ['tool-1.0/bin/tool.exe'])
+      # Unpacked before F22c: no list, so it cannot be checked.
+      (folder / setup._TOOLCHAIN_FILES).unlink()
+      self.assertIsNone(setup.missing_toolchain_files(folder))
+
+  def test_a_compiler_that_does_not_run(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      root = pathlib.Path(tmp)
+      s = setup.Setup(argparse.Namespace(data=str(root / 'data')))
+      folder = root / 'llvm-mingw-1'
+      folder.mkdir()
+      stamp = folder / '.mpo-sha256'
+      stamp.write_text('0' * 64 + '\n', encoding='utf-8')
+      with self.assertRaisesRegex(setup.SetupError, 'antivirus'):
+        s._check_compiler(str(folder / 'bin' / 'clang.exe'), folder)
+      self.assertFalse(stamp.exists(), 'the next Install unpacks it again')
+      stamp.write_text('0' * 64 + '\n', encoding='utf-8')
+      s._check_compiler(sys.executable, folder)  # `python --version` runs
+      self.assertTrue(stamp.exists())
 
 
 class ProfileHintsTest(unittest.TestCase):
