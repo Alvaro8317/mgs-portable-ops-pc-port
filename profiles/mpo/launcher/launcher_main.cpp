@@ -385,10 +385,11 @@ struct Launcher {
             pick = Pick::kIso;
             browser.open("Choose the ISO", Browser::Mode::kIsoFile, text_path(iso));
         }
-        ImGui::SeparatorText("2. PSP firmware fonts (optional)");
+        ImGui::SeparatorText("2. PSP firmware fonts");
         ImGui::TextWrapped(
             "The folder flash0/font of a PSP or of PPSSPP. If it is next to the ISO, it is found "
-            "by itself. Without it the game still runs, without some texts.");
+            "by itself. Without it the game runs, but the save screens and the on-screen keyboard "
+            "show no text.");
         ImGui::SetNextItemWidth(-160.0f);
         ImGui::InputText("##fonts", &fonts);
         ImGui::SameLine();
