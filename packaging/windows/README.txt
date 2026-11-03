@@ -13,9 +13,12 @@ an ISO file. The port is compiled on this computer, from your ISO.
    20 to 40 minutes. Then press Play. The stages keep compiling in the
    background while you play.
 
-If the install says that an antivirus may have removed a file, allow it in
-Windows Security > Virus & threat protection > Protection history, add an
-exclusion for the folder %LOCALAPPDATA%\mpo-pc-port and press Install again.
+Some antivirus programs (Avast in particular) quarantine part of the compiler,
+usually clang-23.exe. It is a false positive: it is the official llvm-mingw
+release, checked against its SHA-256. Restore the file (Avast: Protection >
+Virus Chest; Windows Security: Protection history), add an exception for the
+folder C:\Users\<your user>\AppData\Local\mpo-pc-port (best before the
+first install), and press Install again.
 The full guide is source\README.md (in Spanish: source\README.es.md).
 
 What is in this folder:

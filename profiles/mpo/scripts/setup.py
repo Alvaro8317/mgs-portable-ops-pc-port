@@ -225,9 +225,12 @@ def missing_toolchain_files(folder):
 
 
 def antivirus_hint(folder, data):
-  return (f'An antivirus may have removed or blocked it: look for it in Windows Security > '
-          f'Virus & threat protection > Protection history and allow it, add an exclusion '
-          f'for the folder {data}, and press Install again. ({folder})')
+  # Avast quarantined clang-23.exe on a player's Windows (F22c).
+  return (f'An antivirus may have removed or blocked it (Avast does with clang-23.exe). It is a '
+          f'false positive: the file is the official llvm-mingw release, checked against its '
+          f'SHA-256. Restore it (Avast: Protection > Virus Chest; Windows Security: Protection '
+          f'history), add an exception for the folder {data}, and press Install again. '
+          f'({folder})')
 
 
 def library_name(stage, quick=False, system=None):

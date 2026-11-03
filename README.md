@@ -73,6 +73,25 @@ The installer finds them there without being asked. You can also pick the folder
 
 The launcher works with the mouse, the keyboard or a gamepad.
 
+### If your antivirus removes a file
+
+Some antivirus programs, **Avast** in particular, flag part of the compiler as a threat and
+quarantine it (usually `clang-23.exe`). **It's a false positive**: the compiler is the official
+[llvm-mingw](https://github.com/mstorsjo/llvm-mingw) release, and the installer checks its SHA-256
+before using it. The install then stops with "the compiler does not run" or "an antivirus may have
+removed or blocked it".
+
+To fix it, restore the file and add an exception for the port's folder,
+`C:\Users\<your user>\AppData\Local\mpo-pc-port`, so nothing else it compiles gets removed:
+
+- **Avast**: *Protection › Virus Chest*, restore the file; then *Menu › Settings › General ›
+  Exceptions › Add exception* with that folder.
+- **Windows Security** (Microsoft Defender): *Virus & threat protection › Protection history*, allow
+  the file; then *Manage settings › Exclusions › Add an exclusion › Folder* with that folder.
+
+Menu names can change between versions. Then press **Install** again: it unpacks the compiler again
+by itself. Doing this before the first install avoids the problem.
+
 ## Install on Linux and Steam Deck
 
 ### With Flatpak (recommended, and the only way on a Steam Deck)
@@ -232,7 +251,7 @@ Without the launcher, use `setup.py import-save <folder>` and `setup.py export-s
 |---|---|
 | The ISO is rejected ("Unsupported disc" or "Rejected: this image does not match") | The port only takes the USA release ULUS-10202 (disc 1.02), dumped whole and unchanged. Make sure it's that version and not a patched, translated or compressed (CSO) copy. |
 | "no PSP firmware fonts found" | Put the fonts in a `flash0/font` folder next to the ISO (see [What you need](#what-you-need)) and run Install again. Only that step is redone. |
-| Windows: "the compiler does not run" or "an antivirus may have removed" a file | Your antivirus removed or blocked part of the compiler (often `clang-23.exe`). In *Windows Security › Virus & threat protection › Protection history*, allow it. Add an exclusion for the folder `%LOCALAPPDATA%\mpo-pc-port` (*Manage settings › Exclusions › Add an exclusion › Folder*), and press Install again: it unpacks the compiler again by itself. |
+| Windows: "the compiler does not run" or "an antivirus may have removed" a file | Your antivirus quarantined part of the compiler. It's a false positive: see [If your antivirus removes a file](#if-your-antivirus-removes-a-file). |
 | The install stops with an error | The launcher shows the last lines. Press Install again: it picks up where it stopped, and a network hiccup is often all it was. The full logs are in the install folder's `logs` folder (see [Uninstall](#uninstall)). |
 | The game stops and says a function is "unimplemented" | You reached a part of the game the port can't handle yet. It stops on purpose rather than risk damaging your save. Please [open an issue](https://github.com/Alvaro8317/mgs-portable-ops-pc-port/issues) with the lines the launcher shows and say where you were in the game. |
 | Low FPS in some scenes | That stage may not be compiled yet. Look at the launcher's count and let the background compile finish. |

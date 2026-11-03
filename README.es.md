@@ -75,6 +75,28 @@ launcher.
 
 El launcher se maneja con el mouse, con el teclado o con un mando.
 
+### Si el antivirus borra un archivo
+
+Algunos antivirus, sobre todo **Avast**, marcan parte del compilador como una amenaza y la ponen en
+cuarentena (casi siempre `clang-23.exe`). **Es un falso positivo**: el compilador es la release
+oficial de [llvm-mingw](https://github.com/mstorsjo/llvm-mingw), y el instalador comprueba su
+SHA-256 antes de usarlo. La instalación se para con "the compiler does not run" o "an antivirus
+may have removed or blocked it".
+
+Para arreglarlo, restaura el archivo y agrega una excepción para la carpeta del port,
+`C:\Users\<tu usuario>\AppData\Local\mpo-pc-port`, para que no borre nada más de lo que
+compila:
+
+- **Avast**: en *Protección › Baúl de virus*, restaura el archivo; después, en *Menú ›
+  Configuración › General › Excepciones › Agregar excepción*, agrega esa carpeta.
+- **Seguridad de Windows** (Microsoft Defender): en *Protección contra virus y amenazas › Historial
+  de protección*, permite el archivo; después, en *Administrar la configuración › Exclusiones ›
+  Agregar una exclusión › Carpeta*, agrega esa carpeta.
+
+Los nombres de los menús pueden cambiar entre versiones. Después vuelve a pulsar **Install**: vuelve
+a descomprimir el compilador solo. Si lo haces antes de la primera instalación, te evitas el
+problema.
+
 ## Instalar en Linux y Steam Deck
 
 ### Con Flatpak (lo recomendado, y la única forma en la Steam Deck)
@@ -238,7 +260,7 @@ Sin el launcher, usa `setup.py import-save <carpeta>` y `setup.py export-save <c
 |---|---|
 | El ISO se rechaza ("Unsupported disc" o "Rejected: this image does not match") | El port solo acepta la versión de Estados Unidos ULUS-10202 (disco 1.02), volcada entera y sin cambios. Comprueba que sea esa versión y no una copia parcheada, traducida o comprimida (CSO). |
 | "no PSP firmware fonts found" | Pon las fuentes en una carpeta `flash0/font` junto al ISO (ver [Qué necesitas](#qué-necesitas)) y vuelve a pulsar Install. Solo se rehace ese paso. |
-| Windows: "the compiler does not run" o "an antivirus may have removed" un archivo | El antivirus quitó o bloqueó parte del compilador (muchas veces `clang-23.exe`). En *Seguridad de Windows › Protección contra virus y amenazas › Historial de protección*, permítelo. Agrega una exclusión para la carpeta `%LOCALAPPDATA%\mpo-pc-port` (*Administrar la configuración › Exclusiones › Agregar una exclusión › Carpeta*) y vuelve a pulsar Install: vuelve a descomprimir el compilador solo. |
+| Windows: "the compiler does not run" o "an antivirus may have removed" un archivo | El antivirus puso en cuarentena parte del compilador. Es un falso positivo: ver [Si el antivirus borra un archivo](#si-el-antivirus-borra-un-archivo). |
 | La instalación se para con un error | El launcher muestra las últimas líneas. Vuelve a pulsar Install: sigue donde quedó, y muchas veces era solo un corte de la red. Los logs completos están en la carpeta `logs` de la carpeta de instalación (ver [Desinstalar](#desinstalar)). |
 | El juego se detiene y dice que una función es "unimplemented" | Llegaste a una parte del juego que el port todavía no sabe manejar. Se detiene a propósito, para no arriesgar tu save. Por favor, [abre un issue](https://github.com/Alvaro8317/mgs-portable-ops-pc-port/issues) con las líneas que muestra el launcher y di en qué parte del juego estabas. |
 | Pocos FPS en algunas escenas | Puede que esa etapa todavía no esté compilada. Mira el contador del launcher y deja que termine la compilación en segundo plano. |

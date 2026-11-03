@@ -402,6 +402,14 @@ struct Launcher {
         ImGui::TextWrapped(
             "The first install takes 20 to 40 minutes and needs about 15 GB free (10 GB once "
             "done). You can play as soon as it ends; the stages keep compiling while you play.");
+        if constexpr (kWindows) {
+            // Avast quarantined llvm-mingw's clang-23.exe on a player's PC (F22c).
+            ImGui::TextWrapped(
+                "Some antivirus programs (Avast in particular) remove part of the compiler by "
+                "mistake. Adding an exception for %s first avoids it (see README.md).",
+                data_folder().empty() ? "%LOCALAPPDATA%\\mpo-pc-port"
+                                      : path_text(data_folder()).c_str());
+        }
         ImGui::BeginDisabled(iso.empty() || work.running() || stages.running());
         if (ImGui::Button("Install", ImVec2(220.0f, 0.0f))) {
             std::vector<std::string> args{"--iso", iso};
