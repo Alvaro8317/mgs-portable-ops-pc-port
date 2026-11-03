@@ -1644,6 +1644,16 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - Widescreen y ultrawide con el HUD ajustado (CWCheat `0x201E9728` como pista).
 - 60+ fps con **interpolación** (la lógica sigue a 20 o 30 fps).
 - Texturas HD en formato de PPSSPP.
+- **Controles en pantalla según el dispositivo** (propuesto por el usuario el 2026-11-03): que
+  el juego muestre START o Enter, A o Cruz, según lo último que se usó (mando, y de qué tipo, o
+  teclado). El frontend ya sabe qué dispositivo mandó el último input. Va por partes:
+  - los diálogos del sistema (PPGe, nuestros): fácil, porque el texto de los botones lo pone el
+    runtime;
+  - los íconos del HUD y de los menús del juego: primero hay que averiguar si salen de texturas
+    (`.txp`) o de glifos de la fuente. Si son texturas, el camino es el reemplazo de texturas de
+    arriba, con un juego de íconos por dispositivo que se cambia en caliente;
+  - los textos que nombran un botón con palabras (tutoriales, códec): habría que reemplazar
+    cadenas en los datos del juego. Es lo más caro y lo último.
 - Versión EU (`ULES-00645`) y otras regiones.
 - Ad hoc (compatible con el servidor de PPSSPP) y online (SaveMGO).
 - Teclado y mouse, y cámara con el stick derecho.
