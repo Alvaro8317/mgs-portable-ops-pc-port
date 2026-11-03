@@ -203,6 +203,25 @@ def check_archive_members(names):
       raise SetupError(f'unsafe path in the archive: {name!r}')
 
 
+def cmake_cache_source(cache):
+  """The source folder a CMakeCache.txt was made from, or None."""
+  try:
+    with open(cache, encoding='utf-8', errors='replace') as f:
+      for line in f:
+        if line.startswith('CMAKE_HOME_DIRECTORY:'):
+          return pathlib.Path(line.split('=', 1)[1].strip())
+  except OSError:
+    pass
+  return None
+
+
+def same_path(a, b):
+  """Whether two paths name the same folder (case-insensitive on Windows)."""
+  def norm(p):
+    return os.path.normcase(os.path.normpath(os.path.abspath(str(p))))
+  return norm(a) == norm(b)
+
+
 # The list of the files a toolchain archive unpacked (F22c), next to its
 # .mpo-sha256 stamp: an antivirus can quarantine one of them after unpacking
 # (clang-23.exe, the real compiler behind llvm-mingw's 13 KB clang.exe, on a
@@ -334,10 +353,16 @@ class Setup:
     with open(log_path, 'a', encoding='utf-8', errors='replace') as log:
       log.write(f'\n$ {" ".join(str(c) for c in command)}\n')
       log.flush()
+      start = log.tell()
       result = subprocess.run([str(c) for c in command], stdout=log, stderr=subprocess.STDOUT,
                               env=env, check=False, **kwargs)
     if result.returncode != 0:
-      tail = log_path.read_text(encoding='utf-8', errors='replace').splitlines()[-25:]
+      # Only this run's lines: the log keeps every run, and an old error in the
+      # tail looked like the new one (F22c, on the player's Windows).
+      with open(log_path, 'rb') as log:
+        log.seek(start)
+        output = log.read().decode('utf-8', errors='replace')
+      tail = output.splitlines()[-25:]
       raise SetupError(f'{command[0]} failed (exit {result.returncode}); log: {log_path}\n' +
                        '\n'.join(tail))
     return log_path
@@ -365,7 +390,23 @@ class Setup:
     explicit = getattr(self.args, 'cmake', None)
     return explicit or self.state.get('toolchain', {}).get('cmake') or 'cmake'
 
+  def _forget_moved_source(self):
+    """Starts the CMake cache again when the source tree is somewhere else.
+
+    A new release unpacked in another folder reuses <data>/build, and CMake
+    refuses a cache made from another source ("does not match the source used
+    to generate cache", F22c). The objects stay: Ninja rebuilds what changed.
+    """
+    cache = self.build / 'CMakeCache.txt'
+    old = cmake_cache_source(cache)
+    if old is None or same_path(old, _ROOT):
+      return
+    self._note(f'build: the source moved from {old} to {_ROOT}: configuring the build again')
+    cache.unlink(missing_ok=True)
+    shutil.rmtree(self.build / 'CMakeFiles', ignore_errors=True)
+
   def _cmake_configure(self, extra, log_name):
+    self._forget_moved_source()
     args = self.args
     toolchain = self.state.get('toolchain', {})
     command = [self.cmake, '-S', _ROOT, '-B', self.build, '-G', args.generator,

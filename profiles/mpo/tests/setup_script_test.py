@@ -210,6 +210,44 @@ class ToolchainTest(unittest.TestCase):
       self.assertTrue(stamp.exists())
 
 
+class BuildFolderTest(unittest.TestCase):
+
+  def test_cache_from_another_source_is_dropped(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      s = setup.Setup(argparse.Namespace(data=tmp))
+      s.build.mkdir(parents=True)
+      cache = s.build / 'CMakeCache.txt'
+      (s.build / 'CMakeFiles').mkdir()
+      (s.build / 'kept.o').write_bytes(b'')
+      # The same source: nothing changes.
+      cache.write_text(f'CMAKE_HOME_DIRECTORY:INTERNAL={setup._ROOT}\n', encoding='utf-8')
+      s._forget_moved_source()
+      self.assertTrue(cache.exists())
+      # A release unpacked somewhere else (F22c).
+      old = pathlib.Path(tmp) / 'Downloads' / 'release' / 'source'
+      cache.write_text(f'FOO:STRING=1\nCMAKE_HOME_DIRECTORY:INTERNAL={old}\n', encoding='utf-8')
+      self.assertTrue(setup.same_path(setup.cmake_cache_source(cache), old))
+      s._forget_moved_source()
+      self.assertFalse(cache.exists())
+      self.assertFalse((s.build / 'CMakeFiles').exists())
+      self.assertTrue((s.build / 'kept.o').exists(), 'objects stay')
+      s._forget_moved_source()  # no cache: nothing to do
+
+  def test_failure_shows_only_this_run(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      s = setup.Setup(argparse.Namespace(data=tmp))
+      fail = [sys.executable, '-c', 'import sys; print("new error"); sys.exit(3)']
+      ok = [sys.executable, '-c', 'print("fine")']
+      with self.assertRaises(setup.SetupError):
+        s._run([sys.executable, '-c', 'import sys; print("old error"); sys.exit(1)'], 'step')
+      s._run(ok, 'step')
+      with self.assertRaises(setup.SetupError) as raised:
+        s._run(fail, 'step')
+      self.assertIn('new error', str(raised.exception))
+      self.assertNotIn('old error', str(raised.exception))
+      self.assertIn('old error', (s.logs / 'step.log').read_text(encoding='utf-8'))
+
+
 class ProfileHintsTest(unittest.TestCase):
 
   def test_header_round_trip(self):
