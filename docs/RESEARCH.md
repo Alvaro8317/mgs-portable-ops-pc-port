@@ -407,8 +407,9 @@ Fuente: [CWCheat-Database-Plus](https://github.com/Saramagrean/CWCheat-Database-
 
   - El arranque usa el modo 1 y el gameplay a 20 fps es el modo 2.
   - El timestep lo leen 233 funciones.
-  - El float del cheat de widescreen (`0x089ED728`) está en `.rodata`, y Ghidra solo le encuentra una
-    referencia [?].
+  - El float del cheat de widescreen está en `0x089E9728` (`.rodata`, vale 1.0), y lo carga un solo
+    `lwc1`, en `0x0884519C`, en la actualización de la cámara (F24, spike [V]). Antes aquí decía
+    `0x089ED728`, una errata.
   - Detalle en `docs/analysis/mgp_main.md` §6.2.
 
 ### Compatibilidad con PPSSPP y lo que revela del uso del GE

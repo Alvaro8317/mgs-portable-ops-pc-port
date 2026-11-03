@@ -285,9 +285,11 @@ con el **mínimo de vblanks por frame**.
   que lo cambian por su cuenta [?].
   - Es el "delta" que se resta a los contadores de la lógica, y de ahí sale que la lógica dependa
     del framerate (`RESEARCH.md` §4, Timing).
-- **El aspect ratio del cheat de widescreen** (`0x201E9728` = `0x089ED728`) cae en `.rodata`. Ghidra
-  solo encuentra una referencia, en `0x08926E5C`, que lo usa como constante float dentro de un
-  cálculo [?]. Queda para M7.
+- **El aspect ratio del cheat de widescreen** (`0x201E9728` = `0x089E9728`) cae en `.rodata` y vale
+  1.0. Lo carga un solo `lwc1 $f20`, en `0x0884519C`, dentro de la actualización de la cámara
+  `0x08845124`: es la escala en x de sus matrices de proyección [V] (ver
+  `docs/analysis/widescreen.md`). Antes aquí decía `0x089ED728`, una errata: en esa dirección hay
+  `1820.0`, con su referencia en `0x08926E5C`.
 
 ### 6.3 Intérprete GCL [V en las tablas, ? en los roles]
 

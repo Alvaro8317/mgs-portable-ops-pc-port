@@ -125,7 +125,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F23a | Cámara con el stick derecho (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; probarla con mando en el juego: pendiente del usuario) |
 | F23b | Resolución interna configurable, hasta 4K (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; `--render-scale 1..8`; la prueba con GPU real en Windows y el selector del launcher: pendientes) |
 | F23c | Fuente libre de respaldo para los diálogos (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; `sceFont` sigue necesitando las PGF; Windows sin fuentes: pendiente del usuario) |
-| F24a | Ajustes del juego en el launcher (autónomo) | M7 | 🟨 en curso (ola 6) |
+| F24a | Ajustes del juego en el launcher (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; probar `--fullscreen` en el juego y el launcher con mando: pendiente del usuario) |
 | F24b | Controles en pantalla según el dispositivo, parte I (autónomo) | M7 | 🟨 en curso (ola 6) |
 | F24c | Reemplazo de texturas por hash (autónomo) | M7 | 🟨 en curso (ola 6) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
@@ -1708,6 +1708,17 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - Resolución interna configurable (**hecha en F23b**: `--render-scale`, ver
   `docs/sessions/F23b.md`; falta el selector en el launcher), MSAA y filtrado anisotrópico.
 - Widescreen y ultrawide con el HUD ajustado (CWCheat `0x201E9728` como pista).
+  - **El spike (2026-11-03) lo resolvió**, ver `docs/analysis/widescreen.md`:
+    - la pantalla de la PSP ya es 16:9 (480×272), así que el trabajo es el ultrawide;
+    - la constante está en `0x089E9728` y es la escala en x de la proyección. Cambiarla no cambia
+      la lógica: la repetición y el save salen idénticos [V];
+    - el HUD no se mueve y sale estirado;
+    - fases:
+      - **W1**, corta: `--aspect` parchea la constante al arrancar, estira la imagen y pone
+        barras negras en el video;
+      - **W2**: el HUD centrado en Vulkan, con los marcadores que siguen al 3D;
+      - **W3**: anclar cada elemento al borde con los `.la2`, solo si se pide;
+    - se descartan un framebuffer más ancho y anclar por la posición del dibujo.
 - 60+ fps con **interpolación** (la lógica sigue a 20 o 30 fps).
 - Texturas HD en formato de PPSSPP.
 - **`sceFont` con la fuente de respaldo** (F23c): sin las PGF del firmware, solo falta el aviso
