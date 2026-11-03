@@ -171,6 +171,30 @@ struct MouseCameraConfig {
     friend bool operator==(const MouseCameraConfig &, const MouseCameraConfig &) = default;
 };
 
+// F23a: the gamepad's right stick turns the camera (the d-pad) too. An axis
+// engages when its raw value (-1..1, before [analog]'s deadzone) reaches
+// `threshold` and lets go when it drops below `threshold - hysteresis`, so a
+// stick resting near the threshold does not flicker. While engaged, the axis
+// presses its d-pad direction on a share of the polls of the window events
+// (one per flip) that grows with the tilt: `min_duty` at the threshold, every
+// poll from kPadCameraFullTilt on. The share adds up per poll, so the presses
+// depend only on the axis values at each poll. min_duty = 1 is all or
+// nothing. X drives left/right; Y drives up/down only when `vertical` is set.
+// An axis that the mapping binds in pad_axes is left to that binding.
+struct PadCameraConfig {
+    bool enabled = true;
+    float threshold = 0.5f;
+    float hysteresis = 0.15f;
+    float min_duty = 0.25f;
+    bool vertical = false;
+    friend bool operator==(const PadCameraConfig &, const PadCameraConfig &) = default;
+};
+// The raw tilt from which the right stick presses on every poll.
+inline constexpr float kPadCameraFullTilt = 0.9f;
+// Share of the polls (0..1] an engaged camera axis presses at `magnitude`
+// (the raw tilt, 0..1).
+[[nodiscard]] float PadCameraDuty(const PadCameraConfig &config, float magnitude);
+
 struct InputMapping {
     std::vector<KeyBinding> keys;
     std::vector<MouseButtonBinding> mouse_buttons;
@@ -178,6 +202,7 @@ struct InputMapping {
     std::vector<PadAxisBinding> pad_axes;
     AnalogConfig analog;
     MouseCameraConfig mouse_camera;
+    PadCameraConfig pad_camera;
 
     // Keyboard and mouse: the PC layout chosen in F22 (WASD for the stick,
     // the arrows for the d-pad, Space = cross, mouse right/left = circle/square,
@@ -205,8 +230,9 @@ public:
     void OnMouseButton(MouseButton button, bool down);
     // Relative mouse motion in pixels (x right, y down), for the camera.
     void OnMouseMotion(float dx, float dy);
-    // End of one poll of the window events: turns the motion since the last
-    // poll into d-pad presses that last until the next poll.
+    // End of one poll of the window events: turns the mouse motion since the
+    // last poll and the right stick (PadCameraConfig) into d-pad presses that
+    // last until the next poll.
     void EndPoll();
     void OnPadButton(PadButton button, bool down);
     // Sticks: -1..1 (Y down), triggers: 0..1. Values are clamped.
@@ -215,18 +241,38 @@ public:
     // releases the keyboard and the mouse.
     void ReleaseKeyboard();
     void ReleaseMouse();
+    // Also releases the right-stick camera.
     void ReleasePad();
+    // While paused (the window lost the focus), the right stick does not turn
+    // the camera; pausing lets its presses go and forgets its state. The
+    // other gamepad inputs keep working (background gamepad events).
+    void SetPadCameraPaused(bool paused);
+    [[nodiscard]] bool pad_camera_paused() const { return pad_camera_paused_; }
 
     // Current state; the timestamp is the caller's (sceCtrl uses microseconds).
     [[nodiscard]] SceCtrlData Sample(std::uint32_t timestamp = 0) const;
 
 private:
+    // One right-stick axis of the camera: the engaged direction (0: not
+    // engaged) and the share of a press carried to the next poll.
+    struct PadCameraAxis {
+        std::int8_t direction = 0;
+        float phase = 0.0f;
+    };
+
+    void EndPollMouseCamera();
+    void EndPollPadCamera();
+    void ReleasePadCamera();
+
     InputMapping mapping_;
     std::bitset<kScancodeCount> keys_down_;
     std::bitset<kMouseButtonCount> mouse_down_;
     float camera_motion_[2]{};
     bool camera_moved_ = false;
     std::uint32_t camera_buttons_ = 0;
+    std::array<PadCameraAxis, 2> pad_camera_{};
+    std::uint32_t pad_camera_buttons_ = 0;
+    bool pad_camera_paused_ = false;
     std::bitset<kPadButtonCount> pad_down_;
     std::array<float, kPadAxisCount> pad_axes_{};
 };

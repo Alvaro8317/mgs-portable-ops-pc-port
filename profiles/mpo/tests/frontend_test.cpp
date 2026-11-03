@@ -13,6 +13,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -401,6 +402,192 @@ void TestMouseCamera() {
     t.EndPoll();
 }
 
+// Polls `polls` times with the right stick X at `x` and counts the polls that
+// press each direction.
+struct PadCameraCount {
+    int left = 0;
+    int right = 0;
+    int other = 0;
+};
+PadCameraCount PollPadCamera(InputTranslator &t, float x, int polls) {
+    t.OnPadAxis(PadAxis::kRightX, x);
+    PadCameraCount count;
+    for (int i = 0; i < polls; ++i) {
+        t.EndPoll();
+        const std::uint32_t buttons = t.Sample().buttons;
+        if (buttons == ctrl::kLeft) {
+            ++count.left;
+        } else if (buttons == ctrl::kRight) {
+            ++count.right;
+        } else if (buttons != 0) {
+            ++count.other;
+        }
+    }
+    return count;
+}
+
+void TestPadCamera() {
+    const PadCameraConfig defaults;
+    Expect(defaults.enabled && !defaults.vertical, "pad camera on, horizontal only");
+    ExpectEq(defaults.threshold, 0.5f, "default threshold");
+    ExpectEq(defaults.hysteresis, 0.15f, "default hysteresis");
+    ExpectEq(defaults.min_duty, 0.25f, "default min_duty");
+
+    // The duty: min_duty at the threshold, 1 from kPadCameraFullTilt on,
+    // linear in between ((0.7 - 0.5) / (0.9 - 0.5) = 0.5 -> 0.625).
+    Expect(std::fabs(PadCameraDuty(defaults, 0.5f) - 0.25f) < 1e-6f, "duty at the threshold");
+    Expect(std::fabs(PadCameraDuty(defaults, 0.7f) - 0.625f) < 1e-5f, "duty halfway");
+    ExpectEq(PadCameraDuty(defaults, 0.9f), 1.0f, "duty at full tilt");
+    ExpectEq(PadCameraDuty(defaults, 1.0f), 1.0f, "duty past full tilt");
+    ExpectEq(PadCameraDuty(defaults, 0.4f), 0.25f, "duty in the hysteresis band");
+
+    InputTranslator t;
+    // Below the threshold: nothing, and nothing before EndPoll either.
+    t.OnPadAxis(PadAxis::kRightX, 1.0f);
+    ExpectEq(t.Sample().buttons, 0u, "no press before the end of the poll");
+    ExpectEq(t.Sample().analog[1][0], 128, "the right stick is not the PSP's");
+    PadCameraCount c = PollPadCamera(t, 0.0f, 4);
+    Expect(c.left == 0 && c.right == 0 && c.other == 0, "centred: nothing");
+    c = PollPadCamera(t, 0.49f, 8);
+    Expect(c.left == 0 && c.right == 0, "0.49: below the threshold");
+
+    // Full tilt presses on every poll, both ways.
+    c = PollPadCamera(t, 1.0f, 12);
+    ExpectEq(c.right, 12, "full right: every poll");
+    c = PollPadCamera(t, -0.95f, 12);
+    ExpectEq(c.left, 12, "full left: every poll");
+    ExpectEq(c.other, 0, "only the d-pad direction");
+
+    // The proportional part: the share of polls grows with the tilt.
+    c = PollPadCamera(t, 0.0f, 1);
+    c = PollPadCamera(t, 0.5f, 40);
+    ExpectEq(c.right, 10, "at the threshold: one poll in four");
+    c = PollPadCamera(t, 0.0f, 1);
+    c = PollPadCamera(t, 0.7f, 40);
+    Expect(c.right >= 24 && c.right <= 26,
+           "halfway: 0.625 of the polls, got " + std::to_string(c.right));
+    c = PollPadCamera(t, 0.0f, 1);
+    // Engaging presses at once; then the 1/4 share waits three polls.
+    t.OnPadAxis(PadAxis::kRightX, -0.5f);
+    const std::uint32_t expected[] = {ctrl::kLeft, 0, 0, 0, ctrl::kLeft, 0, 0, 0, ctrl::kLeft};
+    for (std::size_t i = 0; i < std::size(expected); ++i) {
+        t.EndPoll();
+        ExpectEq(t.Sample().buttons, expected[i], "pulse " + std::to_string(i));
+    }
+    // Deterministic: the same values give the same presses.
+    InputTranslator a;
+    InputTranslator b;
+    const float tilts[] = {0.3f, 0.55f, 0.62f, 0.81f, 0.4f, 0.33f, 0.66f, -0.7f, -0.52f, 0.0f};
+    bool same = true;
+    for (int round = 0; round < 5; ++round) {
+        for (float tilt : tilts) {
+            a.OnPadAxis(PadAxis::kRightX, tilt);
+            b.OnPadAxis(PadAxis::kRightX, tilt);
+            a.EndPoll();
+            b.EndPoll();
+            same = same && a.Sample().buttons == b.Sample().buttons;
+        }
+    }
+    Expect(same, "same axis values, same presses");
+
+    // Hysteresis: engaged at 0.5, still engaged down to 0.35 (pressing at
+    // min_duty), released below; re-engaging needs the threshold again.
+    c = PollPadCamera(t, 0.0f, 1);
+    c = PollPadCamera(t, 0.6f, 1);
+    ExpectEq(c.right, 1, "engaged at 0.6");
+    c = PollPadCamera(t, 0.4f, 40);
+    Expect(c.right >= 9 && c.right <= 11,
+           "0.4 after 0.6: still engaged at min_duty, got " + std::to_string(c.right));
+    c = PollPadCamera(t, 0.36f, 8);
+    Expect(c.right >= 1, "0.36: still engaged");
+    c = PollPadCamera(t, 0.34f, 8);
+    ExpectEq(c.right, 0, "0.34: released");
+    c = PollPadCamera(t, 0.45f, 8);
+    ExpectEq(c.right, 0, "0.45 from rest: not engaged");
+    // Flipping sides re-engages the other way at once.
+    c = PollPadCamera(t, 0.9f, 1);
+    c = PollPadCamera(t, -0.6f, 1);
+    ExpectEq(c.left, 1, "flip to the left");
+
+    // Vertical: Y drives up/down only when asked.
+    c = PollPadCamera(t, 0.0f, 1);
+    t.OnPadAxis(PadAxis::kRightY, 1.0f);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, 0u, "vertical off by default");
+    InputMapping m = InputMapping::Default();
+    m.pad_camera.vertical = true;
+    t.SetMapping(m);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, ctrl::kDown, "vertical on: +y = down");
+    t.OnPadAxis(PadAxis::kRightY, -1.0f);
+    t.OnPadAxis(PadAxis::kRightX, 1.0f);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, ctrl::kUp | ctrl::kRight, "up and right together");
+
+    // Releasing the pad lets the camera go; so does pausing (focus loss),
+    // which also keeps it off until resumed.
+    t.ReleasePad();
+    ExpectEq(t.Sample().buttons, 0u, "ReleasePad releases the camera");
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, 0u, "and the stick is centred");
+    t.OnPadAxis(PadAxis::kRightX, 1.0f);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, ctrl::kRight, "turning again");
+    t.SetPadCameraPaused(true);
+    Expect(t.pad_camera_paused(), "paused");
+    ExpectEq(t.Sample().buttons, 0u, "pausing releases at once");
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, 0u, "paused: the held stick does nothing");
+    t.OnPadButton(PadButton::kSouth, true);
+    ExpectEq(t.Sample().buttons, ctrl::kCross, "paused: the other pad inputs still work");
+    t.OnPadButton(PadButton::kSouth, false);
+    t.SetPadCameraPaused(false);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, ctrl::kRight, "resumed: the held stick turns again");
+    // The mouse camera's release does not touch the stick's, and both add up.
+    t.ReleaseMouse();
+    ExpectEq(t.Sample().buttons, ctrl::kRight, "ReleaseMouse keeps the stick camera");
+    t.OnMouseMotion(-6.0f, 0.0f);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, ctrl::kLeft | ctrl::kRight, "mouse and stick add up");
+
+    // all or nothing: min_duty = 1.
+    m = InputMapping::Default();
+    m.pad_camera.min_duty = 1.0f;
+    InputTranslator all(m);
+    c = PollPadCamera(all, 0.5f, 10);
+    ExpectEq(c.right, 10, "min_duty 1: every poll at the threshold");
+
+    // Disabled: nothing.
+    m = InputMapping::Default();
+    m.pad_camera.enabled = false;
+    InputTranslator off(m);
+    c = PollPadCamera(off, 1.0f, 4);
+    ExpectEq(c.right, 0, "pad camera disabled");
+
+    // A pad_axes binding of a right-stick axis wins: that axis drives its
+    // target and the camera leaves it alone; the other axis still turns.
+    m = InputMapping::Default();
+    m.pad_camera.vertical = true;
+    m.pad_axes.push_back(
+        {PadAxis::kRightX, +1, Target::Analog(ctrl::kStickRight, ctrl::kAxisX, +1)});
+    InputTranslator bound(m);
+    bound.OnPadAxis(PadAxis::kRightX, 1.0f);
+    bound.OnPadAxis(PadAxis::kRightY, 1.0f);
+    bound.EndPoll();
+    ExpectEq(bound.Sample().buttons, ctrl::kDown, "bound X: only Y turns");
+    ExpectEq(bound.Sample().analog[1][0], 255, "bound X drives its target");
+    // Even the half without a binding: the axis belongs to pad_axes.
+    bound.OnPadAxis(PadAxis::kRightX, -1.0f);
+    bound.EndPoll();
+    ExpectEq(bound.Sample().buttons, ctrl::kDown, "bound X, other half: no camera");
+    m.pad_axes.push_back({PadAxis::kRightY, -1, Target::Button(ctrl::kTriangle)});
+    bound.SetMapping(m);
+    bound.OnPadAxis(PadAxis::kRightY, -1.0f);
+    bound.EndPoll();
+    ExpectEq(bound.Sample().buttons, ctrl::kTriangle, "bound Y: the binding, no camera");
+}
+
 void TestDefaultGamepad() {
     InputTranslator t;
     t.OnPadButton(PadButton::kSouth, true);
@@ -711,6 +898,7 @@ int main() {
     TestBadFramebuffers();
     TestDefaultKeyboard();
     TestMouseCamera();
+    TestPadCamera();
     TestDefaultGamepad();
     TestCustomMapping();
     TestCtrlData();

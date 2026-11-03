@@ -317,6 +317,29 @@ void TestVirtualGamepad() {
     PumpInto(&input);
     ExpectEq(translator.Sample().buttons, ctrl::kRTrigger | ctrl::kStart, "start held");
 
+    // F23a: the right stick turns the camera (the d-pad) at the end of the
+    // poll; losing the focus pauses it and gaining it resumes it.
+    SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_RIGHTX, 32767);
+    PumpInto(&input);
+    ExpectEq(translator.Sample().buttons, ctrl::kRTrigger | ctrl::kStart,
+             "right stick: nothing before EndPoll");
+    input.EndPoll();
+    ExpectEq(translator.Sample().buttons, ctrl::kRTrigger | ctrl::kStart | ctrl::kRight,
+             "right stick right = d-pad right");
+    SDL_Event focus{};
+    focus.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+    Expect(input.HandleEvent(focus), "focus lost consumed");
+    ExpectEq(translator.Sample().buttons, ctrl::kRTrigger | ctrl::kStart,
+             "focus lost releases the stick camera, not the pad");
+    input.EndPoll();
+    ExpectEq(translator.Sample().buttons, ctrl::kRTrigger | ctrl::kStart,
+             "unfocused: the stick camera stays off");
+    focus.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+    Expect(input.HandleEvent(focus), "focus gained consumed");
+    input.EndPoll();
+    ExpectEq(translator.Sample().buttons, ctrl::kRTrigger | ctrl::kStart | ctrl::kRight,
+             "focus gained: the held stick turns again");
+
     // Unplugging while buttons and the stick are held releases everything.
     SDL_CloseJoystick(joystick);
     SDL_DetachVirtualJoystick(id);
@@ -324,7 +347,9 @@ void TestVirtualGamepad() {
     ExpectEq(input.gamepad_count(), 0, "gamepad closed on GAMEPAD_REMOVED");
     d = translator.Sample();
     Expect(d.buttons == 0 && d.analog[0][0] == 128 && d.analog[0][1] == 128,
-           "removal releases the pad");
+           "removal releases the pad (and the stick camera)");
+    input.EndPoll();
+    ExpectEq(translator.Sample().buttons, 0u, "removed: the camera stays released");
     Expect(std::find(notes.begin(), notes.end(), "pad a down") != notes.end(), "pad note");
 
     ExpectEq(AxisValueFromSdl(-32768), -1.0f, "axis min");
@@ -363,7 +388,7 @@ bool SameBindings(const InputMapping &a, const InputMapping &b) {
            Sorted(a.mouse_buttons, mouse_less) == Sorted(b.mouse_buttons, mouse_less) &&
            Sorted(a.pad_buttons, button_less) == Sorted(b.pad_buttons, button_less) &&
            Sorted(a.pad_axes, axis_less) == Sorted(b.pad_axes, axis_less) && a.analog == b.analog &&
-           a.mouse_camera == b.mouse_camera;
+           a.mouse_camera == b.mouse_camera && a.pad_camera == b.pad_camera;
 }
 
 void TestMappingFile(const char *checked_in_path) {
@@ -415,6 +440,41 @@ void TestMappingFile(const char *checked_in_path) {
                m.mouse_camera.vertical,
            "mouse_camera values");
 
+    // [pad_camera] (F23a), in any order; the hysteresis is checked against
+    // the threshold that results.
+    Expect(ParseInputMapping("[pad_camera]\nhysteresis = 0.3\nenabled = false\nthreshold = 0.6\n"
+                             "min_duty = 1\nvertical = true\n",
+                             defaults, &m, &error),
+           "pad_camera: " + error);
+    Expect(!m.pad_camera.enabled && m.pad_camera.threshold == 0.6f &&
+               m.pad_camera.hysteresis == 0.3f && m.pad_camera.min_duty == 1.0f &&
+               m.pad_camera.vertical,
+           "pad_camera values");
+    Expect(m.mouse_camera == defaults.mouse_camera && m.pad_axes == defaults.pad_axes,
+           "pad_camera alone keeps the rest");
+    Expect(
+        ParseInputMapping("[pad_camera]\nthreshold = 0.2\nhysteresis = 0\n", defaults, &m, &error),
+        "pad_camera without hysteresis: " + error);
+    // A [gamepad] binding of the right stick keeps the camera off that axis
+    // (both halves), and the camera still turns with the other one.
+    Expect(ParseInputMapping("[gamepad]\ncross = \"+rightx\"\n[pad_camera]\nvertical = true\n",
+                             defaults, &m, &error),
+           "rightx bound: " + error);
+    {
+        InputTranslator bound(m);
+        bound.OnPadAxis(PadAxis::kRightX, 1.0f);
+        bound.EndPoll();
+        ExpectEq(bound.Sample().buttons, ctrl::kCross, "+rightx bound: cross, no camera");
+        bound.OnPadAxis(PadAxis::kRightX, -1.0f);
+        bound.OnPadAxis(PadAxis::kRightY, 1.0f);
+        bound.EndPoll();
+        ExpectEq(bound.Sample().buttons, ctrl::kDown, "-rightx left alone, righty turns");
+        InputTranslator camera(defaults);
+        camera.OnPadAxis(PadAxis::kRightX, 1.0f);
+        camera.EndPoll();
+        ExpectEq(camera.Sample().buttons, ctrl::kRight, "default: rightx turns");
+    }
+
     // A [mouse] section replaces the mouse map.
     Expect(ParseInputMapping("[mouse]\ncross = [\"middle\", \"x1\"]\n", defaults, &m, &error),
            "mouse: " + error);
@@ -450,6 +510,15 @@ void TestMappingFile(const char *checked_in_path) {
         {"[mouse_camera]\npixels_per_press = 0\n", "pixels_per_press"},
         {"[mouse_camera]\nenabled = 1\n", "expected true or false"},
         {"[mouse_camera]\nspeed = 2\n", "unknown setting 'speed'"},
+        {"[pad_camera]\nthreshold = 0.9\n", "[pad_camera] threshold: expected a number"},
+        {"[pad_camera]\nthreshold = \"high\"\n", "[pad_camera] threshold"},
+        {"[pad_camera]\nhysteresis = -0.1\n", "[pad_camera] hysteresis: expected a number"},
+        {"[pad_camera]\nmin_duty = 0\n", "[pad_camera] min_duty"},
+        {"[pad_camera]\nmin_duty = 1.5\n", "[pad_camera] min_duty"},
+        {"[pad_camera]\nvertical = \"yes\"\n", "[pad_camera] vertical: expected true or false"},
+        {"[pad_camera]\nenabled = 0\n", "expected true or false"},
+        {"[pad_camera]\nthreshold = 0.3\nhysteresis = 0.3\n", "smaller than threshold"},
+        {"[pad_camera]\ndeadzone = 0.2\n", "[pad_camera]: unknown setting 'deadzone'"},
         {"keyboard = 1\n", "must be a table"},
         {"[analog]\ndeadzone = 2.0\n", "deadzone"},
         {"[analog]\ncircular = 1\n", "circular"},
