@@ -67,6 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
+| 5 🟨 | F23a, F23b | Adelantadas a pedido del usuario el 2026-11-03, antes de cerrar M6 (F21b y F22c siguen abiertas). **No cambian el ABI del runtime** (`psprecomp::Runtime`, `AllegrexContext`, `kOverlayAbiVersion`) ni los headers del framework: las etapas que el jugador ya compiló tienen que seguir cargando. F23a: F22 · F23b: F15b. |
 | — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 ✅ → F22b ✅ → F22c 🟨 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22, F22b y F22c desde el 2026-11-01 (ver su ficha). |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
@@ -120,6 +121,8 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F22 | Distribución: compilar en la máquina del jugador | M6 | ✅ hecha (modelo decidido, `setup.py` de punta a punta en Linux; el resto se partió en F22b y F22c) |
 | F22b | Toolchain portátil, launcher y paquetes | M6 | ✅ hecha (Windows con llvm-mingw en la CI, launcher, etapas en dos niveles y release revisada; la prueba en Windows y en la Steam Deck: pendiente del usuario) |
 | F22c | README, aviso legal e instalaciones limpias | M6 | 🟨 hecha en Linux (README en inglés y español, aviso legal, smoke test e instalaciones limpias en Linux; Windows y el Flatpak: pendientes del usuario) |
+| F23a | Cámara con el stick derecho (autónomo) | M7 | 🟨 en curso (ola 5) |
+| F23b | Resolución interna configurable, hasta 4K (autónomo) | M7 | 🟨 en curso (ola 5) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
 Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se explica en la nota de sesión).
@@ -1558,6 +1561,53 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 ---
 
 ## F23+ — Mejoras (se planifican cuando M6 esté cerrado)
+
+### F23a — Cámara con el stick derecho, autónomo (ola 5)
+
+- **Objetivo**: girar la cámara del juego con el stick derecho del mando, como ya se hace con el
+  mouse (`[mouse_camera]`, F22).
+- **Requisitos**: F22. Adelantada el 2026-11-03 a pedido del usuario (ver la ola 5).
+- **Tareas**:
+  - La cámara del juego se mueve con la cruceta [V por el usuario, F22]. Un `[pad_camera]` en
+    `input.toml` hace que el eje X del stick derecho apriete ← o → pasado un umbral, con
+    histéresis. El eje Y apretaría ↑ o ↓, pero solo con `vertical = true` (apagado por defecto,
+    como en `[mouse_camera]`). Que el giro siga la inclinación si se puede (pulsos cuya
+    frecuencia crece con el ángulo); si no, todo o nada.
+  - Solo el frontend (`profiles/mpo/host/frontend`: `InputTranslator`, `input_config`,
+    `sdl_input`). El stick derecho no tiene binding por defecto. Si el `input.toml` del jugador
+    le pone uno en `pad_axes`, ese gana y `[pad_camera]` no actúa sobre ese eje.
+  - Soltar todo al perder el foco o al desconectar el mando, como `ReleasePad`.
+  - Las grabaciones no cambian, porque guardan muestras de `sceCtrl`.
+  - README.md y README.es.md (Controls), los dos a la vez (§7 de CLAUDE.md).
+- **Criterios de hecho**: tests sin el juego del umbral, la histéresis, la parte proporcional,
+  el parseo de `[pad_camera]`, la prioridad de `pad_axes` y el soltar al perder el foco. `ctest`
+  completo en Clang y GCC. Las repeticiones de `analysis/f21` salen idénticas, porque sin mando
+  no cambia nada.
+
+### F23b — Resolución interna configurable, hasta 4K, autónomo (ola 5)
+
+- **Objetivo**: que el renderer Vulkan dibuje a N veces la resolución de la PSP (480×272), de 1×
+  a 8× (8× = 3840×2176, "4K"), y que el resto del runtime no lo note.
+- **Requisitos**: F15b. Adelantada el 2026-11-03 a pedido del usuario (ver la ola 5).
+- **Tareas**:
+  - Una opción `--render-scale N` en `mpo_boot` y una variable `MPO_RENDER_SCALE` (A/B, como los
+    `MPO_VK_*`), y que el launcher la pueda pasar después (se anota, no hace falta ahora). Con
+    1× todo tiene que quedar exactamente como hoy.
+  - Los targets de color y profundidad de `GeRenderer` a escala N: viewport, scissor, región,
+    líneas, puntos, sprites y clears. La interpolación exacta de softgpu (F15b, aristas enteras)
+    tiene que seguir siendo exacta a 1×; a N× vale el muestreo a la resolución nueva (como
+    PPSSPP).
+  - Todo lo que vuelve a la VRAM (`EndFrame(readback)`, `SyncMemory`, el hazard flush, las
+    copias de un target a otro y la textura de un render target) se baja a 1×. El CPU del juego
+    y las capturas (`--capture`) ven siempre la resolución de la PSP.
+  - El presentador (`SdlVulkanWindow`) presenta el target a N× directo, sin bajar a 1×.
+  - Los shaders se cambian en `shaders/ge.*` y se regeneran con `compile_shaders.py` (el test
+    `mpo_vulkan_shaders_fresh` lo exige).
+- **Criterios de hecho**: los tests de Vulkan (`mpo_vulkan_*`) pasan a 1× sin cambios y tienen
+  casos nuevos a 2× y 4× (los readbacks a 1× coinciden con los de 1×, dentro del umbral de F15a).
+  Hay capturas del juego a 1× y a 4× de los mismos frames (una repetición de `analysis/f21`) y
+  `capture_compare.py` a 1× contra softgpu da lo mismo que antes. Las capas de validación quedan
+  sin errores. `ctest` completo en Clang y GCC.
 
 - **El emisor por funciones, con deduplicación** (la opción (b) de F21; acordado con el usuario el
   2026-11-01 como fase propia después de la 0.1). Las 92 etapas son casi el mismo programa: de
