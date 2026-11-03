@@ -11,7 +11,8 @@
 // --frames N exits after N presented frames (0 = until the window closes).
 // --capture writes the last swapchain image as PNG (when the surface allows
 // reading it back). Validation follows MPO_VK_VALIDATION / the build type;
-// any validation error makes the exit code 1.
+// any validation error makes the exit code 1. MPO_RENDER_SCALE=N renders and
+// shows the target at N x (F23b).
 
 #include <cstdio>
 #include <cstdlib>
@@ -148,8 +149,8 @@ int main(int argc, char **argv) {
         }
         const bool last = frames > 0 && presented + 1 >= frames;
         const bool want_capture = last && !capture_path.empty();
-        if (!presenter->Present(target.image, mpo::frontend::kPspScreenWidth,
-                                mpo::frontend::kPspScreenHeight,
+        if (!presenter->Present(target.image, mpo::frontend::kPspScreenWidth * target.scale,
+                                mpo::frontend::kPspScreenHeight * target.scale,
                                 window->Destination(mpo::frontend::kPspScreenWidth,
                                                     mpo::frontend::kPspScreenHeight),
                                 linear, want_capture ? &capture : nullptr, &err)) {

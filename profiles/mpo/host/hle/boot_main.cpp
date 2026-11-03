@@ -11,7 +11,8 @@
 //            [--fiber-stack-mib N] [--preempt-interval N] [--us-per-preempt N]
 //            [--press <buttons>@<ms>[+<ms>]]... [--capture <dir>] [--capture-every N]
 //            [--window 0|1] [--scale N] [--filter nearest|linear] [--input-map <input.toml>]
-//            [--overlays <dir>|none] [--renderer soft|vulkan] [--capture-window 0|1]
+//            [--overlays <dir>|none] [--renderer soft|vulkan] [--render-scale N]
+//            [--capture-window 0|1]
 //            [--audio 0|1] [--audio-wav <file>] [--fonts <dir>] [--osk-text <text>]...
 //            [--record-input <file>] [--replay-input <file>] [--replay-end stop|live]
 //            [--check-every N] [--input-log 0|1]
@@ -73,6 +74,11 @@
 // the swapchain image (what the window shows) instead of VRAM. The report
 // adds the renderer's counters and the validation messages; a validation
 // error fails the run (MPO_VK_VALIDATION=1 turns the layers on in Release).
+//
+// F23b: --render-scale N (1 to 8, default MPO_RENDER_SCALE or 1) makes the
+// Vulkan renderer draw at N x 480x272 (8: 3840x2176). The window shows the
+// N x target; what goes back to VRAM (the game, --capture) stays 480x272.
+// --scale still sizes the window (--scale 4 shows a 4x render 1:1).
 //
 // F16b: sceAudio, sceSasCore and sceAtrac3plus play.
 //   --audio 1                 plays the mix on the default SDL3 audio device
@@ -503,6 +509,7 @@ int main(int argc, char **argv) {
     std::string input_map;
     std::string overlays_dir = MPO_DEFAULT_OVERLAYS;
     bool vulkan = false;
+    int render_scale = 0; // 0: MPO_RENDER_SCALE or 1
     bool capture_window = false;
     int audio = -1; // -1: on with a window.
     std::string audio_wav;
@@ -585,6 +592,12 @@ int main(int argc, char **argv) {
             if (value != "soft" && value != "vulkan")
                 return fail("--renderer takes soft or vulkan");
             vulkan = value == "vulkan";
+        } else if (option == "--render-scale") {
+            char *end = nullptr;
+            const long n = std::strtol(value.c_str(), &end, 10);
+            if (end == value.c_str() || *end != '\0' || n < 1 || n > 8)
+                return fail("--render-scale takes 1 to 8");
+            render_scale = static_cast<int>(n);
         } else if (option == "--capture-window") {
             capture_window = value != "0";
         } else if (option == "--audio") {
@@ -712,6 +725,7 @@ int main(int argc, char **argv) {
     if (vulkan)
         return fail("--renderer vulkan needs a build with the Vulkan renderer (mpo_vulkan)");
 #endif
+    if (render_scale > 1 && !vulkan) return fail("--render-scale needs --renderer vulkan");
     if (capture_window && (!vulkan || !window || capture_dir.empty()))
         return fail("--capture-window 1 needs --renderer vulkan, --window 1 and --capture");
     // A window plays at the PSP's speed unless asked otherwise.
@@ -943,16 +957,20 @@ int main(int argc, char **argv) {
             mpo::vk::VulkanContext::Status status;
             vk_context = mpo::vk::VulkanContext::Create(vk_options, &status, &error);
             if (!vk_context) return fail("vulkan: " + error);
-            gpu = mpo::vk::GeRenderer::Create(vk_context.get(), system.ge().ge().memory(), &error);
+            mpo::vk::RendererOptions renderer_options = mpo::vk::RendererOptions::FromEnv();
+            if (render_scale != 0) renderer_options.render_scale = render_scale;
+            gpu = mpo::vk::GeRenderer::Create(vk_context.get(), system.ge().ge().memory(),
+                                              renderer_options, &error);
             if (!gpu) return fail("vulkan renderer: " + error);
             const mpo::vk::DeviceCaps &caps = vk_context->caps();
             std::printf("renderer: vulkan on %s (%s), API %s, %s, destination reads by %s, "
-                        "blending %s, validation %s%s\n",
+                        "blending %s, render scale %dx (%dx%d), validation %s%s\n",
                         caps.device_name.c_str(), caps.driver_name.c_str(),
                         mpo::vk::VersionString(caps.api_version).c_str(),
                         caps.dynamic_rendering ? "dynamic rendering" : "render passes",
                         mpo::vk::DstReadName(gpu->dst_read()),
-                        mpo::vk::BlendPathName(gpu->options().blend),
+                        mpo::vk::BlendPathName(gpu->options().blend), gpu->render_scale(),
+                        480 * gpu->render_scale(), 272 * gpu->render_scale(),
                         caps.validation_active ? "on" : "off",
                         caps.sync_validation_active ? " (+synchronization)" : "");
             gpu->stats().log = [](std::string_view line) {
@@ -1141,10 +1159,11 @@ int main(int argc, char **argv) {
                                     format, &target);
                 std::string present_error;
                 const bool ok =
-                    from_target ? swapchain->Present(target.image, sw, sh, where, linear_filter,
-                                                     window_capture, &present_error)
-                                : swapchain->PresentRgba(shown.data(), sw, sh, where, linear_filter,
-                                                         window_capture, &present_error);
+                    from_target
+                        ? swapchain->Present(target.image, sw * target.scale, sh * target.scale,
+                                             where, linear_filter, window_capture, &present_error)
+                        : swapchain->PresentRgba(shown.data(), sw, sh, where, linear_filter,
+                                                 window_capture, &present_error);
                 ++(from_target ? presented_targets : presented_uploads);
                 if (!ok && gpu_error.empty()) {
                     gpu_error = "present: " + present_error;

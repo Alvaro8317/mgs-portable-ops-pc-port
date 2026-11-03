@@ -13,6 +13,9 @@
 //
 // F15b: v_tri is the triangle's index in the batch (each triangle has its own
 // three vertices); the GE_EXACT build of ge.frag reads its GpuTriangle.
+//
+// F23b: at a render scale N the viewport is N times larger in the image (the
+// positions stay in GE pixels) and a point (one GE pixel) is N pixels wide.
 
 #version 450
 
@@ -31,6 +34,10 @@ layout(push_constant) uniform Push {
     float lod_slope;
     vec2 ndc_origin; // framebuffer pixel at NDC (-1, -1)
     uvec4 dither;
+    uint blend_fix_src;
+    uint blend_fix_dst;
+    uint write_mask;
+    uint render_scale; // F23b
 } pc;
 
 layout(location = 0) in vec4 in_pos;
@@ -49,7 +56,7 @@ void main() {
     const float w = in_pos.w;
     const vec2 ndc = (in_pos.xy - pc.ndc_origin) * pc.ndc_scale - vec2(1.0);
     gl_Position = vec4(ndc * w, in_pos.z * w, w);
-    gl_PointSize = 1.0;
+    gl_PointSize = float(pc.render_scale);
     v_color0 = in_color0;
     v_color1 = in_color1.rgb;
     v_uvq = in_uvq;

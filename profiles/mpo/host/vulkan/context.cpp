@@ -383,6 +383,8 @@ bool VulkanContext::Init(const ContextOptions &options, Status *status, std::str
     caps_.max_viewport_dimension = std::min(chosen.props.limits.maxViewportDimensions[0],
                                             chosen.props.limits.maxViewportDimensions[1]);
     caps_.viewport_bounds_min = chosen.props.limits.viewportBoundsRange[0];
+    caps_.viewport_bounds_max = chosen.props.limits.viewportBoundsRange[1];
+    caps_.max_point_size = chosen.props.limits.pointSizeRange[1];
 
     const bool use_13 = options.allow_vulkan_1_3 && GetEnv("MPO_VK_NO_13") != "1" &&
                         chosen.props.apiVersion >= VK_API_VERSION_1_3;
@@ -445,6 +447,10 @@ bool VulkanContext::Init(const ContextOptions &options, Status *status, std::str
         GetEnv("MPO_VK_NO_DEPTH_CLAMP") != "1") {
         want.features.depthClamp = VK_TRUE;
         caps_.depth_clamp = true;
+    }
+    if (f2.features.largePoints) {
+        want.features.largePoints = VK_TRUE;
+        caps_.large_points = true;
     }
     std::vector<const char *> dev_ext;
     if (surface_ != VK_NULL_HANDLE) dev_ext.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
