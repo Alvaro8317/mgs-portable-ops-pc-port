@@ -111,9 +111,16 @@ struct PushConstants {
     std::uint32_t blend_fix_src = 0;
     std::uint32_t blend_fix_dst = 0;
     std::uint32_t write_mask = 0;
-    std::uint32_t reserved = 0;
+    // F23b: the render scale (point size in ge.vert, GE pixel of a fragment
+    // in ge.frag).
+    std::uint32_t render_scale = 1;
+    // F23b: a textured rectangle at an even render scale: 1 + the sample of
+    // each N x N block that goes back to VRAM, which takes its UV half an
+    // image pixel down and right (at the GE pixel's centre, as softgpu);
+    // 0 otherwise. ge.frag only.
+    std::uint32_t rect_sample = 0;
 };
-static_assert(sizeof(PushConstants) == 96);
+static_assert(sizeof(PushConstants) == 100);
 
 // How a shader reads the destination pixel (F15a).
 enum class DstRead : std::uint8_t {

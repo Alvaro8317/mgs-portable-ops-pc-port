@@ -40,6 +40,22 @@
 //   bytes. The palette goes to the shader in a uniform buffer.
 // - Frames in flight: kFramesInFlight sets of command buffers, fences, upload
 //   arenas and descriptor pools. Recording starts with the first draw.
+// - Render scale (F23b, RendererOptions::render_scale): the targets are N
+//   times the GE's size and the GPU rasterizes at that resolution (viewport,
+//   scissor, points and line pixels as N x N blocks), with its own
+//   interpolation (the exact path is softgpu's at 1x only). Everything that
+//   goes back to VRAM comes down to 1x: the readback takes, from each N x N
+//   block, the sample (s, s), s = (N - 1) / 2, and triangle vertices are
+//   shifted so that this sample sits where softgpu samples the pixel
+//   (16x + 7). Rectangles are not shifted: a half-pixel shift (their sample
+//   point is the centre, between two samples at even N) would move every
+//   sprite by one image pixel and leave the last column and row uncovered;
+//   their edges go to the GE pixel edges that cover softgpu's pixels, and at
+//   an even N the sample pixel alone takes its UV at the pixel centre
+//   (PushConstants::rect_sample). Uploads from VRAM fill each block with its
+//   pixel. So the game, the hazard readbacks, render-to-
+//   texture and the captures see PSP resolution; only the presenter shows
+//   the N x target.
 //
 // What the GPU path does not reproduce exactly is counted (stats().
 // approximations), never dropped silently (CLAUDE.md §5).
@@ -139,6 +155,8 @@ const char *BlendPathName(BlendPath path);
 //                                       reads or overwrites what a target
 //                                       drew (VRAM is then stale until the
 //                                       end of the run, as before F15b)
+//   MPO_RENDER_SCALE=N                  F23b: render at N x 480x272, N = 1..8
+//                                       (anything else is 1)
 // (the device toggles MPO_VK_NO_13, MPO_VK_NO_DEPTH_CLAMP,
 // MPO_VK_NO_RASTER_ORDER and MPO_VK_NO_LOCAL_READ are read by the context).
 struct RendererOptions {
@@ -148,6 +166,9 @@ struct RendererOptions {
     bool texture_cache = true;
     bool hazard_flush = true;
     bool exact = true;
+    // F23b: 1 (the PSP's resolution) to GeRenderer::kMaxRenderScale. The
+    // renderer lowers it when the device cannot (render_scale()).
+    int render_scale = 1;
     // Seed for the VkPipelineCache (GeRenderer::PipelineCacheData of an
     // earlier renderer on the same device); not read from the environment.
     std::vector<std::uint8_t> pipeline_cache_data;
@@ -159,6 +180,7 @@ class GeRenderer final : public ge::DrawBackend {
 public:
     static constexpr int kFramesInFlight = 2;
     static constexpr int kTargetHeight = 512;
+    static constexpr int kMaxRenderScale = 8;
 
     // `mem` must outlive the renderer (it is the GE's memory view). The
     // options come from the environment (RendererOptions::FromEnv).
@@ -200,10 +222,12 @@ public:
     struct TargetInfo {
         VkImage image = VK_NULL_HANDLE;
         VkImageView view = VK_NULL_HANDLE;
+        // The image's size: `scale` times the target's size in GE pixels.
         int width = 0;
         int height = 0;
         int stride = 0;
         ge::BufferFormat format = ge::BufferFormat::k5551;
+        int scale = 1;
     };
     // The colour target for the framebuffer at `fb_address` (with or without
     // the VRAM base). Between frames targets stay in
@@ -230,6 +254,9 @@ public:
     [[nodiscard]] const RendererOptions &options() const { return options_; }
     // The method in use (never kAuto).
     [[nodiscard]] DstRead dst_read() const { return dst_read_; }
+    // The render scale in use (F23b): options().render_scale, clamped to
+    // 1..kMaxRenderScale and lowered to what the device supports.
+    [[nodiscard]] int render_scale() const { return scale_; }
 
 private:
     struct DirtyRect {
@@ -251,6 +278,9 @@ private:
         std::uint32_t offset = 0;
         int stride = 0;
         ge::BufferFormat format = ge::BufferFormat::k5551;
+        // In GE pixels; the image is render_scale() times as large (F23b).
+        int width = 0;
+        int height = 0;
         Image image;
         Buffer readback;
         DirtyRect dirty;
@@ -282,7 +312,7 @@ private:
     struct DepthTarget {
         std::uint32_t offset = 0;
         int stride = 0;
-        int width = 0;
+        int width = 0; // in GE pixels (the height is kTargetHeight)
         Image image;
         Buffer readback;
         DirtyRect dirty;
@@ -344,6 +374,8 @@ private:
     GeRenderer(VulkanContext *ctx, const ge::MemoryView &mem, const RendererOptions &options)
         : ctx_(ctx), mem_(mem), options_(options) {}
     bool Init(std::string *error);
+    // F23b: the render scale the device supports and the viewport for it.
+    bool InitScale(std::string *error);
     void Fail(std::string message);
     bool EnsureFrame();
     Frame &frame() { return frames_[static_cast<std::size_t>(frame_index_)]; }
@@ -354,6 +386,17 @@ private:
     // frame's init commands. `initial`: the image has no contents yet.
     bool UploadColorRows(ColorTarget &t, int y1, int y2, bool initial);
     bool UploadDepthRows(DepthTarget &t, int y1, int y2, bool initial);
+    // F23b: copies `rows` rows of `row_bytes` (one row of the scaled image
+    // per GE row, at `offset` in the staging buffer) into rows y1 * N ..
+    // (y1 + rows) * N - 1 of `image`, each GE row N times.
+    void CopyRowsToImage(VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSize offset, VkImage image,
+                         VkImageAspectFlags aspect, int width, int y1, int rows,
+                         int bytes_per_pixel) const;
+    // F23b: the copy into a target's readback buffer: the whole image at 1x;
+    // at N x, rows y1..y2 of the sample row (y * N + s) of each GE row, row y
+    // at y * width * N pixels.
+    void CopyImageToRows(VkCommandBuffer cmd, const Image &image, VkBuffer buffer, int width,
+                         int y1, int y2, int bytes_per_pixel) const;
     // F14b: at a target's first use in a frame, uploads again the rows whose
     // VRAM bytes changed since its shadow was taken.
     bool SyncColorTarget(ColorTarget &t);
@@ -411,6 +454,7 @@ private:
                       const ge::VertexData &v1);
     // Points and the pixels of a line (softgpu's DDA): exact pixels.
     void AddPixels(const std::vector<std::uint32_t> &keys);
+    void InflateForScale(PixelRect *r) const;
     bool PrepareDstSet(int color);
     void CopyForDstRead(ColorTarget &t, const PixelRect &r);
     void PassBarrier();
@@ -454,7 +498,18 @@ private:
     int pass_color_ = -1;
     int pass_depth_ = -1;
     VkPipeline bound_pipeline_ = VK_NULL_HANDLE;
+    // The viewport in GE pixels (F23b: at N x, the VkViewport is N times
+    // this, inside the device's limits).
+    float viewport_origin_ = -2048.0f;
     float viewport_size_ = 4096.0f;
+    // F23b: the render scale, the sample of each N x N block the readback
+    // takes, the shift (in GE pixels) that puts softgpu's sample point of a
+    // triangle on it, and whether triangles take the exact path
+    // (options_.exact, at 1x only).
+    int scale_ = 1;
+    int sample_ = 0;
+    float triangle_bias_ = 1.0f / 16.0f;
+    bool exact_ = true;
     // The primitives of the current batch (destination reads only) and their
     // bounds.
     std::vector<GroupPrimitive> batch_prims_;

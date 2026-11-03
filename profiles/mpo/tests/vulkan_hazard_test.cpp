@@ -17,7 +17,9 @@
 // The renderer must count each case in stats().hazard_flushes. Every list and
 // value is made up here (CLAUDE.md §1.1). Needs a Vulkan 1.2 device; without
 // one it exits 77 (skipped). Runs on the 1.3 path (when the device has it)
-// and on the 1.2 path; any validation error fails.
+// and on the 1.2 path; any validation error fails. F23b: and again at render
+// scales 2 and 4 (1.3 path): the early readbacks come down to 1x, so memory
+// must still match softgpu exactly (sprites cover whole GE pixels).
 
 #include <cstdint>
 #include <cstdio>
@@ -233,7 +235,7 @@ std::uint64_t Flushes(const mpo::vk::RendererStats &st, const std::string &what)
 
 // `hazards` false: the negative control (MPO_VK_NO_HAZARD_FLUSH=1), where
 // every case must differ from softgpu.
-int RunAll(bool allow_13, bool hazards) {
+int RunAll(bool allow_13, bool hazards, int render_scale = 1) {
     mpo::vk::ContextOptions opts;
     opts.app_name = "mpo_vulkan_hazard_test";
     opts.validation = true;
@@ -260,10 +262,17 @@ int RunAll(bool allow_13, bool hazards) {
     auto vk = std::make_unique<Machine>();
     mpo::vk::RendererOptions options = mpo::vk::RendererOptions::FromEnv();
     options.hazard_flush = hazards;
+    options.render_scale = render_scale;
     auto gpu = mpo::vk::GeRenderer::Create(ctx.get(), vk->mem, options, &err);
     if (!gpu) {
         std::fprintf(stderr, "FAIL: renderer: %s\n", err.c_str());
         return 1;
+    }
+    if (gpu->render_scale() != render_scale) {
+        // The device's limits (largePoints, image size) lowered it.
+        std::printf("  render scale %d lowered to %d by the device: skipped\n", render_scale,
+                    gpu->render_scale());
+        return 0;
     }
     vk->gpu = gpu.get();
     vk->ge.SetDrawBackend(gpu.get());
@@ -388,6 +397,11 @@ int main() {
     if (first == 0 && g_failures == 0) {
         std::printf("again on the Vulkan 1.2 path (render passes):\n");
         (void)RunAll(false, true);
+    }
+    for (int scale : {2, 4}) {
+        if (g_failures != 0) break;
+        std::printf("at render scale %d (1.3 path):\n", scale);
+        (void)RunAll(true, true, scale);
     }
     if (g_failures == 0) {
         std::printf("negative control, without the early readbacks:\n");

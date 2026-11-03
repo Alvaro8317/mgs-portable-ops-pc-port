@@ -14,7 +14,9 @@
 //   of VRAM, follows all of that.
 // Every list and value is made up here (CLAUDE.md §1.1). Needs a Vulkan 1.2
 // device; without one it exits 77 (skipped). Runs on the 1.3 path (when the
-// device has it) and on the 1.2 path; any validation error fails.
+// device has it) and on the 1.2 path; any validation error fails. F23b: and
+// again at render scales 2, 4 and 8 (1.3 path), where VRAM must still match
+// softgpu exactly (sprites cover whole GE pixels at any scale).
 
 #include <cstdint>
 #include <cstdio>
@@ -162,7 +164,7 @@ int Differing(const Machine &a, const Machine &b, std::uint32_t fb, int rows) {
     return n;
 }
 
-int RunAll(bool allow_13) {
+int RunAll(bool allow_13, int render_scale = 1) {
     mpo::vk::ContextOptions opts;
     opts.app_name = "mpo_vulkan_vram_sync_test";
     opts.validation = true;
@@ -189,10 +191,18 @@ int RunAll(bool allow_13) {
 
     auto soft = std::make_unique<Machine>();
     auto vk = std::make_unique<Machine>();
-    auto gpu = mpo::vk::GeRenderer::Create(ctx.get(), vk->mem, &err);
+    mpo::vk::RendererOptions options = mpo::vk::RendererOptions::FromEnv();
+    options.render_scale = render_scale;
+    auto gpu = mpo::vk::GeRenderer::Create(ctx.get(), vk->mem, options, &err);
     if (!gpu) {
         std::fprintf(stderr, "FAIL: renderer: %s\n", err.c_str());
         return 1;
+    }
+    if (gpu->render_scale() != render_scale) {
+        // The device's limits (largePoints, image size) lowered it.
+        std::printf("  render scale %d lowered to %d by the device: skipped\n", render_scale,
+                    gpu->render_scale());
+        return 0;
     }
     vk->gpu = gpu.get();
     vk->ge.SetDrawBackend(gpu.get());
@@ -218,6 +228,14 @@ int RunAll(bool allow_13) {
     expect(st.target_uploads == 2, "colour and depth targets created");
     expect(st.target_resyncs == 0, "nothing to synchronise yet");
     expect(matches(kFbA), "target A matches VRAM after the readback");
+    {
+        mpo::vk::GeRenderer::TargetInfo info;
+        expect(gpu->FindTarget(MemoryView::kVramBase + kFbA, kStride, BufferFormat::k5551, &info) &&
+                   info.scale == render_scale && info.width == 512 * render_scale &&
+                   info.height == 512 * render_scale,
+               "target A is " + std::to_string(render_scale) + " times 512x512 (" +
+                   std::to_string(info.width) + "x" + std::to_string(info.height) + ")");
+    }
 
     // 2. The CPU writes 10 rows (a video frame, a memcpy...).
     soft->CpuWriteRows(kFbA, 50, 10, 0x5A5A);
@@ -273,6 +291,11 @@ int main() {
     if (first == 0 && g_failures == 0) {
         std::printf("again on the Vulkan 1.2 path (render passes):\n");
         (void)RunAll(false);
+    }
+    for (int scale : {2, 4, 8}) {
+        if (g_failures != 0) break;
+        std::printf("at render scale %d (1.3 path):\n", scale);
+        (void)RunAll(true, scale);
     }
     if (g_failures != 0) {
         std::fprintf(stderr, "mpo_vulkan_vram_sync_test: %d failure(s)\n", g_failures);

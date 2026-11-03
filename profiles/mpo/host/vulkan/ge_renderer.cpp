@@ -27,7 +27,10 @@ constexpr int kScreenScale = ge::kScreenScale;
 // units (TriangleEdge::Start); Vulkan samples at the pixel centre (x + 0.5).
 // Shifting triangle vertices by +1/16 px makes both the same point. Rectangles
 // (DrawRectangle) step their UVs from the pixel centre, so they get no shift.
-constexpr int kTriangleBias = 1;
+// F23b: at a render scale N the GPU samples GE pixel x at x + (i + 0.5) / N;
+// the readback keeps sample i = (N - 1) / 2, and the triangle shift moves
+// softgpu's point onto it (InitScale). Rectangles keep no shift (header).
+constexpr float kTriangleSample = 7.0f / 16.0f;
 
 std::uint64_t Hash64(const std::uint8_t *data, std::size_t size) {
     // FNV-1a on 64-bit words, then the tail; not cryptographic, only a cache
@@ -296,11 +299,13 @@ bool MayOverlap(const Prim &a, const Prim &b) {
     return true;
 }
 
-GpuVertex MakeVertex(const ge::VertexData &v, int bias, float w, std::uint32_t color0,
+// `bias` in GE pixels (at 1x, 1/16 for triangles and 0 for rectangles: the
+// sum is exact, as (x + 1) / 16 was).
+GpuVertex MakeVertex(const ge::VertexData &v, float bias, float w, std::uint32_t color0,
                      std::uint32_t color1) {
     GpuVertex g;
-    g.x = static_cast<float>(v.screenpos.x + bias) / static_cast<float>(kScreenScale);
-    g.y = static_cast<float>(v.screenpos.y + bias) / static_cast<float>(kScreenScale);
+    g.x = static_cast<float>(v.screenpos.x) / static_cast<float>(kScreenScale) + bias;
+    g.y = static_cast<float>(v.screenpos.y) / static_cast<float>(kScreenScale) + bias;
     g.z = static_cast<float>(v.screenpos.z & 0xFFFF) / 65535.0f;
     g.w = w;
     g.s = v.s;
@@ -514,6 +519,12 @@ RendererOptions RendererOptions::FromEnv() {
     o.texture_cache = GetEnv("MPO_VK_NO_TEX_CACHE") != "1";
     o.hazard_flush = GetEnv("MPO_VK_NO_HAZARD_FLUSH") != "1";
     o.exact = GetEnv("MPO_VK_NO_EXACT") != "1";
+    if (const std::string scale = GetEnv("MPO_RENDER_SCALE"); !scale.empty()) {
+        char *end = nullptr;
+        const long n = std::strtol(scale.c_str(), &end, 10);
+        if (end != scale.c_str() && *end == '\0' && n >= 1 && n <= GeRenderer::kMaxRenderScale)
+            o.render_scale = static_cast<int>(n);
+    }
     return o;
 }
 
@@ -578,6 +589,67 @@ std::unique_ptr<GeRenderer> GeRenderer::Create(VulkanContext *ctx, const ge::Mem
     return r;
 }
 
+bool GeRenderer::InitScale(std::string *error) {
+    const DeviceCaps &caps = ctx_->caps();
+    if (caps.viewport_bounds_min > kViewportOrigin) {
+        if (error) *error = "viewportBoundsRange does not reach -2048";
+        return false;
+    }
+    // 1x: 8192 covers [-2048, 6144); the spec minimum (4096) still covers the
+    // framebuffer and its surroundings.
+    viewport_origin_ = kViewportOrigin;
+    viewport_size_ = static_cast<float>(std::min<std::uint32_t>(8192, caps.max_viewport_dimension));
+    const int wanted = std::clamp(options_.render_scale, 1, kMaxRenderScale);
+    // At N x: a target up to 1024 x 512 GE pixels is an image N times that;
+    // points are N pixels wide; the viewport (a power of two in GE pixels,
+    // N times that in the image) must still cover the 1024 x 512 target.
+    const auto viewport_for = [&](int n, float *origin, float *size) {
+        const float fn = static_cast<float>(n);
+        float s = std::min({8192.0f, static_cast<float>(caps.max_viewport_dimension) / fn,
+                            (caps.viewport_bounds_max - caps.viewport_bounds_min) / fn});
+        s = std::exp2(std::floor(std::log2(std::max(s, 1.0f))));
+        float o = std::max(
+            {kViewportOrigin, 512.0f - s / 2.0f, std::ceil(caps.viewport_bounds_min / fn)});
+        o = std::min(o, std::floor(caps.viewport_bounds_max / fn - s));
+        *origin = o;
+        *size = s;
+        return o <= 0.0f && o + s >= 1024.0f;
+    };
+    int n = wanted;
+    std::string why;
+    for (; n > 1; --n) {
+        float origin = 0.0f;
+        float size = 0.0f;
+        if (static_cast<std::uint32_t>(1024 * n) > caps.max_image_dimension_2d) {
+            why = "maxImageDimension2D " + std::to_string(caps.max_image_dimension_2d);
+        } else if (!caps.large_points || caps.max_point_size < static_cast<float>(n)) {
+            why = "no largePoints";
+        } else if (!viewport_for(n, &origin, &size)) {
+            why = "the viewport limits";
+        } else {
+            viewport_origin_ = origin;
+            viewport_size_ = size;
+            break;
+        }
+    }
+    if (n != wanted) {
+        ctx_->Log("vulkan renderer: render scale " + std::to_string(wanted) + " lowered to " +
+                  std::to_string(n) + " (" + why + ")");
+    }
+    scale_ = n;
+    // The sample of each N x N block that goes back to VRAM, and the shift
+    // that puts softgpu's triangle sample point on it: 1/16 at 1x, as
+    // before; always under half an image pixel, so a triangle edge on a GE
+    // pixel edge still covers whole N x N blocks.
+    sample_ = (n - 1) / 2;
+    const float centre = (static_cast<float>(sample_) + 0.5f) / static_cast<float>(n);
+    triangle_bias_ = centre - kTriangleSample;
+    // softgpu's integer interpolation at its own sample points only means
+    // something at 1x; at N x the GPU interpolates (PPSSPP's behaviour).
+    exact_ = options_.exact && n == 1;
+    return true;
+}
+
 bool GeRenderer::Init(std::string *error) {
     trace_draws_ = GetEnv("MPO_VK_TRACE_DRAWS") == "1";
     if (options_.dst_read == DstRead::kAuto) {
@@ -593,14 +665,7 @@ bool GeRenderer::Init(std::string *error) {
     } else {
         dst_read_ = options_.dst_read;
     }
-    // 8192 covers [-2048, 6144); the spec minimum (4096) still covers the
-    // framebuffer and its surroundings.
-    viewport_size_ =
-        static_cast<float>(std::min<std::uint32_t>(8192, ctx_->caps().max_viewport_dimension));
-    if (ctx_->caps().viewport_bounds_min > kViewportOrigin) {
-        if (error) *error = "viewportBoundsRange does not reach -2048";
-        return false;
-    }
+    if (!InitScale(error)) return false;
     if (const std::string max = GetEnv("MPO_VK_MAX_DRAWS"); !max.empty()) {
         max_draws_ = std::strtoull(max.c_str(), nullptr, 10);
     }
@@ -827,6 +892,8 @@ int GeRenderer::GetColorTarget(std::uint32_t offset, int stride, ge::BufferForma
     t.format = format;
     const int w = TargetWidth(stride);
     const int h = kTargetHeight;
+    t.width = w;
+    t.height = h;
     std::string err;
     char name[64];
     std::snprintf(name, sizeof(name), "ge fb 0x%06X", static_cast<unsigned>(offset));
@@ -835,10 +902,13 @@ int GeRenderer::GetColorTarget(std::uint32_t offset, int stride, ge::BufferForma
                               VK_IMAGE_USAGE_SAMPLED_BIT;
     if (dst_read_ != DstRead::kCopy)
         usage |= static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
-    if (!CreateImage2D(*ctx_, w, h, PipelineCache::kColorFormat, usage, VK_IMAGE_ASPECT_COLOR_BIT,
-                       name, &t.image, &err) ||
-        !CreateBuffer(*ctx_, static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                      HostAccess::kRandom, name, &t.readback, &err)) {
+    // F23b: the readback buffer holds one image row (w * N pixels) per GE
+    // row.
+    if (!CreateImage2D(*ctx_, w * scale_, h * scale_, PipelineCache::kColorFormat, usage,
+                       VK_IMAGE_ASPECT_COLOR_BIT, name, &t.image, &err) ||
+        !CreateBuffer(*ctx_, static_cast<VkDeviceSize>(w * scale_) * h * 4,
+                      VK_BUFFER_USAGE_TRANSFER_DST_BIT, HostAccess::kRandom, name, &t.readback,
+                      &err)) {
         Fail(err);
         return -1;
     }
@@ -854,15 +924,20 @@ int GeRenderer::GetColorTarget(std::uint32_t offset, int stride, ge::BufferForma
 }
 
 bool GeRenderer::UploadColorRows(ColorTarget &t, int y1, int y2, bool initial) {
-    const int w = t.image.width;
+    const int w = t.width;
+    const int n = scale_;
     const int rows = y2 - y1 + 1;
-    std::vector<std::uint32_t> pixels(static_cast<std::size_t>(w) * static_cast<std::size_t>(rows));
+    // At N x each pixel is repeated N times along its row (CopyRowsToImage
+    // repeats the row).
+    std::vector<std::uint32_t> pixels(static_cast<std::size_t>(w) * static_cast<std::size_t>(n) *
+                                      static_cast<std::size_t>(rows));
     const auto bpp = static_cast<std::uint32_t>(BytesPerPixel(t.format));
     for (int y = y1; y <= y2; ++y) {
         for (int x = 0; x < w; ++x) {
             const std::uint32_t off = t.offset + static_cast<std::uint32_t>(y * t.stride + x) * bpp;
             const std::uint32_t raw = bpp == 4 ? mem_.VramRead32(off) : mem_.VramRead16(off);
-            pixels[PixelIndex(x, y - y1, w)] = FromVram(t.format, raw);
+            const std::uint32_t rgba = FromVram(t.format, raw);
+            for (int k = 0; k < n; ++k) pixels[PixelIndex(x * n + k, y - y1, w * n)] = rgba;
         }
     }
     SnapshotRows(t.shadow, t.offset, t.stride * static_cast<int>(bpp), y1, y2);
@@ -883,13 +958,8 @@ bool GeRenderer::UploadColorRows(ColorTarget &t, int y1, int y2, bool initial) {
                      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                      VK_ACCESS_TRANSFER_WRITE_BIT);
     }
-    VkBufferImageCopy copy{};
-    copy.bufferOffset = a.offset;
-    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copy.imageOffset = {0, y1, 0};
-    copy.imageExtent = {static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(rows), 1};
-    vkCmdCopyBufferToImage(cmd, a.buffer, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                           &copy);
+    CopyRowsToImage(cmd, a.buffer, a.offset, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT, w, y1, rows,
+                    4);
     ImageBarrier(cmd, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT,
                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -913,11 +983,11 @@ int GeRenderer::GetDepthTarget(std::uint32_t offset, int stride, int width) {
     std::string err;
     char name[64];
     std::snprintf(name, sizeof(name), "ge depth 0x%06X", static_cast<unsigned>(offset));
-    if (!CreateImage2D(*ctx_, width, h, PipelineCache::kDepthFormat,
+    if (!CreateImage2D(*ctx_, width * scale_, h * scale_, PipelineCache::kDepthFormat,
                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                        VK_IMAGE_ASPECT_DEPTH_BIT, name, &t.image, &err) ||
-        !CreateBuffer(*ctx_, static_cast<VkDeviceSize>(width) * h * 2,
+        !CreateBuffer(*ctx_, static_cast<VkDeviceSize>(width * scale_) * h * 2,
                       VK_BUFFER_USAGE_TRANSFER_DST_BIT, HostAccess::kRandom, name, &t.readback,
                       &err)) {
         Fail(err);
@@ -934,13 +1004,15 @@ int GeRenderer::GetDepthTarget(std::uint32_t offset, int stride, int width) {
 
 bool GeRenderer::UploadDepthRows(DepthTarget &t, int y1, int y2, bool initial) {
     const int width = t.width;
+    const int n = scale_;
     const int rows = y2 - y1 + 1;
-    std::vector<std::uint16_t> depth(static_cast<std::size_t>(width) *
+    std::vector<std::uint16_t> depth(static_cast<std::size_t>(width) * static_cast<std::size_t>(n) *
                                      static_cast<std::size_t>(rows));
     for (int y = y1; y <= y2; ++y) {
         for (int x = 0; x < width; ++x) {
-            depth[PixelIndex(x, y - y1, width)] =
+            const std::uint16_t z =
                 mem_.VramRead16(t.offset + static_cast<std::uint32_t>(y * t.stride + x) * 2);
+            for (int k = 0; k < n; ++k) depth[PixelIndex(x * n + k, y - y1, width * n)] = z;
         }
     }
     SnapshotRows(t.shadow, t.offset, t.stride * 2, y1, y2);
@@ -960,19 +1032,74 @@ bool GeRenderer::UploadDepthRows(DepthTarget &t, int y1, int y2, bool initial) {
                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                      VK_ACCESS_TRANSFER_WRITE_BIT);
     }
-    VkBufferImageCopy copy{};
-    copy.bufferOffset = a.offset;
-    copy.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-    copy.imageOffset = {0, y1, 0};
-    copy.imageExtent = {static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(rows), 1};
-    vkCmdCopyBufferToImage(cmd, a.buffer, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                           &copy);
+    CopyRowsToImage(cmd, a.buffer, a.offset, t.image.image, VK_IMAGE_ASPECT_DEPTH_BIT, width, y1,
+                    rows, 2);
     ImageBarrier(
         cmd, t.image.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_ACCESS_TRANSFER_WRITE_BIT, tests,
         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
     return true;
+}
+
+void GeRenderer::CopyRowsToImage(VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSize offset,
+                                 VkImage image, VkImageAspectFlags aspect, int width, int y1,
+                                 int rows, int bytes_per_pixel) const {
+    const int n = scale_;
+    const auto row_width = static_cast<std::uint32_t>(width * n);
+    if (n == 1) {
+        VkBufferImageCopy copy{};
+        copy.bufferOffset = offset;
+        copy.imageSubresource = {aspect, 0, 0, 1};
+        copy.imageOffset = {0, y1, 0};
+        copy.imageExtent = {row_width, static_cast<std::uint32_t>(rows), 1};
+        vkCmdCopyBufferToImage(cmd, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        return;
+    }
+    // Each GE row fills N image rows from the same bytes.
+    std::vector<VkBufferImageCopy> copies(static_cast<std::size_t>(rows) *
+                                          static_cast<std::size_t>(n));
+    for (int r = 0; r < rows; ++r) {
+        for (int k = 0; k < n; ++k) {
+            VkBufferImageCopy &c = copies[static_cast<std::size_t>(r * n + k)];
+            c.bufferOffset = offset + static_cast<VkDeviceSize>(r) * row_width *
+                                          static_cast<VkDeviceSize>(bytes_per_pixel);
+            c.imageSubresource = {aspect, 0, 0, 1};
+            c.imageOffset = {0, (y1 + r) * n + k, 0};
+            c.imageExtent = {row_width, 1, 1};
+        }
+    }
+    vkCmdCopyBufferToImage(cmd, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           static_cast<std::uint32_t>(copies.size()), copies.data());
+}
+
+void GeRenderer::CopyImageToRows(VkCommandBuffer cmd, const Image &image, VkBuffer buffer,
+                                 int width, int y1, int y2, int bytes_per_pixel) const {
+    const int n = scale_;
+    if (n == 1) {
+        VkBufferImageCopy copy{};
+        copy.imageSubresource = {image.aspect, 0, 0, 1};
+        copy.imageExtent = {static_cast<std::uint32_t>(image.width),
+                            static_cast<std::uint32_t>(image.height), 1};
+        vkCmdCopyImageToBuffer(cmd, image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1,
+                               &copy);
+        return;
+    }
+    const auto row_width = static_cast<std::uint32_t>(width * n);
+    std::vector<VkBufferImageCopy> copies;
+    copies.reserve(static_cast<std::size_t>(std::max(y2 - y1 + 1, 0)));
+    for (int y = y1; y <= y2; ++y) {
+        VkBufferImageCopy c{};
+        c.bufferOffset =
+            static_cast<VkDeviceSize>(y) * row_width * static_cast<VkDeviceSize>(bytes_per_pixel);
+        c.imageSubresource = {image.aspect, 0, 0, 1};
+        c.imageOffset = {0, y * n + sample_, 0};
+        c.imageExtent = {row_width, 1, 1};
+        copies.push_back(c);
+    }
+    if (copies.empty()) return;
+    vkCmdCopyImageToBuffer(cmd, image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer,
+                           static_cast<std::uint32_t>(copies.size()), copies.data());
 }
 
 const std::uint8_t *GeRenderer::VramRow(std::uint32_t offset, int stride_bytes, int row_bytes,
@@ -1022,7 +1149,7 @@ bool GeRenderer::SyncColorTarget(ColorTarget &t) {
     if (t.shadow.checked_frame == frame_serial_) return true;
     t.shadow.checked_frame = frame_serial_;
     const int bpp = BytesPerPixel(t.format);
-    const auto spans = ChangedRows(t.shadow, t.offset, t.stride * bpp, t.image.height);
+    const auto spans = ChangedRows(t.shadow, t.offset, t.stride * bpp, t.height);
     if (spans.empty()) return true;
     ++stats_.target_resyncs;
     for (const auto &[y1, y2] : spans) {
@@ -1035,7 +1162,7 @@ bool GeRenderer::SyncColorTarget(ColorTarget &t) {
 bool GeRenderer::SyncDepthTarget(DepthTarget &t) {
     if (t.shadow.checked_frame == frame_serial_) return true;
     t.shadow.checked_frame = frame_serial_;
-    const auto spans = ChangedRows(t.shadow, t.offset, t.stride * 2, t.image.height);
+    const auto spans = ChangedRows(t.shadow, t.offset, t.stride * 2, kTargetHeight);
     if (spans.empty()) return true;
     ++stats_.target_resyncs;
     for (const auto &[y1, y2] : spans) {
@@ -1370,28 +1497,30 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
     ds.color_target = GetColorTarget(ps.fb_offset, ps.fb_stride, ps.fb_format);
     if (ds.color_target < 0) return;
     const ColorTarget &ct = color_targets_[static_cast<std::size_t>(ds.color_target)];
-    ds.depth_target = GetDepthTarget(ps.depth_offset, ps.depth_stride, ct.image.width);
+    ds.depth_target = GetDepthTarget(ps.depth_offset, ps.depth_stride, ct.width);
     if (ds.depth_target < 0) return;
 
     // BinManager scissor: the scissor box, limited by the drawing region.
     const int sx1 = gs.ScissorX1();
     const int sy1 = gs.ScissorY1();
-    const int sx2 = std::min({gs.ScissorX2(), gs.RegionX2(), ct.image.width - 1});
-    const int sy2 = std::min({gs.ScissorY2(), gs.RegionY2(), ct.image.height - 1});
+    const int sx2 = std::min({gs.ScissorX2(), gs.RegionX2(), ct.width - 1});
+    const int sy2 = std::min({gs.ScissorY2(), gs.RegionY2(), ct.height - 1});
     if (sx2 < sx1 || sy2 < sy1) {
         ds.skip = true;
     } else {
-        ds.scissor.offset = {sx1, sy1};
-        ds.scissor.extent = {static_cast<std::uint32_t>(sx2 - sx1 + 1),
-                             static_cast<std::uint32_t>(sy2 - sy1 + 1)};
+        // In image pixels (F23b: N times the GE's).
+        ds.scissor.offset = {sx1 * scale_, sy1 * scale_};
+        ds.scissor.extent = {static_cast<std::uint32_t>((sx2 - sx1 + 1) * scale_),
+                             static_cast<std::uint32_t>((sy2 - sy1 + 1) * scale_)};
     }
 
     PipelineKey &k = ds.key;
     PushConstants &pc = ds.push;
     pc.ndc_scale[0] = 2.0f / viewport_size_;
     pc.ndc_scale[1] = 2.0f / viewport_size_;
-    pc.ndc_origin[0] = kViewportOrigin;
-    pc.ndc_origin[1] = kViewportOrigin;
+    pc.ndc_origin[0] = viewport_origin_;
+    pc.ndc_origin[1] = viewport_origin_;
+    pc.render_scale = static_cast<std::uint32_t>(scale_);
     k.fb_format = static_cast<std::uint8_t>(ps.fb_format);
     for (int i = 0; i < 16; ++i) {
         pc.dither[i / 4] |=
@@ -1695,7 +1824,7 @@ void GeRenderer::DrawTriangle(const ge::VertexData &v0, const ge::VertexData &v1
     {
         DrawState want = pending_;
         want.key.topology = Topology::kTriangles;
-        want.key.exact = options_.exact ? 1 : 0;
+        want.key.exact = exact_ ? 1 : 0;
         UseState(want);
     }
     AddTriangle(range, v0, v1, v2);
@@ -1709,7 +1838,7 @@ void GeRenderer::DrawTriangle(const ge::VertexData &v0, const ge::VertexData &v1
     for (const ge::VertexData *v : vs) {
         const std::uint32_t c0 = flat ? v2.color0 : v->color0;
         const std::uint32_t c1 = flat ? v2.color1 : v->color1;
-        Push(MakeVertex(*v, kTriangleBias, persp ? v->clipw : 1.0f, c0, c1 & 0x00FFFFFF));
+        Push(MakeVertex(*v, triangle_bias_, persp ? v->clipw : 1.0f, c0, c1 & 0x00FFFFFF));
         if (trace_draws_ && GetEnv("MPO_VK_TRACE_DRAW") == std::to_string(stats_.draws)) {
             const GpuVertex &g = vertices_.back();
             char line[256];
@@ -1776,10 +1905,40 @@ void GeRenderer::EmitQuad(const ge::VertexData &v0, const ge::VertexData &v1,
         d.s = v1.s;
         d.t = v0.t;
     }
-    const GpuVertex ga = MakeVertex(a, 0, 1.0f, c0, c1);
-    const GpuVertex gb = MakeVertex(b, 0, 1.0f, c0, c1);
-    const GpuVertex gc = MakeVertex(c, 0, 1.0f, c0, c1);
-    const GpuVertex gd = MakeVertex(d, 0, 1.0f, c0, c1);
+    GpuVertex ga = MakeVertex(a, 0.0f, 1.0f, c0, c1);
+    GpuVertex gb = MakeVertex(b, 0.0f, 1.0f, c0, c1);
+    GpuVertex gc = MakeVertex(c, 0.0f, 1.0f, c0, c1);
+    GpuVertex gd = MakeVertex(d, 0.0f, 1.0f, c0, c1);
+    if (scale_ > 1) {
+        // F23b: at N x the edges go to the GE pixel edges that cover the
+        // pixels softgpu covers (centre in [min, max), as the GPU does at
+        // 1x), so a rectangle covers whole N x N blocks; the UVs are the
+        // same affine function of the position, evaluated there.
+        const auto snap = [](int v) { return static_cast<float>(FloorDiv16(v + 7)); };
+        const float x0 = ga.x;
+        const float y0 = ga.y;
+        const float dx = gc.x - ga.x;
+        const float dy = gd.y - ga.y;
+        const float x0s = snap(v0.screenpos.x);
+        const float y0s = snap(v0.screenpos.y);
+        const float x1s = snap(v1.screenpos.x);
+        const float y1s = snap(v1.screenpos.y);
+        const GpuVertex oa = ga;
+        const GpuVertex oc = gc;
+        const GpuVertex od = gd;
+        const auto place = [&](GpuVertex &g, float x, float y) {
+            const float fx = dx != 0.0f ? (x - x0) / dx : 0.0f;
+            const float fy = dy != 0.0f ? (y - y0) / dy : 0.0f;
+            g.x = x;
+            g.y = y;
+            g.s = oa.s + fx * (oc.s - oa.s) + fy * (od.s - oa.s);
+            g.t = oa.t + fx * (oc.t - oa.t) + fy * (od.t - oa.t);
+        };
+        place(ga, x0s, y0s);
+        place(gb, x1s, y1s);
+        place(gc, x1s, y0s);
+        place(gd, x0s, y1s);
+    }
     Push(ga);
     Push(gc);
     Push(gb);
@@ -1797,7 +1956,12 @@ void GeRenderer::DrawRectangle(const ge::VertexData &v0, const ge::VertexData &v
         // path (F15b).
         DrawState want = pending_;
         want.key.topology = Topology::kTriangles;
-        want.key.exact = options_.exact && state.enable_textures && !state.pixel.clear_mode ? 1 : 0;
+        want.key.exact = exact_ && state.enable_textures && !state.pixel.clear_mode ? 1 : 0;
+        // F23b: at an even N softgpu's sample point (the centre) falls
+        // between two image pixels; the one the readback keeps takes its UV
+        // there (ge.frag), the rest of the block keeps the GPU's.
+        if (scale_ % 2 == 0 && state.enable_textures && !state.pixel.clear_mode)
+            want.push.rect_sample = static_cast<std::uint32_t>(sample_ + 1);
         UseState(want);
     }
     AddRectangle(range, v0, v1);
@@ -2064,8 +2228,14 @@ void GeRenderer::BeginPass(int color, int depth) {
         rbi.renderArea = area;
         vkCmdBeginRenderPass(f.draw_cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
     }
-    const VkViewport vp{
-        kViewportOrigin, kViewportOrigin, viewport_size_, viewport_size_, 0.0f, 1.0f};
+    // F23b: the GE-pixel viewport, N times larger in the image.
+    const float n = static_cast<float>(scale_);
+    const VkViewport vp{viewport_origin_ * n,
+                        viewport_origin_ * n,
+                        viewport_size_ * n,
+                        viewport_size_ * n,
+                        0.0f,
+                        1.0f};
     vkCmdSetViewport(f.draw_cmd, 0, 1, &vp);
     in_pass_ = true;
     pass_color_ = color;
@@ -2130,6 +2300,7 @@ void GeRenderer::AddTriangle(const ge::BinCoords &range, const ge::VertexData &v
     p.r.y1 = FirstPixel(std::min({p.y[0], p.y[1], p.y[2]}), range.y1);
     p.r.x2 = LastPixel(std::max({p.x[0], p.x[1], p.x[2]}), range.x2);
     p.r.y2 = LastPixel(std::max({p.y[0], p.y[1], p.y[2]}), range.y2);
+    InflateForScale(&p.r);
     AddPrimitive(p);
 }
 
@@ -2141,7 +2312,18 @@ void GeRenderer::AddRectangle(const ge::BinCoords &range, const ge::VertexData &
     p.r.y1 = FirstPixel(std::min(v0.screenpos.y, v1.screenpos.y), range.y1);
     p.r.x2 = LastPixel(std::max(v0.screenpos.x, v1.screenpos.x), range.x2);
     p.r.y2 = LastPixel(std::max(v0.screenpos.y, v1.screenpos.y), range.y2);
+    InflateForScale(&p.r);
     AddPrimitive(p);
+}
+
+// F23b: the GPU samples each GE pixel N times at N x, so a primitive can
+// reach the pixels next to those whose softgpu sample point it covers.
+void GeRenderer::InflateForScale(PixelRect *r) const {
+    if (scale_ == 1) return;
+    r->x1 -= 1;
+    r->y1 -= 1;
+    r->x2 += 1;
+    r->y2 += 1;
 }
 
 void GeRenderer::AddPixels(const std::vector<std::uint32_t> &keys) {
@@ -2300,10 +2482,13 @@ bool GeRenderer::PrepareDstSet(int color) {
 // margin) into the target's copy, which the group's shader samples. Outside
 // a render pass.
 void GeRenderer::CopyForDstRead(ColorTarget &t, const PixelRect &r) {
-    const int x1 = std::clamp(r.x1 - 1, 0, t.image.width - 1);
-    const int y1 = std::clamp(r.y1 - 1, 0, t.image.height - 1);
-    const int x2 = std::clamp(r.x2 + 1, 0, t.image.width - 1);
-    const int y2 = std::clamp(r.y2 + 1, 0, t.image.height - 1);
+    // In image pixels: GE pixels [x1 - 1, x2 + 1] are image pixels
+    // [(x1 - 1) N, (x2 + 2) N - 1].
+    const int n = scale_;
+    const int x1 = std::clamp((r.x1 - 1) * n, 0, t.image.width - 1);
+    const int y1 = std::clamp((r.y1 - 1) * n, 0, t.image.height - 1);
+    const int x2 = std::clamp((r.x2 + 2) * n - 1, 0, t.image.width - 1);
+    const int y2 = std::clamp((r.y2 + 2) * n - 1, 0, t.image.height - 1);
     if (x2 < x1 || y2 < y1) return;
     VkCommandBuffer cmd = frame().draw_cmd;
     ImageBarrier(cmd, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -2455,12 +2640,8 @@ bool GeRenderer::EndFrame(bool readback, std::string *error) {
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-            VkBufferImageCopy copy{};
-            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            copy.imageExtent = {static_cast<std::uint32_t>(t.image.width),
-                                static_cast<std::uint32_t>(t.image.height), 1};
-            vkCmdCopyImageToBuffer(cmd, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   t.readback.buffer, 1, &copy);
+            CopyImageToRows(cmd, t.image, t.readback.buffer, t.width, std::max(t.dirty.y1, 0),
+                            std::min(t.dirty.y2, t.height - 1), 4);
             ImageBarrier(
                 cmd, t.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
@@ -2478,12 +2659,8 @@ bool GeRenderer::EndFrame(bool readback, std::string *error) {
                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tests,
                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-            VkBufferImageCopy copy{};
-            copy.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-            copy.imageExtent = {static_cast<std::uint32_t>(t.image.width),
-                                static_cast<std::uint32_t>(t.image.height), 1};
-            vkCmdCopyImageToBuffer(cmd, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   t.readback.buffer, 1, &copy);
+            CopyImageToRows(cmd, t.image, t.readback.buffer, t.width, std::max(t.dirty.y1, 0),
+                            std::min(t.dirty.y2, kTargetHeight - 1), 2);
             ImageBarrier(cmd, t.image.image, VK_IMAGE_ASPECT_DEPTH_BIT,
                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -2546,13 +2723,15 @@ bool GeRenderer::EndFrame(bool readback, std::string *error) {
             const auto *px = static_cast<const std::uint8_t *>(t.readback.mapped);
             const int x1 = std::max(t.dirty.x1, 0);
             const int y1 = std::max(t.dirty.y1, 0);
-            const int x2 = std::min({t.dirty.x2, t.image.width - 1, t.stride - 1});
-            const int y2 = std::min(t.dirty.y2, t.image.height - 1);
+            const int x2 = std::min({t.dirty.x2, t.width - 1, t.stride - 1});
+            const int y2 = std::min(t.dirty.y2, t.height - 1);
             const auto bpp = static_cast<std::uint32_t>(BytesPerPixel(t.format));
+            // Row y holds image row y * N + s; pixel x is its column x * N + s.
+            const int n = scale_;
             for (int y = y1; y <= y2; ++y) {
                 for (int x = x1; x <= x2; ++x) {
                     std::uint32_t rgba = 0;
-                    std::memcpy(&rgba, px + PixelIndex(x, y, t.image.width) * 4, 4);
+                    std::memcpy(&rgba, px + PixelIndex(x * n + sample_, y, t.width * n) * 4, 4);
                     const std::uint32_t off =
                         t.offset + static_cast<std::uint32_t>(y * t.stride + x) * bpp;
                     const std::uint32_t v = ToVram(t.format, rgba);
@@ -2576,12 +2755,13 @@ bool GeRenderer::EndFrame(bool readback, std::string *error) {
             const auto *px = static_cast<const std::uint8_t *>(t.readback.mapped);
             const int x1 = std::max(t.dirty.x1, 0);
             const int y1 = std::max(t.dirty.y1, 0);
-            const int x2 = std::min({t.dirty.x2, t.image.width - 1, t.stride - 1});
-            const int y2 = std::min(t.dirty.y2, t.image.height - 1);
+            const int x2 = std::min({t.dirty.x2, t.width - 1, t.stride - 1});
+            const int y2 = std::min(t.dirty.y2, kTargetHeight - 1);
+            const int n = scale_;
             for (int y = y1; y <= y2; ++y) {
                 for (int x = x1; x <= x2; ++x) {
                     std::uint16_t d = 0;
-                    std::memcpy(&d, px + PixelIndex(x, y, t.image.width) * 2, 2);
+                    std::memcpy(&d, px + PixelIndex(x * n + sample_, y, t.width * n) * 2, 2);
                     mem_.VramWrite16(t.offset + static_cast<std::uint32_t>(y * t.stride + x) * 2,
                                      d);
                 }
@@ -2605,6 +2785,7 @@ bool GeRenderer::FindTarget(std::uint32_t fb_address, TargetInfo *out) const {
         out->height = t.image.height;
         out->stride = t.stride;
         out->format = t.format;
+        out->scale = scale_;
         return true;
     }
     return false;
@@ -2621,6 +2802,7 @@ bool GeRenderer::FindTarget(std::uint32_t fb_address, int stride, ge::BufferForm
         out->height = t.image.height;
         out->stride = t.stride;
         out->format = t.format;
+        out->scale = scale_;
         return true;
     }
     return false;
@@ -2635,7 +2817,7 @@ bool GeRenderer::TargetMatchesVram(std::uint32_t fb_address, int stride, ge::Buf
         if (!t.dirty.Empty()) return false;
         const int bpp = BytesPerPixel(format);
         const int row_bytes = std::min(width * bpp, t.shadow.row_bytes);
-        const int n = std::min(rows, t.image.height);
+        const int n = std::min(rows, t.height);
         for (int y = 0; y < n; ++y) {
             const std::uint8_t *vram = VramRow(offset, stride * bpp, row_bytes, y);
             if (vram == nullptr) return false;

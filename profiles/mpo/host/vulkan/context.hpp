@@ -90,6 +90,11 @@ struct DeviceCaps {
     std::uint32_t max_image_dimension_2d = 4096;
     std::uint32_t max_viewport_dimension = 4096; // min of the two maxViewportDimensions
     float viewport_bounds_min = -8192.0f;
+    float viewport_bounds_max = 8191.0f;
+    // F23b: points wider than one pixel (gl_PointSize up to max_point_size),
+    // for the GE's points and line pixels at a render scale above 1.
+    bool large_points = false;
+    float max_point_size = 1.0f;
 };
 
 // Counted validation-layer messages (thread-safe: the layer may call from

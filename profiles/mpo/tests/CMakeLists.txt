@@ -325,6 +325,9 @@ if(TARGET mpo_vulkan)
     mpo_target_warnings(mpo_vulkan_renderer_test)
     add_test(NAME mpo_vulkan_renderer_test COMMAND mpo_vulkan_renderer_test)
     set_tests_properties(mpo_vulkan_renderer_test PROPERTIES SKIP_RETURN_CODE 77)
+    # F23b: the same scenes at render scales 2 and 4, read back at 1x.
+    add_test(NAME mpo_vulkan_renderer_scaled_test COMMAND mpo_vulkan_renderer_test --scaled)
+    set_tests_properties(mpo_vulkan_renderer_scaled_test PROPERTIES SKIP_RETURN_CODE 77)
     # F14b: the renderer between list runs, with CPU writes to VRAM.
     add_executable(mpo_vulkan_vram_sync_test vulkan_vram_sync_test.cpp)
     target_link_libraries(mpo_vulkan_vram_sync_test PRIVATE mpo_vulkan)

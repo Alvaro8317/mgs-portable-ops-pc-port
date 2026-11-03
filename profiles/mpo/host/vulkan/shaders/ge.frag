@@ -91,7 +91,8 @@ layout(push_constant) uniform Push {
     uint blend_fix_src; // 0x00BBGGRR
     uint blend_fix_dst;
     uint write_mask;   // 8888 bits that keep the old value (GE colour mask)
-    uint reserved;
+    uint render_scale; // F23b: image pixels per GE pixel (1 to 8)
+    uint rect_sample;  // F23b: 1 + the readback's sample of a rectangle, or 0
 } pc;
 
 layout(set = 0, binding = 0) uniform sampler2D u_rgba;
@@ -351,7 +352,8 @@ bool Compare(int func, int a, int b) {
 }
 
 int DitherValue() {
-    const ivec2 p = ivec2(gl_FragCoord.xy) & 3;
+    // The GE pixel's place in the matrix (F23b: N x N image pixels each).
+    const ivec2 p = (ivec2(gl_FragCoord.xy) / int(pc.render_scale)) & 3;
     const int i = p.y * 4 + p.x;
     return bitfieldExtract(int(pc.dither[i >> 2]), (i & 3) * 8, 8);
 }
@@ -719,6 +721,9 @@ void main() {
         }
         s *= pc.uv_scale.x;
         t *= pc.uv_scale.y;
+        // F23b: the derivatives for rect_sample, taken where every pixel of
+        // the quad still runs (below).
+        const vec2 uv_step = vec2(dFdxFine(s) + dFdyFine(s), dFdxFine(t) + dFdyFine(t));
 #endif
         bool linear = kMagLinear;
         if (kMagLinear != kMinLinear) {
@@ -740,8 +745,9 @@ void main() {
                 detail = TexLog2(max(ads, adt));
                 }
 #else
-                const float ds = dFdxFine(s) * float(width);
-                const float dt = dFdyFine(t) * float(height);
+                // Per GE pixel (F23b: N image pixels).
+                const float ds = dFdxFine(s) * float(width) * float(pc.render_scale);
+                const float dt = dFdyFine(t) * float(height) * float(pc.render_scale);
                 detail = TexLog2(max(abs(ds), abs(dt)));
 #endif
             } else if (kLodMode == 2) {
@@ -762,6 +768,18 @@ void main() {
             detail += pc.lod_offset;
             linear = detail > 0 ? kMinLinear : kMagLinear;
         }
+#if !defined(GE_EXACT)
+        // F23b: the image pixel of a rectangle's N x N block that the
+        // readback keeps (rect_sample - 1, at an even N) takes the UV at the
+        // GE pixel's centre, half an image pixel down and right, as softgpu
+        // samples it (a rectangle's UVs are affine). The others keep theirs.
+        if (pc.rect_sample != 0u &&
+            all(equal(ivec2(gl_FragCoord.xy) % int(pc.render_scale),
+                      ivec2(int(pc.rect_sample) - 1)))) {
+            s += 0.5 * uv_step.x;
+            t += 0.5 * uv_step.y;
+        }
+#endif
         const ivec4 tex =
             linear ? SampleLinear(s, t, width, height) : SampleNearest(s, t, width, height);
         prim = TextureFunction(prim, tex);

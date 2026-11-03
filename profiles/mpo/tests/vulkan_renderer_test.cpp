@@ -21,6 +21,15 @@
 //   missing.
 // - Every case runs twice: with Vulkan 1.3 dynamic rendering (when the device
 //   has it) and with the 1.2 render pass path.
+// - F23b (--scaled, ctest mpo_vulkan_renderer_scaled_test): every scene at
+//   render scales 2 and 4 (1.3 path, the default destination-read method;
+//   the four-format scenes in 5551 only), read back at 1x. The readback
+//   must match softgpu and the 1x render without the exact path (the same
+//   sample points, interpolated by the GPU) within F15a's threshold. The
+//   scenes that only the exact path draws like softgpu (needs_exact) are
+//   reported, not checked: at N x the GPU interpolates (as PPSSPP), and the
+//   stepped UVs of one of them sit on texel edges, where any rounding picks
+//   another texel.
 
 #include <bit>
 #include <chrono>
@@ -1107,7 +1116,53 @@ struct RunConfig {
     bool allow_13 = true;
     bool depth_clamp = true;
     bool depth_scenes_only = false;
+    // F23b: every scene drawn at this render scale and read back at 1x.
+    int render_scale = 1;
 };
+
+// F15a's threshold (mpo_vulkan_compare, capture_compare.py).
+constexpr int kThresholdPixels = 130;
+constexpr int kThresholdDelta = 24;
+
+// F23b: each scene at `config.render_scale`, read back at 1x, against softgpu
+// and against the 1x render without the exact path.
+void RunScaled(mpo::vk::VulkanContext *ctx, const RunConfig &config,
+               const mpo::vk::RendererOptions &base,
+               const std::vector<std::function<Scene()>> &scenes) {
+    for (const auto &make : scenes) {
+        const Scene s = make();
+        auto soft = std::make_unique<Machine>();
+        expect(RunSoft(s, *soft), s.name + ": soft list finishes");
+        mpo::vk::RendererOptions inexact = base;
+        inexact.exact = false;
+        auto flat = std::make_unique<Machine>();
+        expect(RunVulkan(ctx, inexact, s, *flat), s.name + ": 1x list finishes");
+        mpo::vk::RendererOptions scaled = base;
+        scaled.render_scale = config.render_scale;
+        auto gpu = std::make_unique<Machine>();
+        const auto t0 = std::chrono::steady_clock::now();
+        expect(RunVulkan(ctx, scaled, s, *gpu), s.name + ": scaled list finishes");
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - t0)
+                            .count();
+        const FrameDiff vs_soft = Compare(*soft, *gpu, s.fb_format, s.raw);
+        const FrameDiff vs_1x = Compare(*flat, *gpu, s.fb_format, s.raw);
+        std::printf("  %-58s %5lld ms, vs 1x %4d (delta %3d), vs soft %4d (delta %3d)%s\n",
+                    s.name.c_str(), static_cast<long long>(ms), vs_1x.differing, vs_1x.max_delta,
+                    vs_soft.differing, vs_soft.max_delta,
+                    s.needs_exact ? " (needs the exact path)" : "");
+        if (s.needs_exact) continue; // reported only, see the top
+        const std::string what = s.name + " at " + std::to_string(config.render_scale) + "x: ";
+        expect(vs_1x.differing <= kThresholdPixels && vs_1x.max_delta <= kThresholdDelta,
+               what + std::to_string(vs_1x.differing) +
+                   " pixels differ from the 1x render (max delta " +
+                   std::to_string(vs_1x.max_delta) + ")");
+        expect(vs_soft.differing <= kThresholdPixels && vs_soft.max_delta <= kThresholdDelta,
+               what + std::to_string(vs_soft.differing) +
+                   " pixels differ from softgpu (max delta " + std::to_string(vs_soft.max_delta) +
+                   ")");
+    }
+}
 
 int RunAll(const RunConfig &config) {
     mpo::vk::ContextOptions opts;
@@ -1158,6 +1213,8 @@ int RunAll(const RunConfig &config) {
         GuardBandScene,
     };
     for (int fmt = 0; fmt < 4; ++fmt) {
+        // F23b: at N x only in 5551, MPO's format (the CI's ASan time).
+        if (config.render_scale > 1 && fmt != 1) continue;
         scenes.emplace_back([fmt] { return BlendMatrix(fmt); });
         scenes.emplace_back([fmt] { return LogicOps(fmt); });
         scenes.emplace_back([fmt] { return WriteMasks(fmt); });
@@ -1181,6 +1238,10 @@ int RunAll(const RunConfig &config) {
     all_shader.dst_read = runs.front().dst_read;
     all_shader.blend = mpo::vk::BlendPath::kShader;
 
+    if (config.render_scale > 1) {
+        RunScaled(ctx.get(), config, runs.front(), scenes);
+        scenes.clear();
+    }
     // softgpu once per scene; Vulkan with every method. The scenes that do
     // not read the destination only run with the first (the device's
     // default) method.
@@ -1231,7 +1292,7 @@ int RunAll(const RunConfig &config) {
             expect(c.differing > 0, s.name + ": differs without the exact interpolation");
         }
     }
-    if (!config.depth_scenes_only) {
+    if (!config.depth_scenes_only && config.render_scale == 1) {
         // The comparison can fail: F14a's fixed-function blending must differ
         // from softgpu in the blend matrix.
         mpo::vk::RendererOptions fixed;
@@ -1255,7 +1316,29 @@ int RunAll(const RunConfig &config) {
 
 } // namespace
 
-int main() {
+// F23b: the render-scale runs are their own ctest case
+// (mpo_vulkan_renderer_scaled_test), so each case stays under the CI's time
+// limit with ASan.
+int RunScales() {
+    for (int scale : {2, 4}) {
+        std::printf("every scene at render scale %d, read back at 1x:\n", scale);
+        RunConfig sc;
+        sc.render_scale = scale;
+        const int r = RunAll(sc);
+        if (r == kSkip) return kSkip;
+        if (r != 0) return r;
+        if (g_failures != 0) break;
+    }
+    if (g_failures != 0) {
+        std::fprintf(stderr, "mpo_vulkan_renderer_test --scaled: %d failure(s)\n", g_failures);
+        return 1;
+    }
+    std::printf("mpo_vulkan_renderer_test --scaled: all checks passed\n");
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc > 1 && std::string(argv[1]) == "--scaled") return RunScales();
     const int first = RunAll(RunConfig{});
     if (first == kSkip) return kSkip;
     if (first != 0) return first;
