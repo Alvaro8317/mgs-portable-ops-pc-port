@@ -408,6 +408,9 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
   `MPO_VK_PRESENT_UPLOAD` (presentar siempre subiendo desde la VRAM, F14b), `MPO_VK_NO_EXACT` (la
   interpolación de la GPU en vez de la de softgpu) y `MPO_VK_NO_HAZARD_FLUSH` (sin readback antes de
   leer lo que dibujó un target) (F15b).
+- **Resolución interna** (F23b): `mpo_boot --render-scale N` o `MPO_RENDER_SCALE=N`, de 1 a 8. Lo
+  que vuelve a la VRAM, las capturas y los hashes de las repeticiones siguen a 1×. A N× las
+  escalas se comparan con capturas, no con hashes: en 3D el hash difiere.
 - **Comparar renderers en el juego**: `profiles/mpo/tools/capture_compare.py` sobre dos carpetas de
   `mpo_boot --capture` (`soft` y `vulkan`, mismo input), con el umbral de F15a (F15b).
 - **Tests sin el juego** (`ctest` sin datos): decoder, emisor, formatos y HLE puro. Son los únicos que

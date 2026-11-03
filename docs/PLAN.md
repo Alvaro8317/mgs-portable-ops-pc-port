@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| 5 🟨 | F23a, F23b, F23c | Adelantadas a pedido del usuario el 2026-11-03, antes de cerrar M6 (F21b y F22c siguen abiertas). **No cambian el ABI del runtime** (`psprecomp::Runtime`, `AllegrexContext`, `kOverlayAbiVersion`) ni los headers del framework: las etapas que el jugador ya compiló tienen que seguir cargando. F23a: F22 · F23b: F15b · F23c: F18b (F23c se sumó el mismo día). |
+| 5 ✅ | F23a, F23b, F23c | Adelantadas a pedido del usuario el 2026-11-03, antes de cerrar M6 (F21b y F22c siguen abiertas). **No cambian el ABI del runtime** (`psprecomp::Runtime`, `AllegrexContext`, `kOverlayAbiVersion`) ni los headers del framework: las etapas que el jugador ya compiló tienen que seguir cargando. F23a: F22 · F23b: F15b · F23c: F18b (F23c se sumó el mismo día). Integrada el 2026-11-03, junto con el spike de los controles en pantalla (`docs/analysis/button-prompts.md`). |
 | — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 ✅ → F22b ✅ → F22c 🟨 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22, F22b y F22c desde el 2026-11-01 (ver su ficha). |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
@@ -122,7 +122,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F22b | Toolchain portátil, launcher y paquetes | M6 | ✅ hecha (Windows con llvm-mingw en la CI, launcher, etapas en dos niveles y release revisada; la prueba en Windows y en la Steam Deck: pendiente del usuario) |
 | F22c | README, aviso legal e instalaciones limpias | M6 | 🟨 hecha en Linux (README en inglés y español, aviso legal, smoke test e instalaciones limpias en Linux; Windows y el Flatpak: pendientes del usuario) |
 | F23a | Cámara con el stick derecho (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; probarla con mando en el juego: pendiente del usuario) |
-| F23b | Resolución interna configurable, hasta 4K (autónomo) | M7 | 🟨 en curso (ola 5) |
+| F23b | Resolución interna configurable, hasta 4K (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; `--render-scale 1..8`; la prueba con GPU real en Windows y el selector del launcher: pendientes) |
 | F23c | Fuente libre de respaldo para los diálogos (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; `sceFont` sigue necesitando las PGF; Windows sin fuentes: pendiente del usuario) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
@@ -1640,7 +1640,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   compilaría una fracción de lo de hoy (gow-psp-recomp, que emite por funciones, compila en unos
   4 min). Es una reescritura grande de PSPRecomp (MIT, para upstream) y cambia el difftest del
   emisor.
-- Resolución interna configurable, MSAA y filtrado anisotrópico.
+- Resolución interna configurable (**hecha en F23b**: `--render-scale`, ver
+  `docs/sessions/F23b.md`; falta el selector en el launcher), MSAA y filtrado anisotrópico.
 - Widescreen y ultrawide con el HUD ajustado (CWCheat `0x201E9728` como pista).
 - 60+ fps con **interpolación** (la lógica sigue a 20 o 30 fps).
 - Texturas HD en formato de PPSSPP.
