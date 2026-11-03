@@ -67,7 +67,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 2 ✅ | F07b, F10a, F12, F17a, F20a | F07b: F06 y F07a · F12: F11a · F17a: F16a · F10a y F20a: ninguno. Integrada el 2026-10-26. |
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
-| 5 🟨 | F23a, F23b | Adelantadas a pedido del usuario el 2026-11-03, antes de cerrar M6 (F21b y F22c siguen abiertas). **No cambian el ABI del runtime** (`psprecomp::Runtime`, `AllegrexContext`, `kOverlayAbiVersion`) ni los headers del framework: las etapas que el jugador ya compiló tienen que seguir cargando. F23a: F22 · F23b: F15b. |
+| 5 🟨 | F23a, F23b, F23c | Adelantadas a pedido del usuario el 2026-11-03, antes de cerrar M6 (F21b y F22c siguen abiertas). **No cambian el ABI del runtime** (`psprecomp::Runtime`, `AllegrexContext`, `kOverlayAbiVersion`) ni los headers del framework: las etapas que el jugador ya compiló tienen que seguir cargando. F23a: F22 · F23b: F15b · F23c: F18b (F23c se sumó el mismo día). |
 | — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 ✅ → F22b ✅ → F22c 🟨 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22, F22b y F22c desde el 2026-11-01 (ver su ficha). |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
@@ -123,6 +123,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F22c | README, aviso legal e instalaciones limpias | M6 | 🟨 hecha en Linux (README en inglés y español, aviso legal, smoke test e instalaciones limpias en Linux; Windows y el Flatpak: pendientes del usuario) |
 | F23a | Cámara con el stick derecho (autónomo) | M7 | 🟨 en curso (ola 5) |
 | F23b | Resolución interna configurable, hasta 4K (autónomo) | M7 | 🟨 en curso (ola 5) |
+| F23c | Fuente libre de respaldo para los diálogos (autónomo) | M7 | 🟨 en curso (ola 5) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
 Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se explica en la nota de sesión).
@@ -1583,6 +1584,29 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
   el parseo de `[pad_camera]`, la prioridad de `pad_axes` y el soltar al perder el foco. `ctest`
   completo en Clang y GCC. Las repeticiones de `analysis/f21` salen idénticas, porque sin mando
   no cambia nada.
+
+### F23c — Fuente libre de respaldo para los diálogos, autónomo (ola 5)
+
+- **Objetivo**: que los diálogos del sistema (guardar, cargar, borrar, mensajes y el teclado en
+  pantalla) muestren su texto aunque el jugador no tenga las fuentes del firmware.
+- **Requisitos**: F18b (PPGe y las fuentes PGF). Adelantada el 2026-11-03 a pedido del usuario:
+  en su Windows, sin fuentes, el teclado y el diálogo de guardado salieron vacíos (F22c).
+- **Tareas**:
+  - Elegir una fuente con licencia compatible con GPLv3 (SIL OFL o similar, con cobertura
+    latina; el OSK solo pide dígitos y mayúsculas, F18b) y ponerla en `third_party/` con su
+    licencia al lado y en `THIRD_PARTY.md`.
+  - Que llegue al jugador sin pasos aparte, idealmente dentro del binario (por ejemplo, un atlas
+    o una tabla de glifos generada y versionada, como el SPIR-V de F14a, con su generador en el
+    repo).
+  - PPGe (`profiles/mpo/host/hle/ppge.*`) la usa cuando no hay PGF del firmware. Con las PGF
+    todo queda exactamente como hoy.
+  - `sceFont` (el texto propio del juego, como "Checking Memory Stick") solo si cabe sin
+    riesgo. Las métricas cambian el layout del juego; si no se hace, se anota.
+  - `mpo_boot` dice qué fuente usa. Actualizar los mensajes que hoy dicen "show no text"
+    (`setup.py`, el launcher, README.md y README.es.md a la vez).
+- **Criterios de hecho**: tests sin el juego (los glifos de la fuente de respaldo, que PPGe la
+  elige solo sin PGF y que con PGF no cambia nada). Una captura local del OSK y de un diálogo de
+  guardado sin fuentes, que no va al repo. `ctest` completo en Clang y GCC.
 
 ### F23b — Resolución interna configurable, hasta 4K, autónomo (ola 5)
 
