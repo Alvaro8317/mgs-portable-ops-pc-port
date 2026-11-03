@@ -121,7 +121,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F22 | Distribución: compilar en la máquina del jugador | M6 | ✅ hecha (modelo decidido, `setup.py` de punta a punta en Linux; el resto se partió en F22b y F22c) |
 | F22b | Toolchain portátil, launcher y paquetes | M6 | ✅ hecha (Windows con llvm-mingw en la CI, launcher, etapas en dos niveles y release revisada; la prueba en Windows y en la Steam Deck: pendiente del usuario) |
 | F22c | README, aviso legal e instalaciones limpias | M6 | 🟨 hecha en Linux (README en inglés y español, aviso legal, smoke test e instalaciones limpias en Linux; Windows y el Flatpak: pendientes del usuario) |
-| F23a | Cámara con el stick derecho (autónomo) | M7 | 🟨 en curso (ola 5) |
+| F23a | Cámara con el stick derecho (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; probarla con mando en el juego: pendiente del usuario) |
 | F23b | Resolución interna configurable, hasta 4K (autónomo) | M7 | 🟨 en curso (ola 5) |
 | F23c | Fuente libre de respaldo para los diálogos (autónomo) | M7 | 🟨 en curso (ola 5) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
@@ -1656,7 +1656,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     cadenas en los datos del juego. Es lo más caro y lo último.
 - Versión EU (`ULES-00645`) y otras regiones.
 - Ad hoc (compatible con el servidor de PPSSPP) y online (SaveMGO).
-- Teclado y mouse, y cámara con el stick derecho.
+- Teclado y mouse, y cámara con el stick derecho (**hecha en F23a**: `[pad_camera]`, ver
+  `docs/sessions/F23a.md`).
   - **La cámara del juego se mueve con la cruceta** (el usuario, en Windows, el 2026-11-01: con las
     flechas del teclado y con la cruceta del mando) [V por el usuario]. Así que el nivel 1 de la
     cámara con mouse (`docs/sessions/F21.md`, "Ideas para F23+") es solo del frontend: el

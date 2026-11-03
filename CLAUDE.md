@@ -520,6 +520,8 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
 
     - La cámara del juego (la cruceta) también se mueve con el mouse: un clic en la ventana lo
       captura y F1 lo suelta (`[mouse_camera]` en `input.toml`).
+    - Y con el stick derecho del mando, con un giro proporcional a la inclinación (`[pad_camera]`,
+      F23a).
 
     El mando sigue con el mapeo de PPSSPP. Reasignar teclas desde el juego queda para F23+.
 
