@@ -53,7 +53,8 @@
 //                             defaults (profiles/mpo/config/input.toml).
 //                             A click in the window captures the mouse for
 //                             the camera ([mouse_camera]: motion turns it
-//                             with the d-pad); F1 releases it.
+//                             with the d-pad); F1 releases it. The gamepad's
+//                             right stick turns it too ([pad_camera], F23a).
 //   --filter linear           scales the 480x272 image to the window with
 //                             bilinear filtering instead of the nearest
 //                             pixel (F22). --capture (VRAM) is not affected;

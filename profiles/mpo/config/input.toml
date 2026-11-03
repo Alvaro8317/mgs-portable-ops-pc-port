@@ -26,6 +26,13 @@
 # the window to capture the mouse, F1 (or switching windows) releases it. Every
 # pixels_per_press pixels of motion press left or right for one frame, so a
 # faster motion turns more often; vertical = true drives up/down too.
+# [pad_camera] turns it with the gamepad's right stick: past `threshold` (the
+# raw tilt, 0..1) the stick presses left or right, and it lets go below
+# threshold - hysteresis. Just past the threshold it presses on min_duty of
+# the frames, and more often the more it is tilted (every frame from 0.9 on);
+# min_duty = 1.0 turns at full speed as soon as it passes the threshold.
+# vertical = true drives up/down too. A right-stick axis bound in [gamepad]
+# ("+rightx", "-righty"...) keeps that binding and the camera leaves it alone.
 # mpo_frontend_sdl_test checks that this file equals InputMapping::Default().
 
 [keyboard]
@@ -76,4 +83,11 @@ axis_button_threshold = 0.75
 [mouse_camera]
 enabled = true
 pixels_per_press = 6.0
+vertical = false
+
+[pad_camera]
+enabled = true
+threshold = 0.5
+hysteresis = 0.15
+min_duty = 0.25
 vertical = false

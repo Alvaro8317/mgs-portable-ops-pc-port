@@ -216,6 +216,10 @@ en PPSSPP:
 | Start | Start / Menú | Options |
 | Select | Back / Vista | Share / Create |
 
+**El stick derecho gira la cámara**: muévelo a la izquierda o a la derecha. Cuanto más lo inclinas,
+más rápido gira. Si cambias a otra ventana se detiene hasta que vuelves. Para apagarlo o cambiar
+cómo responde, mira `[pad_camera]` en `input.toml` (abajo).
+
 ### Cambiar los controles
 
 Copia [`profiles/mpo/config/input.toml`](profiles/mpo/config/input.toml) (en el ZIP, dentro de

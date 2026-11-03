@@ -194,7 +194,14 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
         translator_->ReleaseKeyboard();
         translator_->ReleaseMouse();
         ReleaseMouseCapture();
+        // Gamepads keep working unfocused, but the right stick stops turning
+        // the camera until the window is back (F23a).
+        translator_->SetPadCameraPaused(true);
         Note("focus lost");
+        return true;
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+        translator_->SetPadCameraPaused(false);
+        Note("focus gained");
         return true;
     default:
         return false;

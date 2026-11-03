@@ -231,6 +231,53 @@ bool ParseMouseCamera(const toml::table &table, MouseCameraConfig *c, std::strin
     return true;
 }
 
+bool ParsePadCamera(const toml::table &table, PadCameraConfig *c, std::string *error) {
+    for (const auto &[key, node] : table) {
+        const std::string name(key.str());
+        if (name == "enabled" || name == "vertical") {
+            const toml::value<bool> *v = node.as_boolean();
+            if (v == nullptr) {
+                *error = "[pad_camera] " + name + ": expected true or false";
+                return false;
+            }
+            (name == "enabled" ? c->enabled : c->vertical) = v->get();
+            continue;
+        }
+        float *field = nullptr;
+        double lo = 0.0;
+        double hi = 1.0;
+        if (name == "threshold") {
+            field = &c->threshold;
+            lo = 0.05;
+            hi = 0.85;
+        } else if (name == "hysteresis") {
+            field = &c->hysteresis;
+            hi = 0.5;
+        } else if (name == "min_duty") {
+            field = &c->min_duty;
+            lo = 0.05;
+        } else {
+            *error = "[pad_camera]: unknown setting '" + name + "'";
+            return false;
+        }
+        const auto v = node.is_number() ? node.value<double>() : std::nullopt;
+        if (!v || *v < lo || *v > hi) {
+            char text[128];
+            std::snprintf(text, sizeof(text), "[pad_camera] %s: expected a number in [%g, %g]",
+                          name.c_str(), lo, hi);
+            *error = text;
+            return false;
+        }
+        *field = static_cast<float>(*v);
+    }
+    // Checked on the result, so the order of the keys does not matter.
+    if (c->hysteresis >= c->threshold) {
+        *error = "[pad_camera] hysteresis must be smaller than threshold";
+        return false;
+    }
+    return true;
+}
+
 std::string Quoted(std::string_view s) {
     std::string out = "\"";
     for (char c : s) {
@@ -279,6 +326,8 @@ bool ParseInputMapping(std::string_view toml_text, const InputMapping &base, Inp
             ok = ParseGamepad(*table, &m, error);
         } else if (section == "mouse_camera") {
             ok = ParseMouseCamera(*table, &m.mouse_camera, error);
+        } else if (section == "pad_camera") {
+            ok = ParsePadCamera(*table, &m.pad_camera, error);
         } else if (section == "analog") {
             ok = ParseAnalog(*table, &m.analog, error);
         } else {
@@ -363,6 +412,13 @@ std::string FormatInputMapping(const InputMapping &mapping) {
     out += std::string("enabled = ") + (c.enabled ? "true" : "false") + "\n";
     out += "pixels_per_press = " + FloatText(c.pixels_per_press) + "\n";
     out += std::string("vertical = ") + (c.vertical ? "true" : "false") + "\n";
+    const PadCameraConfig &pad = mapping.pad_camera;
+    out += "\n[pad_camera]\n";
+    out += std::string("enabled = ") + (pad.enabled ? "true" : "false") + "\n";
+    out += "threshold = " + FloatText(pad.threshold) + "\n";
+    out += "hysteresis = " + FloatText(pad.hysteresis) + "\n";
+    out += "min_duty = " + FloatText(pad.min_duty) + "\n";
+    out += std::string("vertical = ") + (pad.vertical ? "true" : "false") + "\n";
     return out;
 }
 

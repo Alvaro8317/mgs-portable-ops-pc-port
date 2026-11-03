@@ -148,6 +148,11 @@ void InputTranslator::OnMouseMotion(float dx, float dy) {
 }
 
 void InputTranslator::EndPoll() {
+    EndPollMouseCamera();
+    EndPollPadCamera();
+}
+
+void InputTranslator::EndPollMouseCamera() {
     camera_buttons_ = 0;
     const MouseCameraConfig &config = mapping_.mouse_camera;
     if (!config.enabled) {
@@ -176,6 +181,58 @@ void InputTranslator::EndPoll() {
     camera_moved_ = false;
 }
 
+float PadCameraDuty(const PadCameraConfig &config, float magnitude) {
+    const float min_duty = std::clamp(config.min_duty, 0.01f, 1.0f);
+    const float span = std::max(kPadCameraFullTilt - config.threshold, 0.001f);
+    const float tilt = std::clamp((magnitude - config.threshold) / span, 0.0f, 1.0f);
+    return min_duty + (1.0f - min_duty) * tilt;
+}
+
+void InputTranslator::EndPollPadCamera() {
+    pad_camera_buttons_ = 0;
+    const PadCameraConfig &config = mapping_.pad_camera;
+    const float release = config.threshold - config.hysteresis;
+    const auto axis = [&](PadCameraAxis &state, PadAxis pad_axis, bool wanted,
+                          std::uint32_t negative, std::uint32_t positive) {
+        // A pad_axes binding of this axis wins over the camera.
+        const bool bound = std::any_of(mapping_.pad_axes.begin(), mapping_.pad_axes.end(),
+                                       [&](const PadAxisBinding &b) { return b.axis == pad_axis; });
+        if (!config.enabled || !wanted || pad_camera_paused_ || bound) {
+            state = {};
+            return;
+        }
+        const float value = pad_axes_[static_cast<std::size_t>(pad_axis)];
+        const float magnitude = std::fabs(value);
+        const std::int8_t direction = value >= 0.0f ? 1 : -1;
+        if (state.direction != 0 && (direction != state.direction || magnitude < release)) {
+            state = {};
+        }
+        if (state.direction == 0) {
+            if (magnitude < config.threshold) return;
+            // Engaging presses on this poll; the share adds up from there.
+            state.direction = direction;
+            state.phase = 1.0f;
+        }
+        if (state.phase >= 1.0f) {
+            pad_camera_buttons_ |= state.direction > 0 ? positive : negative;
+            state.phase -= 1.0f;
+        }
+        state.phase += PadCameraDuty(config, magnitude);
+    };
+    axis(pad_camera_[0], PadAxis::kRightX, true, ctrl::kLeft, ctrl::kRight);
+    axis(pad_camera_[1], PadAxis::kRightY, config.vertical, ctrl::kUp, ctrl::kDown);
+}
+
+void InputTranslator::ReleasePadCamera() {
+    pad_camera_.fill({});
+    pad_camera_buttons_ = 0;
+}
+
+void InputTranslator::SetPadCameraPaused(bool paused) {
+    pad_camera_paused_ = paused;
+    if (paused) ReleasePadCamera();
+}
+
 void InputTranslator::ReleaseMouse() {
     mouse_down_.reset();
     camera_motion_[0] = camera_motion_[1] = 0.0f;
@@ -186,10 +243,11 @@ void InputTranslator::ReleaseMouse() {
 void InputTranslator::ReleasePad() {
     pad_down_.reset();
     pad_axes_.fill(0.0f);
+    ReleasePadCamera();
 }
 
 SceCtrlData InputTranslator::Sample(std::uint32_t timestamp) const {
-    std::uint32_t buttons = camera_buttons_;
+    std::uint32_t buttons = camera_buttons_ | pad_camera_buttons_;
     // half[stick][axis][0: negative, 1: positive], summed like PPSSPP's
     // virtual keys and clamped to 0..1 afterwards.
     float half[2][2][2] = {};

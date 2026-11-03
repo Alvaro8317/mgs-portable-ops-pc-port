@@ -207,6 +207,10 @@ Xbox, PlayStation and most other gamepads work, with the same layout as PPSSPP:
 | Start | Start / Menu | Options |
 | Select | Back / View | Share / Create |
 
+**The right stick turns the camera**: push it left or right. The further you push it, the faster the
+camera turns. Switching to another window stops it until you come back. To turn it off or change
+how it reacts, see `[pad_camera]` in `input.toml` (below).
+
 ### Changing the controls
 
 Copy [`profiles/mpo/config/input.toml`](profiles/mpo/config/input.toml) (in the ZIP, under `source\`)

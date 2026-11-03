@@ -12,6 +12,11 @@
 // goes to InputTranslator::OnMouseMotion. F1 or losing the focus releases it.
 // Uncaptured motion is left to the caller, so the menus never move by
 // accident.
+//
+// Right-stick camera (F23a, InputMapping::pad_camera): the stick's values go
+// to the translator like any axis, and InputTranslator::EndPoll turns them
+// into d-pad presses. Losing the focus pauses it (gaining it resumes it);
+// removing a gamepad releases it with the rest of the pad.
 
 #pragma once
 
@@ -40,8 +45,8 @@ public:
     [[nodiscard]] const std::string &error() const { return error_; }
 
     // Feeds one event. Returns true when it was keyboard, mouse button,
-    // gamepad or focus input (consumed here); other events are left to the
-    // caller.
+    // gamepad or focus input (focus lost or gained, consumed here); other
+    // events are left to the caller.
     bool HandleEvent(const SDL_Event &event);
 
     [[nodiscard]] int gamepad_count() const { return static_cast<int>(gamepads_.size()); }
