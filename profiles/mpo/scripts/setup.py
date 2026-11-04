@@ -432,6 +432,44 @@ _FINGERPRINT_SKIP_DIRS = frozenset(('.git', '.github', '.claude', '__pycache__',
                                     'analysis', 'game', 'generated', 'progress'))
 
 
+def generated_digest(manifest_path):
+  """A digest of the C++ a generate.json lists (its files' SHA-256), or None.
+
+  A stage library depends on that C++, not on the whole manifest: the
+  manifest also holds psp_recomp's SHA-256, and psp_recomp rebuilt from a
+  release in another folder is another binary (it holds paths) that writes
+  the same C++. Comparing the whole manifest recompiled all 92 stages after
+  an update on Windows (F25).
+  """
+  try:
+    manifest = json.loads(pathlib.Path(manifest_path).read_text(encoding='utf-8'))
+  except (OSError, ValueError):
+    return None
+  files = manifest.get('generated') if isinstance(manifest, dict) else None
+  if not isinstance(files, dict) or not files:
+    return None
+  return _sha256_bytes(json.dumps(files, sort_keys=True).encode())
+
+
+def install_library(built, target, attempts=5, delay=1.0):
+  """Copies `built` over `target` atomically; False when `target` is in use.
+
+  Windows refuses to replace a DLL a running mpo_boot has loaded (or one an
+  antivirus is scanning): WinError 5 stopped the whole `stages` run (F25).
+  """
+  tmp = target.with_name(f'.{target.name}.tmp')
+  shutil.copyfile(built, tmp)
+  for attempt in range(attempts):
+    try:
+      os.replace(tmp, target)
+      return True
+    except PermissionError:
+      if attempt + 1 < attempts:
+        time.sleep(delay)
+  tmp.unlink(missing_ok=True)
+  return False
+
+
 def source_fingerprint(root=None):
   """A digest of the port's source files (names, sizes and dates).
 
@@ -1036,6 +1074,7 @@ class Setup:
     for stage in order:
       if self._stage_ready(stage, records.get(stage), optimized_key):
         self._drop_quick(stage)
+    left = []
     for level in levels:
       quick = level != optimized
       key = runtime_key(compiler, level)
@@ -1049,6 +1088,7 @@ class Setup:
       if not pending:
         continue
       self._set_overlay_level(level)
+      skipped = []
       for index, stage in enumerate(pending, 1):
         if self.stop_file.exists():
           self._note('stages: stopped (asked to); run it again to go on')
@@ -1061,13 +1101,17 @@ class Setup:
         built = self._build_stage(stage)
         # Atomic: a running mpo_boot never sees half a library.
         name = library_name(stage, quick)
-        tmp = self.overlays / f'.{name}.tmp'
-        shutil.copyfile(built, tmp)
-        os.replace(tmp, self.overlays / name)
+        if not install_library(built, self.overlays / name):
+          self._note(f'stages: {stage}: {name} is in use (the game has it loaded?): left for '
+                     'the next run')
+          skipped.append(stage)
+          continue
+        manifest = self.generated / 'overlays' / stage / 'generate.json'
         states[stage] = {
             'runtime_key': key,
             'opt_level': level,
-            'generated': _sha256((self.generated / 'overlays' / stage / 'generate.json')),
+            'generated': _sha256(manifest),
+            'generated_files': generated_digest(manifest),
             'seconds': round(time.monotonic() - started, 1),
         }
         if not quick:
@@ -1077,8 +1121,14 @@ class Setup:
           shutil.rmtree(self._stage_objects(stage), ignore_errors=True)
         self._note(f'stages: {stage} installed in {states[stage]["seconds"]:.0f} s '
                    f'({pass_name})')
+      if skipped:
+        self._note(f'stages: {pass_name}: {len(skipped)} left for the next run, in use: '
+                   + ', '.join(skipped))
+        left += skipped
     self._save_state()
-    self._note('stages: all stages compiled')
+    self._note('stages: all stages compiled' if not left else
+               f'stages: done, but {len(set(left))} could not be installed while in use: close '
+               'the game and run it again')
 
   def _stage_objects(self, stage):
     return self.build / 'profiles' / 'mpo' / 'host' / 'hle' / 'CMakeFiles' / \
@@ -1142,8 +1192,18 @@ class Setup:
     if not state or state.get('runtime_key') != key:
       return False
     manifest = self.generated / 'overlays' / stage / 'generate.json'
-    if not manifest.is_file() or state.get('generated') != _sha256(manifest):
+    if not manifest.is_file():
       return False
+    recorded = state.get('generated_files')
+    if recorded is not None:
+      if recorded != generated_digest(manifest):
+        return False
+    elif state.get('generated') != _sha256(manifest):
+      return False
+    else:
+      # A record from before F25: from now on the C++ decides (saved with
+      # the state).
+      state['generated_files'] = generated_digest(manifest)
     return (self.overlays / library_name(stage, quick)).is_file()
 
   # -- play ------------------------------------------------------------------

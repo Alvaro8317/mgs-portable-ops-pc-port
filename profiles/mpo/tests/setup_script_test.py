@@ -530,6 +530,62 @@ class BuildFolderTest(unittest.TestCase):
       s.state['main']['source_fingerprint'] = '0' * 64
       self.assertIn('changed', s.update_needed())
 
+  def test_stage_ready_follows_the_cpp(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      s = setup.Setup(argparse.Namespace(data=tmp))
+      out = s.generated / 'overlays' / 'st1403'
+      out.mkdir(parents=True)
+      manifest = out / 'generate.json'
+      files = {'generated_unit_0000.cpp': 'a' * 64, 'stage_registry.cpp': 'b' * 64}
+      manifest.write_text(json.dumps({'tools': {'psp_recomp': '1' * 64}, 'generated': files}),
+                          encoding='utf-8')
+      s.overlays.mkdir(parents=True)
+      (s.overlays / setup.library_name('st1403')).write_bytes(b'lib')
+      record = {'runtime_key': 'k', 'generated': setup._sha256(manifest),
+                'generated_files': setup.generated_digest(manifest)}
+      self.assertTrue(s._stage_ready('st1403', record, 'k'))
+      # psp_recomp rebuilt elsewhere (another binary), the same C++ (F25).
+      manifest.write_text(json.dumps({'tools': {'psp_recomp': '2' * 64}, 'generated': files}),
+                          encoding='utf-8')
+      self.assertTrue(s._stage_ready('st1403', record, 'k'), 'same C++: still ready')
+      changed = dict(files, **{'stage_registry.cpp': 'c' * 64})
+      manifest.write_text(json.dumps({'tools': {'psp_recomp': '2' * 64}, 'generated': changed}),
+                          encoding='utf-8')
+      self.assertFalse(s._stage_ready('st1403', record, 'k'), 'other C++: compile again')
+      self.assertFalse(s._stage_ready('st1403', record, 'other key'))
+      # A record from before F25 (whole manifest) still works, and learns the C++.
+      old = {'runtime_key': 'k', 'generated': setup._sha256(manifest)}
+      self.assertTrue(s._stage_ready('st1403', old, 'k'))
+      self.assertEqual(old['generated_files'], setup.generated_digest(manifest))
+
+  def test_install_library_in_use(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      root = pathlib.Path(tmp)
+      built = root / 'built.dll'
+      built.write_bytes(b'new')
+      target = root / 'stage_st1403-O0.dll'
+      target.write_bytes(b'old')
+      self.assertTrue(setup.install_library(built, target, delay=0))
+      self.assertEqual(target.read_bytes(), b'new')
+      # Windows: WinError 5 while the game has the DLL loaded (F25).
+      real = setup.os.replace
+      calls = []
+
+      def denied(src, dst):
+        calls.append(dst)
+        raise PermissionError(5, 'Access is denied')
+
+      setup.os.replace = denied
+      try:
+        built.write_bytes(b'newer')
+        self.assertFalse(setup.install_library(built, target, attempts=3, delay=0))
+      finally:
+        setup.os.replace = real
+      self.assertEqual(len(calls), 3)
+      self.assertEqual(target.read_bytes(), b'new', 'the loaded library stays')
+      self.assertEqual(sorted(p.name for p in root.iterdir()), ['built.dll', target.name],
+                       'no .tmp left behind')
+
   def test_source_fingerprint(self):
     with tempfile.TemporaryDirectory() as tmp:
       root = pathlib.Path(tmp)
