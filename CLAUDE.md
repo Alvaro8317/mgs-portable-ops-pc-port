@@ -402,6 +402,8 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
   - Un registro `p <muestra> <juego>` guarda cada cambio de los botones en pantalla, con las
     etiquetas completas, así que la repetición no depende del `input.toml` de la máquina. Las
     grabaciones sin `p` usan los de la PSP (F24b).
+  - Con un pack de texturas (`--textures`, F24c) las capturas y los hashes de las repeticiones
+    cambian; para comparar contra una grabación, `--textures none`.
   - Las partidas se juegan por tramos que se encadenan con los saves del juego:
     `analysis/f21/play.sh <nombre> <carpeta ms0 anterior>` (F21).
   - **En WSL, Vulkan corre en `llvmpipe`** (por software, sin la GPU), y en las misiones pesadas no

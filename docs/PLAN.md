@@ -68,7 +68,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 3 ✅ | F08b, F14a | F08b: F07b y F08a · F14a: F10a y F12. Integrada el 2026-10-26. |
 | 4 ✅ | F15a, F18a | F15a: F14a y los 11 dumps de F05 · F18a: ninguno (F03 y F04 para ubicar en las etapas las llamadas a `sceUtility*`). Mientras tanto, la sesión principal hizo F09 en serie. Integrada el 2026-10-26. |
 | 5 ✅ | F23a, F23b, F23c | Adelantadas a pedido del usuario el 2026-11-03, antes de cerrar M6 (F21b y F22c siguen abiertas). **No cambian el ABI del runtime** (`psprecomp::Runtime`, `AllegrexContext`, `kOverlayAbiVersion`) ni los headers del framework: las etapas que el jugador ya compiló tienen que seguir cargando. F23a: F22 · F23b: F15b · F23c: F18b (F23c se sumó el mismo día). Integrada el 2026-11-03, junto con el spike de los controles en pantalla (`docs/analysis/button-prompts.md`). |
-| 6 🟨 | F24a, F24b, F24c y un spike de widescreen | Pedidas por el usuario el 2026-11-03, con las mismas reglas que la ola 5: **no cambian el ABI del runtime** ni los headers del framework. F24a: F23b · F24b: el spike de los controles (`docs/analysis/button-prompts.md`) y F23c · F24c: F15b y el mismo spike. |
+| 6 ✅ | F24a, F24b, F24c y un spike de widescreen | Pedidas por el usuario el 2026-11-03, con las mismas reglas que la ola 5: **no cambian el ABI del runtime** ni los headers del framework. F24a: F23b · F24b: el spike de los controles (`docs/analysis/button-prompts.md`) y F23c · F24c: F15b y el mismo spike. Integrada el 2026-11-03 (`docs/analysis/widescreen.md` es el spike). |
 | — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 ✅ → F22b ✅ → F22c 🟨 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22, F22b y F22c desde el 2026-11-01 (ver su ficha). |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
@@ -127,7 +127,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F23c | Fuente libre de respaldo para los diálogos (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; `sceFont` sigue necesitando las PGF; Windows sin fuentes: pendiente del usuario) |
 | F24a | Ajustes del juego en el launcher (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; probar `--fullscreen` en el juego y el launcher con mando: pendiente del usuario) |
 | F24b | Controles en pantalla según el dispositivo, parte I (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; `--prompts`, los diálogos del sistema; probar con mandos reales: pendiente del usuario) |
-| F24c | Reemplazo de texturas por hash (autónomo) | M7 | 🟨 en curso (ola 6) |
+| F24c | Reemplazo de texturas por hash (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; solo texturas en RAM: las de VRAM, el 91 % de las búsquedas, quedan para las HD) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
 Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se explica en la nota de sesión).
@@ -1720,7 +1720,14 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
       - **W3**: anclar cada elemento al borde con los `.la2`, solo si se pide;
     - se descartan un framebuffer más ancho y anclar por la posición del dibujo.
 - 60+ fps con **interpolación** (la lógica sigue a 20 o 30 fps).
-- Texturas HD en formato de PPSSPP.
+- Texturas HD en formato de PPSSPP. **La capa está hecha en F24c** (`--textures`, `--dump-textures`,
+  claves de PPSSPP). Falta reemplazar las texturas que están en VRAM sin tocar los framebuffers ni
+  los frames de video: son el 91,5 % de las búsquedas de una partida (F24c [V]).
+- **Íconos del HUD según el dispositivo** (paso 2 del spike de los controles): un `ReplacementSet`
+  por dispositivo con PNG propios de los íconos (las claves salen de `--dump-textures` y
+  `txp.py`), elegido con `DeviceTracker::generation()` y `PromptSet::style` (F24b) y guardado en
+  el registro `p` para que la repetición siga siendo determinista. Falta decidir cómo se combina
+  con el pack del jugador.
 - **`sceFont` con la fuente de respaldo** (F23c): sin las PGF del firmware, solo falta el aviso
   "Checking Memory Stick" del arranque. Las métricas de `sceFont` deciden el layout del juego,
   así que habría que imitarlas con cuidado.
