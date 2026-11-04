@@ -10,3 +10,5 @@ render_scale = 4
 window_scale = 3
 # Borderless, at the desktop's resolution.
 fullscreen = true
+# The launcher's language: "auto" (the system's), "en" or "es".
+language = "es"

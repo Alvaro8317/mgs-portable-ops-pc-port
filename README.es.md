@@ -70,12 +70,15 @@ launcher.
    `C:\Juegos\mpo-pc-port`.
 3. Abre `mpo_launcher.exe`. Si Windows SmartScreen avisa de una aplicación desconocida, elige
    *Más información › Ejecutar de todas formas*. El launcher no está firmado.
-4. Elige tu ISO (y la carpeta de las fuentes, si el launcher te la pide) y pulsa **Install**. La
+4. Elige tu ISO (y la carpeta de las fuentes, si el launcher te la pide) y pulsa **Instalar**. La
    primera vez descarga el compilador (llvm-mingw, CMake y Ninja, unos 250 MB) en su propia
    carpeta. No necesitas Visual Studio ni permisos de administrador.
-5. Cuando diga que el juego está listo, pulsa **Play**.
+5. Cuando diga que el juego está listo, pulsa **Jugar**.
 
-El launcher se maneja con el mouse, con el teclado o con un mando.
+El launcher se maneja con el mouse, con el teclado o con un mando. Sale en español si tu sistema
+está en español, y si no en inglés (con **Install**, **Play** y **Settings** en vez de **Instalar**,
+**Jugar** y **Ajustes**). Se cambia en **Idioma**, arriba de todo antes de instalar y en los
+[Ajustes](#ajustes) después.
 
 ### Si el antivirus borra un archivo
 
@@ -95,7 +98,7 @@ compila:
   de protección*, permite el archivo; después, en *Administrar la configuración › Exclusiones ›
   Agregar una exclusión › Carpeta*, agrega esa carpeta.
 
-Los nombres de los menús pueden cambiar entre versiones. Después vuelve a pulsar **Install**: vuelve
+Los nombres de los menús pueden cambiar entre versiones. Después vuelve a pulsar **Instalar**: vuelve
 a descomprimir el compilador solo. Si lo haces antes de la primera instalación, te evitas el
 problema.
 
@@ -115,7 +118,7 @@ problema.
    También aparece en el menú de aplicaciones. En la Steam Deck, esto se hace en el modo escritorio.
    Después puedes agregarlo a Steam (*Añadir un juego que no es de Steam*) y jugarlo en el modo
    juego con los controles de la Deck.
-3. Elige tu ISO, pulsa **Install** y, cuando esté listo, **Play**.
+3. Elige tu ISO, pulsa **Instalar** y, cuando esté listo, **Jugar**.
 
 El Flatpak compila el juego con su propio compilador (el runtime `org.freedesktop.Sdk`, que Flatpak
 descarga la primera vez), así que no tienes que instalar nada más. Puede leer tu ISO desde tu
@@ -167,7 +170,7 @@ la terminal, basta con volver a correr el mismo comando.
 
   Una etapa que todavía no está compilada funciona igual, pero más lenta, con bajones de FPS en las
   escenas con mucha acción. El launcher muestra cuántas van. Puedes parar la compilación con
-  **Stop**, y la próxima vez sigue donde quedó.
+  **Dejar de compilar**, y la próxima vez sigue donde quedó.
 - **El juego va a 20 FPS en el gameplay y a 30 en los menús.** Así era en la PSP, y su lógica está
   atada a esa velocidad. No es un bug.
 - **El reclutamiento por AP Scan funciona**, con puntos de acceso Wi-Fi virtuales que cambian cada
@@ -177,15 +180,20 @@ la terminal, basta con volver a correr el mismo comando.
 
 ## Ajustes
 
-La sección **Settings** del launcher (con el mouse o con el mando) elige cómo corre el juego. Cada
-cambio se guarda en el acto y vale desde la próxima vez que pulses **Play**:
+La sección **Ajustes** del launcher (con el mouse o con el mando) elige cómo corre el juego. Cada
+cambio se guarda en el acto y vale desde la próxima vez que pulses **Jugar** (el idioma, en el
+acto):
 
-- **Renderer**: Vulkan (la GPU), o Software, que es más lento y sirve para saber si un problema
+- **Idioma**: el del launcher, inglés o español. **El del sistema** sigue el idioma de tu sistema
+  (español si está en español, inglés si no); antes de instalar, la elección está arriba de todo.
+  Los mensajes de los pasos de la instalación y los logs quedan en inglés, iguales para todos los
+  que reportan un problema.
+- **Renderizador**: Vulkan (la GPU), o Software, que es más lento y sirve para saber si un problema
   viene de la GPU.
-- **Resolution**: la resolución interna del juego, de 1x (los 480x272 de la PSP) a 8x
+- **Resolución**: la resolución interna del juego, de 1x (los 480x272 de la PSP) a 8x
   (3840x2176). Solo con Vulkan. Una más alta se ve más nítida y le pide más a la GPU.
-- **Window**: el tamaño de la ventana, de 1x (480x272) a 8x. Se puede seguir cambiando a mano.
-- **Fullscreen**: pantalla completa sin bordes, a la resolución del escritorio.
+- **Ventana**: el tamaño de la ventana, de 1x (480x272) a 8x. Se puede seguir cambiando a mano.
+- **Pantalla completa**: sin bordes, a la resolución del escritorio.
 
 Se guardan en `settings.toml`, junto a `input.toml` (ver [Cambiar los
 controles](#cambiar-los-controles)):
@@ -195,6 +203,7 @@ renderer = "vulkan"   # o "soft"
 render_scale = 1      # de 1 a 8
 window_scale = 2      # de 1 a 8
 fullscreen = false
+language = "auto"     # o "en", "es"
 ```
 
 Si el archivo está dañado o un valor no vale, el juego arranca con el valor por defecto de ese
@@ -281,15 +290,15 @@ Tus saves se guardan aparte de la instalación, así que reinstalar o actualizar
 | Linux | `~/.local/share/mpo-pc-port/ms0/PSP/SAVEDATA` |
 | Flatpak | `~/.var/app/io.github.alvaro8317.MpoPcPort/data/mpo-pc-port/ms0/PSP/SAVEDATA` |
 
-**Traer tus saves de una PSP o de PPSSPP**: en el launcher, pulsa **Import a save** y elige una
+**Traer tus saves de una PSP o de PPSSPP**: en el launcher, pulsa **Importar una partida** y elige una
 carpeta de save (`ULUS10202…`) o una carpeta `SAVEDATA` entera. PPSSPP los guarda en
 `Documentos\PPSSPP\PSP\SAVEDATA` en Windows y en `~/.config/ppsspp/PSP/SAVEDATA` en Linux. Una PSP
 los guarda en `PSP/SAVEDATA` de su Memory Stick. Si PPSSPP está instalado, el navegador de carpetas
-tiene un botón **PPSSPP saves**, y también puedes escribir una ruta o marcar **Show hidden
-folders**. Tus archivos originales solo se leen, nunca se cambian. Si el port ya tiene un save con
+tiene un botón **Partidas de PPSSPP**, y también puedes escribir una ruta o marcar **Mostrar las
+carpetas ocultas**. Tus archivos originales solo se leen, nunca se cambian. Si el port ya tiene un save con
 el mismo nombre, no se reemplaza nada y el launcher te avisa.
 
-**Llevar tus saves a una PSP o a PPSSPP**: pulsa **Export my saves** y elige una carpeta (con el
+**Llevar tus saves a una PSP o a PPSSPP**: pulsa **Exportar mis partidas** y elige una carpeta (con el
 Flatpak, tu carpeta de Descargas). Los saves exportados van cifrados como los espera una PSP.
 Cópialos en la carpeta `SAVEDATA` de PPSSPP o de la PSP.
 
@@ -325,13 +334,13 @@ son el arte del juego: guárdalas para ti y comparte solo los PNG que hiciste t�
 | Lo que ves | Qué hacer |
 |---|---|
 | El ISO se rechaza ("Unsupported disc" o "Rejected: this image does not match") | El port solo acepta la versión de Estados Unidos ULUS-10202 (disco 1.02), volcada entera y sin cambios. Comprueba que sea esa versión y no una copia parcheada, traducida o comprimida (CSO). |
-| "no PSP firmware fonts found", o las pantallas de guardado y el teclado en pantalla usan una fuente distinta de la de la PSP | Sin las fuentes del firmware, esas pantallas usan una fuente de sustitución: el juego funciona igual. Para tener el aspecto de la PSP, pulsa **Add the fonts...** en el launcher y elige la carpeta `font` (ver [Qué necesitas](#qué-necesitas)). Solo las copia; no hace falta volver a instalar. |
+| "no PSP firmware fonts found", o las pantallas de guardado y el teclado en pantalla usan una fuente distinta de la de la PSP | Sin las fuentes del firmware, esas pantallas usan una fuente de sustitución: el juego funciona igual. Para tener el aspecto de la PSP, pulsa **Añadir las fuentes...** en el launcher y elige la carpeta `font` (ver [Qué necesitas](#qué-necesitas)). Solo las copia; no hace falta volver a instalar. |
 | Windows: "the compiler does not run" o "an antivirus may have removed" un archivo | El antivirus puso en cuarentena parte del compilador. Es un falso positivo: ver [Si el antivirus borra un archivo](#si-el-antivirus-borra-un-archivo). |
-| Windows: el juego se para enseguida y el launcher dice "a DLL it needs is missing", o "generated files are missing" | También es el antivirus, esta vez con los archivos del port. Añade la excepción de [Si el antivirus borra un archivo](#si-el-antivirus-borra-un-archivo) y pulsa Install otra vez: solo rehace lo que falta. |
-| La instalación se para con un error | El launcher muestra las últimas líneas. Vuelve a pulsar Install: sigue donde quedó, y muchas veces era solo un corte de la red. Los logs completos están en la carpeta `logs` de la carpeta de instalación (ver [Desinstalar](#desinstalar)). |
+| Windows: el juego se para enseguida y el launcher dice "a DLL it needs is missing", o "generated files are missing" | También es el antivirus, esta vez con los archivos del port. Añade la excepción de [Si el antivirus borra un archivo](#si-el-antivirus-borra-un-archivo) y pulsa Instalar otra vez: solo rehace lo que falta. |
+| La instalación se para con un error | El launcher muestra las últimas líneas. Vuelve a pulsar Instalar: sigue donde quedó, y muchas veces era solo un corte de la red. Los logs completos están en la carpeta `logs` de la carpeta de instalación (ver [Desinstalar](#desinstalar)). |
 | El juego se detiene y dice que una función es "unimplemented" | Llegaste a una parte del juego que el port todavía no sabe manejar. Se detiene a propósito, para no arriesgar tu save. Por favor, [abre un issue](https://github.com/Alvaro8317/mgs-portable-ops-pc-port/issues) con las líneas que muestra el launcher y di en qué parte del juego estabas. |
 | Pocos FPS en algunas escenas | Puede que esa etapa todavía no esté compilada. Mira el contador del launcher y deja que termine la compilación en segundo plano. |
-| No sale la ventana, o sale un error de Vulkan | Actualiza los drivers de la GPU. En WSL o en una máquina virtual muchas veces no hay una GPU de verdad. Ahí, elige **Software** como renderer en los [Ajustes](#ajustes) del launcher (más lento), o arranca el juego con `MPO_RENDERER=soft`. |
+| No sale la ventana, o sale un error de Vulkan | Actualiza los drivers de la GPU. En WSL o en una máquina virtual muchas veces no hay una GPU de verdad. Ahí, elige **Software** como renderizador en los [Ajustes](#ajustes) del launcher (más lento), o arranca el juego con `MPO_RENDERER=soft`. |
 | No hay sonido | El juego usa el dispositivo de audio por defecto del sistema. Elígelo antes de abrir el juego. Si lo compilaste desde el código, revisa que estén los paquetes del sonido. |
 
 Cuando reportes un problema, **nunca adjuntes el ISO, la carpeta de instalación ni archivos del

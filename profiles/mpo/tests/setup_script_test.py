@@ -199,7 +199,8 @@ class SettingsTest(unittest.TestCase):
     self.assertEqual(settings, setup.DEFAULT_SETTINGS)
     self.assertEqual(notices, [])
     self.assertEqual(setup.DEFAULT_SETTINGS, {'renderer': 'vulkan', 'render_scale': 1,
-                                              'window_scale': 2, 'fullscreen': False})
+                                              'window_scale': 2, 'fullscreen': False,
+                                              'language': 'auto'})
 
   def test_reads_what_the_launcher_writes(self):
     # launcher_core_test.cpp checks that format_settings writes exactly this.
@@ -207,7 +208,7 @@ class SettingsTest(unittest.TestCase):
     settings, notices = setup.load_settings(golden)
     self.assertEqual(notices, [])
     self.assertEqual(settings, {'renderer': 'vulkan', 'render_scale': 4, 'window_scale': 3,
-                                'fullscreen': True})
+                                'fullscreen': True, 'language': 'es'})
     # And as a Windows checkout may leave it.
     crlf = golden.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
     self.assertEqual(self.load(crlf), (settings, []))
@@ -220,6 +221,11 @@ class SettingsTest(unittest.TestCase):
     settings, notices = self.load('renderer = "soft"\nfullscreen = true\n')
     self.assertEqual(notices, [])
     self.assertEqual((settings['renderer'], settings['fullscreen']), ('soft', True))
+    # F25d: the launcher's language.
+    for language in ('auto', 'en', 'es'):
+      settings, notices = self.load(f'language = "{language}"\n')
+      self.assertEqual(notices, [])
+      self.assertEqual(settings['language'], language)
 
   def test_invalid_values_fall_back_one_by_one(self):
     settings, notices = self.load('renderer = "opengl"\nrender_scale = 9\nwindow_scale = 0\n'
@@ -231,6 +237,13 @@ class SettingsTest(unittest.TestCase):
     self.assertIn('render_scale = 9 is not valid (1 to 8): using 1', notices[1])
     self.assertIn('window_scale = 0 is not valid (1 to 8): using 2', notices[2])
     self.assertIn('fullscreen = "yes" is not valid (true or false): using false', notices[3])
+    # F25d: a language the launcher does not have is "auto" (the system's).
+    for text in ('"fr"', '"ES"', '"es_ES"', '""', 'true', '1', '["es"]'):
+      settings, notices = self.load(f'language = {text}\n')
+      self.assertEqual(settings, setup.DEFAULT_SETTINGS, text)
+      self.assertEqual(len(notices), 1, text)
+      self.assertIn(f'language = {text} is not valid ("auto" or "en" or "es"): using "auto"',
+                    notices[0])
     # The good ones stay.
     settings, notices = self.load('render_scale = 4\nwindow_scale = 2.5\n')
     self.assertEqual((settings['render_scale'], settings['window_scale']), (4, 2))

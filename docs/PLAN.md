@@ -128,6 +128,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F24a | Ajustes del juego en el launcher (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; probar `--fullscreen` en el juego y el launcher con mando: pendiente del usuario) |
 | F24b | Controles en pantalla según el dispositivo, parte I (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; `--prompts`, los diálogos del sistema; probar con mandos reales: pendiente del usuario) |
 | F24c | Reemplazo de texturas por hash (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; solo texturas en RAM: las de VRAM, el 91 % de las búsquedas, quedan para las HD) |
+| F25d | El launcher en inglés y en español (autónomo) | M7 | ✅ hecha (ola 7; el idioma del sistema o `language` en `settings.toml`, la salida de `setup.py` en inglés; probar en Windows y en la Steam Deck con mando: pendiente del usuario) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
 Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se explica en la nota de sesión).
@@ -1566,6 +1567,27 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 ---
 
 ## F23+ — Mejoras (se planifican cuando M6 esté cerrado)
+
+### F25d — El launcher en inglés y en español, autónomo (ola 7)
+
+- **Objetivo**: que el launcher hable el idioma del jugador (inglés o español), con el del sistema
+  por defecto y un selector en los ajustes.
+- **Requisitos**: F22b (el launcher) y F24a (`settings.toml` y la sección Settings).
+- **Tareas**:
+  - Todas las cadenas visibles del launcher en una tabla (inglés y español). Añadir una cadena
+    nueva es una línea (para no chocar con F25b, que puede añadir el ajuste "aspect").
+  - El idioma por defecto sale del locale del sistema (Windows y Linux): español si es `es*`,
+    inglés en cualquier otro caso.
+  - Un selector de idioma en Settings, guardado en `settings.toml` (F24a). Un valor inválido cae
+    al defecto con un aviso, como el resto de las claves.
+  - Los mensajes que el launcher arma sobre `setup.py` (pasos, errores) también. Para la salida
+    de `setup.py` misma, decidir (pasarle el idioma o dejarla en inglés) y documentarlo.
+  - La fuente de ImGui tiene que traer los caracteres del español (á é í ó ú ñ ¿ ¡ ü).
+  - README.md y README.es.md a la vez.
+- **Criterios de hecho**: tests sin ventana del núcleo del launcher (la tabla completa en los dos
+  idiomas, sin claves faltantes; la detección del locale; guardar y leer el ajuste; un valor
+  inválido cae al defecto) y de `setup.py`. Una captura local del launcher en cada idioma.
+  `ctest` completo en Clang y GCC.
 
 ### F24a — Ajustes del juego en el launcher, autónomo (ola 6)
 

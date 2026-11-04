@@ -4,6 +4,8 @@
 
 #include "launcher_core.hpp"
 
+#include "launcher_text.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -322,6 +324,9 @@ GameSettings parse_settings(const JsonValue &object) {
     if (window_scale >= 1 && window_scale <= GameSettings::kMaxWindowScale)
         settings.window_scale = window_scale;
     settings.fullscreen = bool_field(object, "fullscreen");
+    if (const std::string language = string_field(object, "language");
+        valid_language_setting(language))
+        settings.language = language;
     return settings;
 }
 
@@ -339,12 +344,16 @@ std::string format_settings(const GameSettings &settings) {
                   "# 1 to %d: the window opens at 480x272 times this.\n"
                   "window_scale = %d\n"
                   "# Borderless, at the desktop's resolution.\n"
-                  "fullscreen = %s\n",
+                  "fullscreen = %s\n"
+                  "# The launcher's language: \"auto\" (the system's), \"en\" or \"es\".\n"
+                  "language = \"%s\"\n",
                   settings.renderer == "soft" ? "soft" : "vulkan", GameSettings::kMaxRenderScale,
                   std::clamp(settings.render_scale, 1, GameSettings::kMaxRenderScale),
                   GameSettings::kMaxWindowScale,
                   std::clamp(settings.window_scale, 1, GameSettings::kMaxWindowScale),
-                  settings.fullscreen ? "true" : "false");
+                  settings.fullscreen ? "true" : "false",
+                  valid_language_setting(settings.language) ? settings.language.c_str()
+                                                            : kLanguageAuto.data());
     return text;
 }
 

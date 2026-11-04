@@ -73,7 +73,8 @@ The installer finds them there without being asked. You can also pick the folder
    don't need Visual Studio or administrator rights.
 5. When it says the game is ready, press **Play**.
 
-The launcher works with the mouse, the keyboard or a gamepad.
+The launcher works with the mouse, the keyboard or a gamepad. It speaks English, or Spanish when
+your system is in Spanish; **Language** in its settings changes it.
 
 ### If your antivirus removes a file
 
@@ -170,7 +171,7 @@ fails or you close the terminal, just run the same command again.
 ## Settings
 
 The launcher's **Settings** section (with the mouse or the gamepad) chooses how the game runs. Each
-change is saved at once and applies the next time you press **Play**:
+change is saved at once and applies the next time you press **Play** (the language, at once):
 
 - **Renderer**: Vulkan (the GPU), or Software, which is slower and is there to find out whether a
   problem comes from the GPU.
@@ -178,6 +179,10 @@ change is saved at once and applies the next time you press **Play**:
   Vulkan only. A higher one is sharper and asks more of the GPU.
 - **Window**: the size of the window, from 1x (480x272) to 8x. You can still resize it by hand.
 - **Fullscreen**: borderless, at your desktop's resolution.
+- **Language**: the launcher's, English or Spanish. **System** follows your system's language
+  (Spanish if it's Spanish, English otherwise); before installing, the choice is at the top of the
+  window. The messages of the install steps and the logs stay in English, the same for everyone
+  who reports a problem.
 
 They're kept in `settings.toml`, next to `input.toml` (see [Changing the
 controls](#changing-the-controls)):
@@ -187,6 +192,7 @@ renderer = "vulkan"   # or "soft"
 render_scale = 1      # 1 to 8
 window_scale = 2      # 1 to 8
 fullscreen = false
+language = "auto"     # or "en", "es"
 ```
 
 If the file is damaged or a value isn't valid, the game starts with the default for it, and the

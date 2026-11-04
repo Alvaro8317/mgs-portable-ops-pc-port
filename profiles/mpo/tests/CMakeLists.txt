@@ -460,3 +460,12 @@ mpo_target_warnings(mpo_launcher_core_test)
 add_test(NAME mpo_launcher_core_test
          COMMAND mpo_launcher_core_test "${CMAKE_CURRENT_BINARY_DIR}"
                  "${CMAKE_CURRENT_SOURCE_DIR}/data/settings_golden.txt")
+
+# F25d: every character of the launcher's texts is in its font (Dear ImGui
+# only: no window). Only where the launcher is built.
+if(TARGET mpo_imgui)
+    add_executable(mpo_launcher_font_test launcher_font_test.cpp)
+    target_link_libraries(mpo_launcher_font_test PRIVATE mpo_launcher_core mpo_imgui)
+    mpo_target_warnings(mpo_launcher_font_test)
+    add_test(NAME mpo_launcher_font_test COMMAND mpo_launcher_font_test)
+endif()
