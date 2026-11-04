@@ -28,6 +28,7 @@ juego traducido no se descarga de ningún lado y nunca se debe compartir (ver
 - [Ajustes](#ajustes)
 - [Controles](#controles)
 - [Saves](#saves)
+- [Packs de texturas](#packs-de-texturas)
 - [Si algo falla](#si-algo-falla)
 - [Desinstalar](#desinstalar)
 - [Aviso legal](#aviso-legal)
@@ -296,6 +297,28 @@ Sin el launcher, usa `setup.py import-save <carpeta>` y `setup.py export-save <c
 `--overwrite` se reemplaza un save que ya está).
 
 > Haz una copia de tu carpeta de saves antes de probar una versión nueva del port.
+
+## Packs de texturas
+
+El port puede dibujar imágenes PNG tuyas en lugar de las texturas del juego (por ejemplo, otros
+íconos de botones o texturas HD). Pon el pack en la carpeta `textures`, junto a tus saves:
+
+| | Carpeta del pack de texturas |
+|---|---|
+| Windows | `%APPDATA%\mpo-pc-port\textures` |
+| Linux | `~/.local/share/mpo-pc-port/textures` |
+| Flatpak | `~/.var/app/io.github.alvaro8317.MpoPcPort/data/mpo-pc-port/textures` |
+
+Un pack es un `textures.ini` y archivos PNG, con el mismo formato que los packs de texturas de
+PPSSPP, con `hash = xxh64` e `ignoreAddress = true` en `[options]`. Un PNG con el nombre de la
+clave de una textura (`00000000a1b2c3d4e5f60718.png`) o listado en `[hashes]` la reemplaza. Un PNG
+más grande que el original también sirve: el renderer Vulkan lo usa a su tamaño. Si esa carpeta no
+tiene un `textures.ini`, el juego se ve exactamente como antes.
+
+Para hacer un pack, arranca el juego con `setup.py play -- --dump-textures <carpeta>`: escribe en
+`<carpeta>` cada textura que dibuja, con su clave como nombre, y un `textures.ini`. Edita los PNG
+que quieras cambiar y cópialos, con el `textures.ini`, a la carpeta del pack. Las texturas volcadas
+son el arte del juego: guárdalas para ti y comparte solo los PNG que hiciste tú.
 
 ## Si algo falla
 

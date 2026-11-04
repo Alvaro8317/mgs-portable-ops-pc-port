@@ -151,6 +151,16 @@ std::uint32_t Sampler::LookupColor(std::uint32_t index, int level) const {
 }
 
 std::uint32_t Sampler::Fetch(int u_in, int v_in, int level) const {
+    if (st_.replaced != nullptr && level == 0) {
+        // The replacement has the level's size (powers of two). The callers
+        // clamp or wrap u and v to it already, except the sprite fast path,
+        // whose UVs PPSSPP checks against the size; wrap anyway, so that no
+        // texel outside the image is read.
+        const ReplacedTexture &r = *st_.replaced;
+        const auto u = static_cast<std::size_t>(u_in & (r.width - 1));
+        const auto v = static_cast<std::size_t>(v_in & (r.height - 1));
+        return r.native[v * static_cast<std::size_t>(r.width) + u];
+    }
     const std::uint32_t base = st_.texaddr[level];
     const auto bufw = static_cast<std::uint32_t>(st_.texbufw[level]);
     const auto u = static_cast<std::uint32_t>(u_in);

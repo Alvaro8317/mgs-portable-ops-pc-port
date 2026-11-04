@@ -20,6 +20,7 @@
 //            [--mac aa:bb:cc:dd:ee:ff] [--wlan 0|1] [--ap-seed N] [--ap-place N]
 //            [--watch-call <address>]...
 //            [--prompts auto|psp|xbox|playstation|nintendo|keyboard]
+//            [--textures <dir>|none] [--dump-textures <dir>]
 //
 // It measures the start-up (registering the dispatch table: time and memory),
 // runs PSP threads until --until-us of virtual time (default 5 s), a runtime
@@ -156,6 +157,23 @@
 //                             Repeatable.
 // --input-log 1 prints to stderr every key, gamepad and focus event the
 // window receives.
+//
+// F24c: texture replacement (mpo_texreplace), on both renderers.
+//   --textures <dir>          a replacement pack: a textures.ini in PPSSPP's
+//                             format (hash = xxh64, ignoreAddress = true) and
+//                             PNGs named by the texture's key or listed under
+//                             [hashes]. By default <data dir>/textures
+//                             (%APPDATA% or $XDG_DATA_HOME, mpo-pc-port/
+//                             textures) when that folder has a textures.ini;
+//                             none turns it off. Without a pack the GE draws
+//                             exactly as before. With one, the frames (and so
+//                             --capture and the replay checks) show the
+//                             replacements.
+//   --dump-textures <dir>     writes each texture in RAM the game draws with,
+//                             once, as <key>.png (plus a textures.ini), to make
+//                             packs from. The dump is the game's art: it never
+//                             goes into the repository (CLAUDE.md §1).
+// The report adds the lookups, the replacements and the dumped PNGs.
 
 #include <algorithm>
 #include <array>
@@ -194,6 +212,8 @@
 #include "psprecomp/runtime.hpp"
 #include "recomp/vfpu_executor.hpp"
 #include "savedata/save_paths.hpp"
+#include "texreplace/png_io.hpp"
+#include "texreplace/texture_replacer.hpp"
 #include "vfpu/vfpu.hpp"
 #include "wav_writer.h"
 
@@ -542,6 +562,8 @@ int main(int argc, char **argv) {
     bool input_log = false;
     std::string prompts_option = "auto";
     std::string check_overlay;
+    std::string textures_dir; // empty: the default folder; "none": off
+    std::string dump_textures_dir;
     // Every option takes a value: a word left over is a mistake, not ignored
     // (F19: a whole --press list quoted as one word went unnoticed).
     if (argc % 2 == 0) return fail(std::string("option without a value: ") + argv[argc - 1]);
@@ -629,6 +651,10 @@ int main(int argc, char **argv) {
             audio_wav = value;
         } else if (option == "--fonts") {
             fonts = value;
+        } else if (option == "--textures") {
+            textures_dir = value;
+        } else if (option == "--dump-textures") {
+            dump_textures_dir = value;
         } else if (option == "--osk-text") {
             osk_texts.push_back(value);
         } else if (option == "--record-input") {
@@ -830,6 +856,51 @@ int main(int argc, char **argv) {
             psprecomp::set_runtime_post_chained_call_hook(&watch::post_chained);
         }
         for (const std::string &text : osk_texts) system.utility().queue_osk_text(text);
+
+        // ---- F24c: texture replacement ----
+        mpo::texreplace::TextureReplacer texture_replacer;
+        bool texture_provider = false;
+        {
+            std::filesystem::path pack = textures_dir;
+            const bool given = !textures_dir.empty();
+            if (!given) {
+                // The player's pack, if there is one.
+                const auto data =
+                    mpo::savedata::default_data_dir(mpo::savedata::PathEnvironment::from_process());
+                std::error_code ec;
+                if (data &&
+                    std::filesystem::is_regular_file(*data / "textures" / "textures.ini", ec))
+                    pack = *data / "textures";
+            }
+            if (!pack.empty() && pack != "none") {
+                auto set = mpo::texreplace::ReplacementSet::Load(pack, &error);
+                if (!set) return fail("--textures: " + error);
+                for (const std::string &w : set->ini().warnings)
+                    std::printf("textures: %s: %s\n", pack.string().c_str(), w.c_str());
+                std::printf("textures: %s: %zu replacements (hash %s%s)%s\n", pack.string().c_str(),
+                            set->size(),
+                            set->ini().hash == mpo::texreplace::HashType::kXxh64 ? "xxh64"
+                                                                                 : "xxh32",
+                            set->ini().ignore_address ? ", ignoreAddress" : ", with the address",
+                            given ? "" : " (the default folder; --textures none turns it off)");
+                if (!mpo::texreplace::HavePng())
+                    return fail("--textures: this build has no PNG support (it needs SDL3)");
+                texture_replacer.SetActiveSet(texture_replacer.AddSet(std::move(set)));
+                texture_provider = true;
+            }
+            if (!dump_textures_dir.empty()) {
+                if (!texture_replacer.SetDumpDir(dump_textures_dir, &error))
+                    return fail("--dump-textures: " + error);
+                std::printf("textures: dumping the textures in use to %s\n",
+                            dump_textures_dir.c_str());
+                texture_provider = true;
+            }
+            texture_replacer.SetLog([](std::string_view line) {
+                std::fprintf(stderr, "mpo_boot: %.*s\n", static_cast<int>(line.size()),
+                             line.data());
+            });
+            if (texture_provider) system.ge().ge().SetTextureProvider(&texture_replacer);
+        }
         if (!overlays_dir.empty()) {
             const std::size_t overlays = system.overlays().load_libraries(overlays_dir);
             std::printf("stage overlays: %zu corpora from %s\n", overlays, overlays_dir.c_str());
@@ -1390,6 +1461,20 @@ int main(int argc, char **argv) {
                 std::printf("ge: unsupported: %s (%llu)\n", what.c_str(),
                             static_cast<unsigned long long>(count));
         }
+        if (texture_provider) {
+            const mpo::texreplace::TextureReplacer::Stats &ts = texture_replacer.stats();
+            std::printf("textures: %llu lookups, %llu replaced (%zu distinct images), %llu in "
+                        "VRAM (not replaced), %llu texel hashes (%llu KiB), %llu dumped, %llu "
+                        "dump errors, %llu load errors\n",
+                        static_cast<unsigned long long>(ts.lookups),
+                        static_cast<unsigned long long>(ts.replaced), ts.distinct.size(),
+                        static_cast<unsigned long long>(ts.vram),
+                        static_cast<unsigned long long>(ts.hashes),
+                        static_cast<unsigned long long>(ts.hashed_bytes / 1024u),
+                        static_cast<unsigned long long>(ts.dumped),
+                        static_cast<unsigned long long>(ts.dump_errors),
+                        static_cast<unsigned long long>(ts.load_errors));
+        }
         {
             const mpo::hle::Fonts &fonts_hle = system.fonts();
             std::string missing;
@@ -1614,6 +1699,7 @@ int main(int argc, char **argv) {
         system.ge().set_after_run(nullptr);
         system.ge().ge().SetDrawBackend(nullptr);
 #endif
+        system.ge().ge().SetTextureProvider(nullptr);
     }
     if (trace != nullptr) std::fclose(trace);
     print_memory("at exit", memory_use());

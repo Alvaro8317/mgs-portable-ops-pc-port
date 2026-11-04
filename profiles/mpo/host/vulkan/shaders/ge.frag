@@ -93,6 +93,7 @@ layout(push_constant) uniform Push {
     uint write_mask;   // 8888 bits that keep the old value (GE colour mask)
     uint render_scale; // F23b: image pixels per GE pixel (1 to 8)
     uint rect_sample;  // F23b: 1 + the readback's sample of a rectangle, or 0
+    uint samp_size;    // F24c: replaced texture's width | height << 16, or 0
 } pc;
 
 layout(set = 0, binding = 0) uniform sampler2D u_rgba;
@@ -239,20 +240,31 @@ ivec4 Fetch(ivec2 uv) {
     return LookupClut(TransformClutIndex(texelFetch(u_index, uv, 0).r));
 }
 
-int ClampUV(int v, int size) {
+// `limit`: the last texel the GE addresses, 511 (F24c: scaled with an HD
+// replacement, which can also have a size that is not a power of two).
+int ClampUV(int v, int size, int limit) {
     if (v >= size - 1) return size - 1;
-    if (v >= 511) return 511;
+    if (v >= limit) return limit;
     if (v < 0) return 0;
     return v;
 }
-int WrapUV(int v, int size) {
-    return v & (size - 1) & 511;
+int WrapUV(int v, int size, int limit) {
+    if ((size & (size - 1)) == 0) return v & (size - 1) & limit;
+    return min(((v % size) + size) % size, limit);
 }
+// F24c: the image sampled (the GE texture, or its replacement at another
+// size) and its texel limits.
+ivec2 SampleSize(int width, int height) {
+    if (pc.samp_size == 0u) return ivec2(width, height);
+    return ivec2(int(pc.samp_size & 0xFFFFu), int(pc.samp_size >> 16));
+}
+int g_limit_s = 511;
+int g_limit_t = 511;
 int ApplyClampS(int v, int size) {
-    return kClampS ? ClampUV(v, size) : WrapUV(v, size);
+    return kClampS ? ClampUV(v, size, g_limit_s) : WrapUV(v, size, g_limit_s);
 }
 int ApplyClampT(int v, int size) {
-    return kClampT ? ClampUV(v, size) : WrapUV(v, size);
+    return kClampT ? ClampUV(v, size, g_limit_t) : WrapUV(v, size, g_limit_t);
 }
 
 ivec4 SampleNearest(float s, float t, int width, int height) {
@@ -780,8 +792,15 @@ void main() {
             t += 0.5 * uv_step.y;
         }
 #endif
+        // F24c: an HD replacement is sampled at its own size, with the GE's
+        // 512-texel limit scaled to it.
+        const ivec2 samp = SampleSize(width, height);
+        if (pc.samp_size != 0u) {
+            g_limit_s = samp.x * 512 / width - 1;
+            g_limit_t = samp.y * 512 / height - 1;
+        }
         const ivec4 tex =
-            linear ? SampleLinear(s, t, width, height) : SampleNearest(s, t, width, height);
+            linear ? SampleLinear(s, t, samp.x, samp.y) : SampleNearest(s, t, samp.x, samp.y);
         prim = TextureFunction(prim, tex);
     }
 

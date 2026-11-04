@@ -111,6 +111,11 @@ add_executable(mpo_ge_test ge_test.cpp)
 target_link_libraries(mpo_ge_test PRIVATE mpo_ge_replay)
 mpo_target_warnings(mpo_ge_test)
 add_test(NAME mpo_ge_test COMMAND mpo_ge_test)
+# F24c: texture replacement (key, textures.ini, softgpu, hot switch, dump).
+add_executable(mpo_texreplace_test texreplace_test.cpp)
+target_link_libraries(mpo_texreplace_test PRIVATE mpo_texreplace mpo_xxhash)
+mpo_target_warnings(mpo_texreplace_test)
+add_test(NAME mpo_texreplace_test COMMAND mpo_texreplace_test)
 # F12: transform mode, splines, lines, lighting, fog, clipping, bounding box.
 add_executable(mpo_ge_transform_test ge_transform_test.cpp)
 target_link_libraries(mpo_ge_transform_test PRIVATE mpo_ge)
@@ -355,6 +360,13 @@ if(TARGET mpo_vulkan)
     add_test(NAME mpo_vulkan_vram_sync_test COMMAND mpo_vulkan_vram_sync_test)
     set_tests_properties(mpo_vulkan_vram_sync_test PROPERTIES SKIP_RETURN_CODE 77)
     # F15b: reads and writes of VRAM a target drew, inside one list run.
+    # F24c: replaced textures on the GPU against softgpu.
+    add_executable(mpo_vulkan_texreplace_test vulkan_texreplace_test.cpp)
+    target_link_libraries(mpo_vulkan_texreplace_test PRIVATE mpo_vulkan mpo_texreplace)
+    mpo_target_warnings(mpo_vulkan_texreplace_test)
+    add_test(NAME mpo_vulkan_texreplace_test COMMAND mpo_vulkan_texreplace_test)
+    set_tests_properties(mpo_vulkan_texreplace_test PROPERTIES SKIP_RETURN_CODE 77)
+
     add_executable(mpo_vulkan_hazard_test vulkan_hazard_test.cpp)
     target_link_libraries(mpo_vulkan_hazard_test PRIVATE mpo_vulkan)
     mpo_target_warnings(mpo_vulkan_hazard_test)
