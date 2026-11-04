@@ -5,7 +5,9 @@
 // window is the converted framebuffer (read back from the renderer), that
 // SDL keyboard events and a virtual gamepad (SDL's virtual joystick driver)
 // reach SceCtrlData through SdlInput, and the TOML input mapping, including
-// the checked-in profiles/mpo/config/input.toml.
+// the checked-in profiles/mpo/config/input.toml. F24b: the last device
+// through SdlInput (keys, mouse, a virtual Xbox One pad, stick noise), and
+// the face labels of prompts.h against SDL's own.
 
 #include <algorithm>
 #include <cstdint>
@@ -21,6 +23,7 @@
 #include "framebuffer.h"
 #include "input.h"
 #include "input_config.h"
+#include "prompts.h"
 #include "sdl_input.h"
 #include "sdl_presenter.h"
 
@@ -358,6 +361,108 @@ void TestVirtualGamepad() {
 }
 
 // ---------------------------------------------------------------------------
+// F24b: the last device.
+
+void TestFaceLabelsMatchSdl() {
+    for (int type = 0; type < SDL_GAMEPAD_TYPE_COUNT; ++type) {
+        for (int button = 0; button < SDL_GAMEPAD_BUTTON_COUNT; ++button) {
+            const SDL_GamepadButtonLabel sdl = SDL_GetGamepadButtonLabelForType(
+                static_cast<SDL_GamepadType>(type), static_cast<SDL_GamepadButton>(button));
+            const FaceLabel ours =
+                FaceLabelForType(static_cast<GamepadType>(type), static_cast<PadButton>(button));
+            ExpectEq(static_cast<int>(ours), static_cast<int>(sdl),
+                     "face label of type " + std::to_string(type) + " button " +
+                         std::to_string(button));
+        }
+    }
+}
+
+void TestLastDevice() {
+    InputTranslator translator;
+    SdlInput input(&translator);
+    const DeviceTracker &devices = input.devices();
+    Expect(devices.last().kind == Device::Kind::kNone, "no input yet");
+
+    // Mouse motion alone is not input, a click is (it is the keyboard and
+    // mouse device).
+    SDL_Event motion{};
+    motion.type = SDL_EVENT_MOUSE_MOTION;
+    motion.motion.which = 1;
+    motion.motion.xrel = 30.0f;
+    (void)input.HandleEvent(motion);
+    Expect(devices.last().kind == Device::Kind::kNone, "motion is not input");
+    SDL_Event click{};
+    click.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+    click.button.which = 1;
+    click.button.button = SDL_BUTTON_LEFT;
+    click.button.down = true;
+    (void)input.HandleEvent(click);
+    Expect(devices.last().kind == Device::Kind::kKeyboard, "a click: keyboard and mouse");
+    input.ReleaseMouseCapture();
+
+    SDL_VirtualJoystickDesc desc;
+    SDL_INIT_INTERFACE(&desc);
+    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+    desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+    desc.vendor_id = 0x045E;  // Microsoft
+    desc.product_id = 0x02EA; // Xbox One S controller
+    desc.name = "MPO test Xbox pad";
+    const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
+    if (id == 0) {
+        Expect(false, std::string("SDL_AttachVirtualJoystick: ") + SDL_GetError());
+        return;
+    }
+    SDL_Joystick *joystick = SDL_OpenJoystick(id);
+    PumpInto(&input);
+    Expect(devices.last().kind == Device::Kind::kKeyboard, "a pad plugged in is not input");
+    const std::uint64_t generation = devices.generation();
+
+    // Stick noise under the deadzone (0.15, so the 0.25 minimum) does not
+    // switch; a real tilt does.
+    SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, 6000); // 0.18
+    PumpInto(&input);
+    Expect(devices.last().kind == Device::Kind::kKeyboard, "stick noise ignored");
+    ExpectEq(devices.generation(), generation, "no change from noise");
+    SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, 20000);
+    PumpInto(&input);
+    Expect(devices.last().kind == Device::Kind::kGamepad &&
+               devices.last().type == GamepadType::kXboxOne && devices.last().id == id,
+           "a tilt: the Xbox pad (type " + std::to_string(static_cast<int>(devices.last().type)) +
+               ")");
+    Expect(devices.last().face == FaceLabelsForType(GamepadType::kXboxOne), "its face labels");
+    const PromptSet set = BuildPromptSetForDevice(devices.last(), translator.mapping());
+    Expect(set.style == PromptStyle::kXbox && set.For(ctrl::kCross).text == "A" &&
+               set.For(ctrl::kStart).text == "Menu",
+           "the pad's prompts");
+
+    // A key press switches back; key repeats and releases are not presses.
+    PushKey(SDL_SCANCODE_SPACE, true);
+    PumpInto(&input);
+    Expect(devices.last().kind == Device::Kind::kKeyboard, "a key: keyboard");
+    SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    PumpInto(&input);
+    Expect(devices.last().kind == Device::Kind::kGamepad, "a pad button: the pad");
+    PushKey(SDL_SCANCODE_SPACE, false);
+    PushKey(SDL_SCANCODE_SPACE, true, /*repeat=*/true);
+    PumpInto(&input);
+    Expect(devices.last().kind == Device::Kind::kGamepad, "key release and repeat ignored");
+
+    // Unplugging the active pad: back to the keyboard.
+    SDL_CloseJoystick(joystick);
+    SDL_DetachVirtualJoystick(id);
+    PumpInto(&input);
+    Expect(devices.last().kind == Device::Kind::kKeyboard, "pad removed: keyboard");
+
+    // Layout names: only for keys that print a character.
+    Expect(LayoutKeyName(scancode::kSpace).empty() && LayoutKeyName(scancode::kEscape).empty() &&
+               LayoutKeyName(scancode::kLeftCtrl).empty(),
+           "no layout name for Space, Esc, Ctrl");
+    const std::string a = LayoutKeyName(scancode::kA);
+    Expect(a.empty() || a == "A", "layout name of A: " + a);
+}
+
+// ---------------------------------------------------------------------------
 // Mapping file.
 
 template <typename T, typename Less>
@@ -552,6 +657,8 @@ int main(int argc, char **argv) {
     TestPresenter();
     TestKeyboard();
     TestVirtualGamepad();
+    TestFaceLabelsMatchSdl();
+    TestLastDevice();
     TestMappingFile(input_toml);
     SDL_Quit();
     if (g_failures != 0) {

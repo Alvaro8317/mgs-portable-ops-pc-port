@@ -31,6 +31,7 @@
 #include <string>
 
 #include "hle/ppge.hpp"
+#include "prompts.h"
 #include "savedata/savedata_store.hpp"
 #include "savedata/utility_dialogs.hpp"
 
@@ -70,6 +71,10 @@ public:
     bool host_backspace();
     bool host_finish();
     bool host_cancel();
+    // The button prompts the dialogs draw (F24b): the PSP's own until set.
+    // Presentation only; mpo_boot changes it at a controller sample.
+    void set_prompts(const frontend::PromptSet &prompts) { prompts_ = prompts; }
+    [[nodiscard]] const frontend::PromptSet &prompts() const noexcept { return prompts_; }
     // Types `text` and finishes the next OSK that runs (mpo_boot --osk-text).
     void queue_osk_text(std::string text) { osk_script_.push_back(std::move(text)); }
 
@@ -106,6 +111,7 @@ private:
     std::unique_ptr<savedata::UtilityDialogs> dialogs_;
     std::unique_ptr<VolatileHooks> hooks_;
     Ppge ppge_;
+    frontend::PromptSet prompts_ = frontend::PromptSet::Psp();
     std::deque<std::string> osk_script_;
     bool osk_script_pending_ = false;
     std::uint64_t store_operations_ = 0;

@@ -31,6 +31,7 @@ add_library(mpo_hle STATIC
     modules.cpp
     overlays.cpp
     ppge.cpp
+    prompt_draw.cpp
     runtime_memory.cpp
     system.cpp
 )

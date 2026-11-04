@@ -211,6 +211,17 @@ Xbox, PlayStation and most other gamepads work, with the same layout as PPSSPP:
 camera turns. Switching to another window stops it until you come back. To turn it off or change
 how it reacts, see `[pad_camera]` in `input.toml` (below).
 
+### Buttons on screen
+
+The save, load and message screens and the on-screen keyboard show the buttons of what you're
+playing with, and switch as soon as you use something else: the keys and mouse buttons from your
+`input.toml` (Space, Esc, Right click...) on the keyboard, A/B/X/Y on an Xbox pad, the shapes on a
+PlayStation pad, and the labels of Nintendo and other pads. The game's own screens (the HUD, the
+menus, the tutorials) still show the PSP's buttons.
+
+To always show the same ones, start the game with `--prompts`, for example
+`setup.py play -- --prompts psp` (also `xbox`, `playstation`, `nintendo` or `keyboard`).
+
 ### Changing the controls
 
 Copy [`profiles/mpo/config/input.toml`](profiles/mpo/config/input.toml) (in the ZIP, under `source\`)

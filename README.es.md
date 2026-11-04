@@ -220,6 +220,17 @@ en PPSSPP:
 más rápido gira. Si cambias a otra ventana se detiene hasta que vuelves. Para apagarlo o cambiar
 cómo responde, mira `[pad_camera]` en `input.toml` (abajo).
 
+### Los botones en pantalla
+
+Las pantallas de guardar, cargar y los mensajes, y el teclado en pantalla, muestran los botones de
+lo que estás usando, y cambian en cuanto usas otra cosa: las teclas y los botones del mouse de tu
+`input.toml` (Space, Esc, Right click...) con el teclado, A/B/X/Y con un mando de Xbox, las figuras
+con uno de PlayStation, y las etiquetas de los de Nintendo y los demás. Las pantallas del propio
+juego (el HUD, los menús, los tutoriales) siguen mostrando los botones de la PSP.
+
+Para mostrar siempre los mismos, arranca el juego con `--prompts`, por ejemplo
+`setup.py play -- --prompts psp` (también `xbox`, `playstation`, `nintendo` o `keyboard`).
+
 ### Cambiar los controles
 
 Copia [`profiles/mpo/config/input.toml`](profiles/mpo/config/input.toml) (en el ZIP, dentro de
