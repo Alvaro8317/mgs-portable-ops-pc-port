@@ -20,6 +20,17 @@
 // 6. (F25c) textures in VRAM: one the CPU copied there is replaced, one
 //    drawn by the GE into a render target is not (although its content has
 //    a replacement): exactly softgpu's bytes, with the same counts.
+// 7. (F26a) generated mip levels of a 4x image with detail: drawn 1:1 and
+//    minified, the GPU samples the level of the native size, which is
+//    softgpu's image (0 differing pixels); magnified 2x, the level of 2x,
+//    pixel for pixel. Without the levels (the control), 1:1 differs.
+// 8. (F26a) a native-size replacement with its own levels, minified by 2, 4,
+//    2.7 (between two levels) and 1.3, 1:1 and magnified 1.5, nearest and
+//    bilinear: exactly softgpu's bytes.
+// 9. (F26a) [filtering] forcing linear on a nearest draw and nearest on a
+//    linear one: exactly softgpu's bytes.
+// At render scale 2, a 1:1 sprite of case 7 shows the generated level of 2x
+// (the level is chosen per image pixel).
 // Needs a Vulkan 1.2 device; without one it exits 77 (skipped). Any
 // validation error fails. Cases 1 to 4 and 6 run again at render scale 2 (F23b),
 // where what comes back to VRAM must still be softgpu's bytes. Every texture and image is made up
@@ -331,6 +342,181 @@ int RunAll(bool allow_13, int render_scale = 1) {
         soft->ge.SetTextureProvider(&soft_rep);
         vk->ge.SetTextureProvider(&vk_rep);
     }
+    // ---- F26a ----
+    // Runs `lb` on softgpu and the GPU with their providers; the number of
+    // pixels that differ.
+    auto pair_run = [&](mpo::ge::TextureProvider *sp, mpo::ge::TextureProvider *vp,
+                        const ListBuilder &l, const std::string &what) {
+        soft->ge.SetTextureProvider(sp);
+        vk->ge.SetTextureProvider(vp);
+        expect(soft->Run(l), what + ": list finishes (soft)");
+        expect(vk->Run(l), what + ": list finishes (vulkan)");
+        if (!gpu->EndFrame(true, &err)) {
+            std::fprintf(stderr, "FAIL: %s: EndFrame: %s\n", what.c_str(), err.c_str());
+            ++g_failures;
+        }
+        return DifferingPixels(*soft, *vk);
+    };
+    // Pixels of (x0, y0) .. (x0 + n, y0 + n) that differ between the two.
+    auto region_diff = [&](int x0, int y0, int n) {
+        int d = 0;
+        for (int y = y0; y < y0 + n; ++y)
+            for (int x = x0; x < x0 + n; ++x) d += soft->Pixel(x, y) != vk->Pixel(x, y) ? 1 : 0;
+        return d;
+    };
+    auto one_set = [&](tr::TextureReplacer *r, auto fill) {
+        tr::TexturesIni ini;
+        ini.ignore_address = true;
+        auto set = std::make_unique<tr::ReplacementSet>("f26a", ini);
+        fill(*set);
+        r->SetActiveSet(r->AddSet(std::move(set)));
+    };
+    if (render_scale == 1) {
+        // 7. Generated levels.
+        ListBuilder lb7;
+        lb7.Clear(0xFF402010);
+        DrawRgba(lb7, 10, 10, 16);  // 1:1: the level of the native size
+        DrawRgba(lb7, 40, 10, 8);   // minified: the same (no level below it)
+        DrawRgba(lb7, 60, 10, 32);  // 2x: the generated level of 32 x 32
+        DrawRgba(lb7, 100, 10, 64); // 4x: level 0
+        const std::vector<std::uint8_t> hd = DetailedHd();
+        std::vector<std::uint32_t> half;
+        tr::ScaleToNative(hd.data(), 64, 64, 32, 32, &half);
+        for (const bool generate : {true, false}) {
+            tr::TextureReplacer s7;
+            tr::TextureReplacer v7;
+            for (tr::TextureReplacer *r : {&s7, &v7}) {
+                r->SetGenerateMipmaps(generate);
+                one_set(r, [&](tr::ReplacementSet &set) {
+                    set.AddAlias(keys.rgba, "detail.png");
+                    set.AddImage("detail.png", 64, 64, DetailedHd());
+                });
+            }
+            const int all = pair_run(&s7, &v7, lb7, generate ? "7" : "7 (control)");
+            const int one = region_diff(10, 10, 16);
+            const int mini = region_diff(40, 10, 8);
+            int half_off = 0;
+            for (int y = 0; y < 32; ++y)
+                for (int x = 0; x < 32; ++x)
+                    half_off +=
+                        vk->Pixel(60 + x, 10 + y) !=
+                                half[static_cast<std::size_t>(y) * 32 + static_cast<std::size_t>(x)]
+                            ? 1
+                            : 0;
+            int full_off = 0;
+            for (int y = 0; y < 64; ++y) {
+                for (int x = 0; x < 64; ++x) {
+                    std::uint32_t c;
+                    std::memcpy(
+                        &c,
+                        &hd[(static_cast<std::size_t>(y) * 64 + static_cast<std::size_t>(x)) * 4],
+                        4);
+                    full_off += vk->Pixel(100 + x, 10 + y) != c ? 1 : 0;
+                }
+            }
+            std::printf("  %-64s 1:1 %d, minified %d, 2x off level 1 %d, 4x off level 0 %d "
+                        "(all %d)\n",
+                        generate ? "7. generated mip levels of a 4x image"
+                                 : "7. control: no generated levels",
+                        one, mini, half_off, full_off, all);
+            expect(full_off == 0, "7. magnified 4x: level 0, pixel for pixel");
+            if (generate) {
+                expect(one == 0 && mini == 0, "7. 1:1 and minified: softgpu's native image");
+                expect(half_off == 0, "7. magnified 2x: the generated level 1, pixel for pixel");
+                expect(v7.stats().mipmapped == 4, "7. four draws with levels");
+            } else {
+                expect(one != 0, "7. control: without levels, 1:1 shows the 4x image instead");
+            }
+        }
+
+        // 8. The pack's own levels of a native-size image.
+        ListBuilder lb8;
+        lb8.Clear(0xFF402010);
+        int x = 10;
+        for (const bool linear : {false, true}) {
+            for (const int size : {8, 4, 6, 12, 16, 24}) {
+                DrawRgba(lb8, x, 100, size, linear);
+                x += size + 4;
+            }
+        }
+        tr::TextureReplacer s8;
+        tr::TextureReplacer v8;
+        for (tr::TextureReplacer *r : {&s8, &v8}) {
+            one_set(r, [&](tr::ReplacementSet &set) {
+                set.AddAlias(keys.rgba, "l0.png");
+                set.AddImage("l0.png", 16, 16, Pattern(16, 16, 0));
+                set.SetLevels("l0.png", {"l1.png", "l2.png"});
+                set.AddImage("l1.png", 8, 8, Pattern(8, 8, 1));
+                set.AddImage("l2.png", 4, 4, Pattern(4, 4, 2));
+            });
+        }
+        const int d8 = pair_run(&s8, &v8, lb8, "8");
+        std::printf("  %-64s differing pixels %d\n",
+                    "8. the pack's own levels, minified, nearest and bilinear", d8);
+        expect(d8 == 0, "8. VRAM matches softgpu");
+        expect(s8.stats().mipmapped == 12 && v8.stats().mipmapped == 12,
+               "8. twelve draws with levels");
+
+        // 9. [filtering].
+        for (const bool linear : {false, true}) {
+            ListBuilder lb9;
+            lb9.Clear(0xFF402010);
+            DrawRgba(lb9, 200, 100, 48, linear);
+            tr::TextureReplacer s9;
+            tr::TextureReplacer v9;
+            for (tr::TextureReplacer *r : {&s9, &v9}) {
+                one_set(r, [&](tr::ReplacementSet &set) {
+                    set.AddFiltering(keys.rgba, linear ? mpo::ge::TextureFilter::kNearest
+                                                       : mpo::ge::TextureFilter::kLinear);
+                });
+            }
+            const int d9 = pair_run(&s9, &v9, lb9, "9");
+            const std::vector<std::uint8_t> forced = vk->vram;
+            const int plain = pair_run(nullptr, nullptr, lb9, "9 (plain)");
+            std::printf("  %-64s differing pixels %d\n",
+                        linear ? "9. [filtering] nearest on a bilinear draw"
+                               : "9. [filtering] linear on a nearest draw",
+                        d9);
+            expect(d9 == 0 && plain == 0, "9. VRAM matches softgpu");
+            expect(forced != vk->vram, "9. the forced filter shows");
+            expect(v9.stats().filtered == 1, "9. one draw filtered");
+        }
+        soft->ge.SetTextureProvider(&soft_rep);
+        vk->ge.SetTextureProvider(&vk_rep);
+    } else if (render_scale == 2) {
+        // 7 at 2x: a 1:1 sprite covers 2 x 2 image pixels per texel, so the
+        // level of detail per image pixel picks the generated level of 2x.
+        // What comes back to VRAM is sample (0, 0) of each 2 x 2 block
+        // (F23b; a 1:1 sprite keeps the GPU's UV there): texel (2x, 2y) of
+        // that level.
+        ListBuilder lb7;
+        lb7.Clear(0xFF402010);
+        DrawRgba(lb7, 10, 10, 16);
+        const std::vector<std::uint8_t> hd = DetailedHd();
+        std::vector<std::uint32_t> half;
+        tr::ScaleToNative(hd.data(), 64, 64, 32, 32, &half);
+        tr::TextureReplacer s7;
+        tr::TextureReplacer v7;
+        for (tr::TextureReplacer *r : {&s7, &v7}) {
+            one_set(r, [&](tr::ReplacementSet &set) {
+                set.AddAlias(keys.rgba, "detail.png");
+                set.AddImage("detail.png", 64, 64, DetailedHd());
+            });
+        }
+        (void)pair_run(&s7, &v7, lb7, "7 at 2x");
+        int off = 0;
+        for (int y = 0; y < 16; ++y)
+            for (int x = 0; x < 16; ++x)
+                off += vk->Pixel(10 + x, 10 + y) != half[static_cast<std::size_t>(2 * y) * 32 +
+                                                         static_cast<std::size_t>(2 * x)]
+                           ? 1
+                           : 0;
+        std::printf("  %-64s off level 1 %d\n", "7. a 1:1 sprite at render scale 2", off);
+        expect(off == 0, "7. at render scale 2, a 1:1 sprite shows the level of 2x");
+        soft->ge.SetTextureProvider(&soft_rep);
+        vk->ge.SetTextureProvider(&vk_rep);
+    }
+
     const mpo::vk::RendererStats &st = gpu->stats();
     for (const auto &[what, count] : st.approximations)
         std::printf("  approximated: %s (%llu)\n", what.c_str(),

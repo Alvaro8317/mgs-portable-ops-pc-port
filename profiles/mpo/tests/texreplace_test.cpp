@@ -13,15 +13,31 @@
 //   (CLUT4 swizzled icon, at its size and from a 4x PNG); the hot switch
 //   between two sets takes effect at the next list run;
 // - the dump: a PNG per key and a textures.ini, which then work as a pack.
+// F26a:
+// - mip levels in textures.ini (a.png|b.png, <key>_N) and on disk
+//   (<key>_N.png), [filtering];
+// - BuildReplacement: the generated chain (2 x 2 box down to the native
+//   size, whose level is `native` itself), the pack's own levels and their
+//   size check, the levels softgpu gets;
+// - on softgpu: a native-size pack with its own levels picks them by the
+//   detail, with mip filtering (and without them, level 0 as before);
+//   [filtering] forces the filters, also on a texture without a
+//   replacement, not on one listed as "do not replace";
+// - the background load: the game's texture until the PNG is decoded (not
+//   dumped meanwhile), the synchronous mode, the preload and its budget;
+// - the reload of a pack (in place, keeping the active set) and the folder
+//   watch.
 // PNG files are written and read through SDL3 (png_io.hpp); without it,
 // those checks are skipped (and said so).
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "png_io.hpp"
@@ -192,12 +208,50 @@ void TestIni() {
     if (ini.hashes.size() == 4) {
         expect(ini.hashes[0].file == "icons/y.png" && ini.hashes[0].key.hash == 0x3dc35a44u,
                "entry 1");
+        // F26a: its _1 line is its level 1.
+        expect(ini.hashes[0].levels == std::vector<std::string>{"icons/y_1.png"},
+               "entry 1: level 1 from the _1 line");
         expect(ini.hashes[1].file == "a/b.png", "entry 2: backslashes, first mip level");
+        expect(ini.hashes[1].levels == std::vector<std::string>{"a/b1.png"},
+               "entry 2: level 1 from a|b");
         expect(ini.hashes[2].file.empty(), "entry 3: listed, not replaced");
         expect(ini.hashes[3].file == "with#hash.png", "entry 4: escaped #");
     }
-    expect(ini.warnings.size() == 3,
-           "warnings for [games], [hashranges] and levels: " + std::to_string(ini.warnings.size()));
+    expect(ini.warnings.size() == 2,
+           "warnings for [games] and [hashranges]: " + std::to_string(ini.warnings.size()));
+
+    // F26a: levels must follow each other; [filtering].
+    tr::TexturesIni lv;
+    expect(tr::ParseTexturesIni("[options]\nhash = xxh64\n[hashes]\n"
+                                "00000000bb2bdcb33dc35a44_1 = c.png\n"
+                                "00000000bb2bdcb33dc35a44 = a.png|b.png\n"
+                                "00000000bb2bdcb33dc35a44_2 = d.png\n"
+                                "00000000bb2bdcb33dc35a44_4 = e.png\n"
+                                "0000000011111111aaaaaaaa_1 = only1.png\n"
+                                "[filtering]\n"
+                                "00000000bb2bdcb33dc35a44 = Linear\n"
+                                "0000000022222222 = nearest\n"
+                                "0000000000000000 = auto\n"
+                                "0000000033333333 = bilinear\n",
+                                &lv, &error),
+           "levels and filtering parse: " + error);
+    expect(lv.hashes.size() == 1 && lv.hashes[0].file == "a.png" &&
+               lv.hashes[0].levels == std::vector<std::string>{"b.png", "c.png", "d.png"},
+           "a|b, then _1 and _2, joined as ComputeAliasMap does (and _4 after a gap is not)");
+    expect(lv.filtering.size() == 3, "three [filtering] entries");
+    if (lv.filtering.size() == 3) {
+        expect(lv.filtering[0].filter == mpo::ge::TextureFilter::kLinear &&
+                   lv.filtering[0].key.hash == 0x3dc35a44u,
+               "linear, any case");
+        expect(lv.filtering[1].filter == mpo::ge::TextureFilter::kNearest &&
+                   lv.filtering[1].key.cachekey == 0x22222222u && lv.filtering[1].key.hash == 0,
+               "a CLUT/size half alone");
+        expect(lv.filtering[2].filter == mpo::ge::TextureFilter::kAuto &&
+                   lv.filtering[2].key == tr::ReplacementKey{},
+               "the global entry");
+    }
+    expect(lv.warnings.size() == 3, "warnings: level 4 without 3, level 1 without 0, a bad mode: " +
+                                        std::to_string(lv.warnings.size()));
 
     tr::TexturesIni other;
     expect(tr::ParseTexturesIni("[options]\nhash = xxh32\n", &other, &error) &&
@@ -240,6 +294,81 @@ void TestLookup() {
     expect(set2.Lookup(full) && *set2.Lookup(full) == "y.png", "ignoreAddress: content key");
     expect(set2.Lookup({0x08310000BB2BDCB3ull, 0x3DC35A44u}) != nullptr,
            "ignoreAddress: anywhere in memory");
+}
+
+void TestFilteringLookup() {
+    tr::TexturesIni ini;
+    ini.ignore_address = true;
+    tr::ReplacementSet set("unused", ini);
+    const tr::ReplacementKey full{0x08300000BB2BDCB3ull, 0x3DC35A44u};
+    mpo::ge::TextureFilter f = mpo::ge::TextureFilter::kAuto;
+    expect(!set.FindFiltering(full, &f) && !set.has_filtering(), "no [filtering]");
+    set.AddFiltering({0, 0}, mpo::ge::TextureFilter::kNearest);
+    expect(set.FindFiltering(full, &f) && f == mpo::ge::TextureFilter::kNearest,
+           "the global entry");
+    set.AddFiltering({0xBB2BDCB3ull, 0}, mpo::ge::TextureFilter::kLinear);
+    expect(set.FindFiltering(full, &f) && f == mpo::ge::TextureFilter::kLinear,
+           "the CLUT/size half before the global entry");
+    set.AddFiltering({0xBB2BDCB3ull, 0x3DC35A44u}, mpo::ge::TextureFilter::kAuto);
+    expect(set.FindFiltering(full, &f) && f == mpo::ge::TextureFilter::kAuto,
+           "the exact key (without the address) first");
+}
+
+void TestBuild() {
+    using Img = tr::DecodedImage;
+    std::vector<std::string> notes;
+    // A native-size image: one level, as in F24c.
+    auto same = tr::BuildReplacement(Img{16, 16, Pattern(16, 16, 0)}, {}, 16, 16, true, &notes);
+    expect(same->mips.empty() && same->native_mips.empty() && same->native.size() == 256,
+           "native size: no levels");
+    // A 4x image: levels of 32 and 16; the 16 is `native` itself.
+    const std::vector<std::uint8_t> big = Pattern(64, 64, 1);
+    auto hd = tr::BuildReplacement(Img{64, 64, big}, {}, 16, 16, true, &notes);
+    expect(hd->mips.size() == 2 && hd->mips[0].width == 32 && hd->mips[1].width == 16 &&
+               hd->native_mips.empty(),
+           "4x: two generated levels, none for softgpu");
+    if (hd->mips.size() == 2) {
+        std::vector<std::uint32_t> half;
+        tr::ScaleToNative(big.data(), 64, 64, 32, 32, &half);
+        std::uint32_t c = 0;
+        std::memcpy(&c, &hd->mips[0].rgba[(5 * 32 + 7) * 4], 4);
+        expect(c == half[5 * 32 + 7], "level 1 is the 2 x 2 box of level 0");
+        bool native = true;
+        for (std::size_t i = 0; i < 256; ++i) {
+            std::memcpy(&c, &hd->mips[1].rgba[i * 4], 4);
+            native = native && c == hd->native[i];
+        }
+        expect(native, "the level of the native size is `native`");
+    }
+    expect(tr::BuildReplacement(Img{64, 64, big}, {}, 16, 16, false, &notes)->mips.empty(),
+           "no generation when it is off");
+    // 3x: one level of 1.5x (not a power of two), then it stops.
+    auto three = tr::BuildReplacement(Img{48, 48, Pattern(48, 48, 2)}, {}, 16, 16, true, &notes);
+    expect(three->mips.size() == 1 && three->mips[0].width == 24, "3x: one level of 24");
+    // The pack's own levels of a native-size image: softgpu gets them.
+    auto own = tr::BuildReplacement(
+        Img{16, 16, SolidImage(16, 16, 0xFF0000FFu)},
+        {Img{8, 8, SolidImage(8, 8, 0xFF00FF00u)}, Img{4, 4, SolidImage(4, 4, 0xFFFF0000u)}}, 16,
+        16, true, &notes);
+    expect(own->mips.size() == 2 && own->native_mips.size() == 2 &&
+               own->native_mips[0].width == 8 && own->native_mips[1].texels[0] == 0xFFFF0000u,
+           "the pack's levels below the native size go to softgpu too");
+    expect(notes.empty(), "no notes so far");
+    // A level of the wrong size stops the chain there.
+    auto bad =
+        tr::BuildReplacement(Img{16, 16, SolidImage(16, 16, 0xFF0000FFu)},
+                             {Img{7, 7, SolidImage(7, 7, 0xFF00FF00u)}}, 16, 16, true, &notes);
+    expect(bad->mips.empty() && notes.size() == 1, "a level of the wrong size: noted, not used");
+    // A 4x pack with its own levels: `native` is its level of the native size.
+    auto hd_own = tr::BuildReplacement(Img{64, 64, big},
+                                       {Img{32, 32, SolidImage(32, 32, 0xFF101010u)},
+                                        Img{16, 16, SolidImage(16, 16, 0xFF202020u)},
+                                        Img{8, 8, SolidImage(8, 8, 0xFF303030u)}},
+                                       16, 16, true, &notes);
+    expect(hd_own->mips.size() == 3 && hd_own->native[0] == 0xFF202020u &&
+               hd_own->native_mips.size() == 1 && hd_own->native_mips[0].texels[0] == 0xFF303030u,
+           "4x with its own levels: native and softgpu's level 1 are the pack's");
+    expect(hd->id != hd_own->id && hd->id != 0, "ids");
 }
 
 void TestScale() {
@@ -720,15 +849,321 @@ void TestVram() {
     }
 }
 
+// ---- F26a ----
+
+// The content key of the 8888 texture at kRgbaAddr.
+tr::ReplacementKey RgbaKey() {
+    Machine m;
+    ListBuilder lb;
+    DrawRgba(lb, 0, 0, 16);
+    return ProbeFirst(m, lb);
+}
+
+// A replacer with one set, made by `fill`.
+template <typename Fill>
+std::unique_ptr<tr::TextureReplacer> OneSet(Fill fill) {
+    tr::TexturesIni ini;
+    ini.ignore_address = true;
+    auto set = std::make_unique<tr::ReplacementSet>("f26a", ini);
+    fill(*set);
+    auto r = std::make_unique<tr::TextureReplacer>();
+    r->SetActiveSet(r->AddSet(std::move(set)));
+    return r;
+}
+
+void TestSoftgpuMips() {
+    const tr::ReplacementKey key = RgbaKey();
+    constexpr std::uint32_t kRed = 0xFF0000FFu;
+    constexpr std::uint32_t kGreen = 0xFF00FF00u;
+    constexpr std::uint32_t kBlue = 0xFFFF0000u;
+    auto with_levels = [&](bool levels) {
+        return OneSet([&](tr::ReplacementSet &set) {
+            set.AddAlias(key, "a.png");
+            set.AddImage("a.png", 16, 16, SolidImage(16, 16, kRed));
+            if (levels) {
+                set.SetLevels("a.png", {"a_1.png", "a_2.png"});
+                set.AddImage("a_1.png", 8, 8, SolidImage(8, 8, kGreen));
+                set.AddImage("a_2.png", 4, 4, SolidImage(4, 4, kBlue));
+            }
+        });
+    };
+    ListBuilder lb;
+    lb.Clear(0xFF402010);
+    DrawRgba(lb, 0, 0, 32);  // magnified: level 0
+    DrawRgba(lb, 40, 0, 16); // 1:1: level 0
+    DrawRgba(lb, 60, 0, 8);  // detail 16: level 1
+    DrawRgba(lb, 70, 0, 4);  // detail 32: level 2
+    DrawRgba(lb, 80, 0, 6);  // detail 22: level 1 and 6/16 of level 2
+    auto r = with_levels(true);
+    Machine m;
+    m.ge.SetTextureProvider(r.get());
+    expect(m.Run(lb), "mips list runs");
+    expect(m.Pixel(5, 5) == kRed && m.Pixel(45, 5) == kRed, "magnified and 1:1: level 0");
+    expect(m.Pixel(62, 2) == kGreen, "half size: the pack's level 1");
+    expect(m.Pixel(71, 1) == kBlue, "quarter size: level 2");
+    // softgpu's level_frac: (c1 * frac + c0 * (16 - frac)) >> 4 per channel.
+    const std::uint32_t mixed = m.Pixel(82, 2);
+    expect((mixed & 0xFF) == 0 && ((mixed >> 8) & 0xFF) > 0x80 && ((mixed >> 16) & 0xFF) > 0x40 &&
+               ((mixed >> 8) & 0xFF) + ((mixed >> 16) & 0xFF) >= 0xF0,
+           "between two levels: mip filtering, " + std::to_string(mixed));
+    expect(r->stats().mipmapped == 5, "five draws with mip levels");
+    // Without the pack's levels: level 0 everywhere, as before F26a.
+    auto flat = with_levels(false);
+    Machine f;
+    f.ge.SetTextureProvider(flat.get());
+    expect(f.Run(lb), "flat list runs");
+    expect(f.Pixel(62, 2) == kRed && f.Pixel(71, 1) == kRed && f.Pixel(82, 2) == kRed,
+           "no levels of its own: level 0 at every size");
+    expect(flat->stats().mipmapped == 0, "no mip levels");
+}
+
+void TestFiltering() {
+    const tr::ReplacementKey key = RgbaKey();
+    auto list = [](bool linear) {
+        ListBuilder lb;
+        lb.Clear(0xFF402010);
+        DrawRgba(lb, 100, 100, 48, linear); // magnified 3x: the filter shows
+        return lb;
+    };
+    Machine nearest_plain;
+    Machine linear_plain;
+    expect(nearest_plain.Run(list(false)) && linear_plain.Run(list(true)), "plain lists run");
+    expect(nearest_plain.vram != linear_plain.vram, "the two filters differ");
+    auto run = [&](mpo::ge::TextureFilter filter, const tr::ReplacementKey &k, bool linear,
+                   bool ignored = false) {
+        auto r = OneSet([&](tr::ReplacementSet &set) {
+            set.AddFiltering(k, filter);
+            if (ignored) set.AddAlias(k, "");
+        });
+        Machine m;
+        m.ge.SetTextureProvider(r.get());
+        expect(m.Run(list(linear)), "filtered list runs");
+        return std::make_pair(m.vram, r->stats().filtered);
+    };
+    // Forced on a texture without a replacement (PPSSPP applies it too).
+    auto [lin, lin_count] = run(mpo::ge::TextureFilter::kLinear, key, false);
+    expect(lin == linear_plain.vram && lin_count == 1, "linear forced on a nearest draw");
+    auto [near, near_count] = run(mpo::ge::TextureFilter::kNearest, key, true);
+    expect(near == nearest_plain.vram && near_count == 1, "nearest forced on a linear draw");
+    auto [aut, aut_count] = run(mpo::ge::TextureFilter::kAuto, key, true);
+    expect(aut == linear_plain.vram && aut_count == 0, "auto: the game's filter");
+    auto [glob, glob_count] = run(mpo::ge::TextureFilter::kNearest, tr::ReplacementKey{}, true);
+    expect(glob == nearest_plain.vram && glob_count == 1, "the global entry");
+    auto [ign, ign_count] = run(mpo::ge::TextureFilter::kNearest, key, true, true);
+    expect(ign == linear_plain.vram && ign_count == 0,
+           "not on a texture listed as \"do not replace\"");
+    // From a textures.ini, with a replacement drawn with it.
+    const std::filesystem::path dir = FreshDir("mpo_texreplace_test_filtering");
+    std::ofstream(dir / "textures.ini", std::ios::binary)
+        << "[options]\nhash = xxh64\nignoreAddress = true\n[filtering]\n"
+        << tr::HashName(key) << " = linear\n";
+    std::string error;
+    auto set = tr::ReplacementSet::Load(dir, &error);
+    expect(set != nullptr && set->has_filtering(), "[filtering] from a file: " + error);
+    if (set) {
+        tr::TextureReplacer r;
+        r.SetActiveSet(r.AddSet(std::move(set)));
+        Machine m;
+        m.ge.SetTextureProvider(&r);
+        expect(m.Run(list(false)) && m.vram == linear_plain.vram, "and drawn linear");
+    }
+}
+
+// Runs `lb` on a fresh machine with `r` until `done` says so (at most ~5 s).
+template <typename Done>
+bool RunUntil(tr::TextureReplacer &r, const ListBuilder &lb, Machine *out, Done done) {
+    for (int i = 0; i < 250; ++i) {
+        Machine m;
+        m.ge.SetTextureProvider(&r);
+        if (!m.Run(lb)) return false;
+        if (done(m)) {
+            out->vram = m.vram;
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+}
+
+void TestAsync() {
+    if (!tr::HavePng()) {
+        std::printf("  SKIP: no PNG support in this build: background load and reload checks\n");
+        return;
+    }
+    const tr::ReplacementKey key = RgbaKey();
+    const std::filesystem::path dir = FreshDir("mpo_texreplace_test_async");
+    std::string error;
+    constexpr std::uint32_t kRed = 0xFF0000FFu;
+    constexpr std::uint32_t kGreen = 0xFF00FF00u;
+    expect(tr::SavePng(dir / "a.png", 64, 64, SolidImage(64, 64, kRed), &error),
+           "write a.png: " + error);
+    std::ofstream(dir / "textures.ini", std::ios::binary)
+        << "[options]\nhash = xxh64\nignoreAddress = true\n[hashes]\n"
+        << tr::HashName(key) << " = a.png\n";
+    ListBuilder lb;
+    lb.Clear(0xFF402010);
+    DrawRgba(lb, 100, 100, 16);
+    Machine plain;
+    expect(plain.Run(lb), "plain list runs");
+
+    // Synchronous (the default): the first draw already has it.
+    {
+        auto set = tr::ReplacementSet::Load(dir, &error);
+        tr::TextureReplacer r;
+        r.SetActiveSet(r.AddSet(std::move(set)));
+        Machine m;
+        m.ge.SetTextureProvider(&r);
+        expect(m.Run(lb) && m.Pixel(100, 100) == kRed && r.stats().pending == 0,
+               "synchronous: replaced at the first draw");
+    }
+    // In the background: the game's texture (and no dump of it) until it is
+    // decoded, then the replacement.
+    {
+        auto set = tr::ReplacementSet::Load(dir, &error);
+        tr::TextureReplacer r;
+        r.SetAsync(true, 1);
+        const std::filesystem::path dump = FreshDir("mpo_texreplace_test_async_dump");
+        expect(r.SetDumpDir(dump, &error), "dump dir: " + error);
+        const int index = r.AddSet(std::move(set));
+        r.SetActiveSet(index);
+        Machine m;
+        m.ge.SetTextureProvider(&r);
+        expect(m.Run(lb), "async list runs");
+        expect(m.vram == plain.vram && r.stats().pending == 1 && r.stats().replaced == 0,
+               "the first run draws the game's texture while the PNG loads");
+        expect(r.stats().dumped == 0, "and does not dump it");
+        expect(r.set(index).WaitIdle(std::chrono::seconds(10)), "the load finishes");
+        Machine after;
+        after.ge.SetTextureProvider(&r);
+        expect(after.Run(lb) && after.Pixel(100, 100) == kRed && r.stats().replaced == 1,
+               "the next run draws the replacement");
+    }
+    // The preload decodes it ahead; a budget too small keeps nothing.
+    {
+        auto set = tr::ReplacementSet::Load(dir, &error);
+        tr::TextureReplacer r;
+        r.SetAsync(true, 1);
+        r.StartPreload(std::size_t{64} << 20, 1);
+        const int index = r.AddSet(std::move(set));
+        r.SetActiveSet(index);
+        expect(r.set(index).WaitIdle(std::chrono::seconds(10)), "the preload finishes");
+        tr::ReplacementSet::PreloadStats ps = r.set(index).preload_stats();
+        expect(ps.files == 1 && ps.decoded == 1 && ps.bytes == 64 * 64 * 4 && !ps.full,
+               "one PNG preloaded");
+        Machine first;
+        RunUntil(r, lb, &first, [&](const Machine &mm) { return mm.Pixel(100, 100) == kRed; });
+        ps = r.set(index).preload_stats();
+        expect(ps.used == 1 && ps.bytes == 0, "the load took the preloaded image");
+
+        auto small = tr::ReplacementSet::Load(dir, &error);
+        tr::TextureReplacer r2;
+        r2.StartPreload(16, 1);
+        const int i2 = r2.AddSet(std::move(small));
+        expect(r2.set(i2).WaitIdle(std::chrono::seconds(10)), "the small preload finishes");
+        ps = r2.set(i2).preload_stats();
+        expect(ps.decoded == 0 && ps.full && ps.bytes == 0, "over the budget: nothing kept");
+    }
+
+    // Mip levels named by key on disk (<key>_1.png), as PPSSPP scans them.
+    {
+        const std::filesystem::path named = FreshDir("mpo_texreplace_test_named_levels");
+        const std::string base = tr::HashName(key);
+        expect(tr::SavePng(named / (base + ".png"), 16, 16, SolidImage(16, 16, kRed), &error) &&
+                   tr::SavePng(named / (base + "_1.png"), 8, 8, SolidImage(8, 8, kGreen), &error) &&
+                   tr::SavePng(named / (base + "_3.png"), 2, 2, SolidImage(2, 2, kGreen), &error),
+               "write the levels: " + error);
+        std::ofstream(named / "textures.ini", std::ios::binary)
+            << "[options]\nhash = xxh64\nignoreAddress = true\n";
+        auto set = tr::ReplacementSet::Load(named, &error);
+        expect(set != nullptr &&
+                   set->Levels(base + ".png") == std::vector<std::string>{base + "_1.png"},
+               "<key>_1.png is level 1 (and _3 after a gap is not)");
+        expect(set != nullptr && set->ini().warnings.size() == 1, "the gap is reported");
+        if (set) {
+            tr::TextureReplacer r;
+            r.SetActiveSet(r.AddSet(std::move(set)));
+            ListBuilder small;
+            small.Clear(0xFF402010);
+            DrawRgba(small, 100, 100, 8);
+            Machine m;
+            m.ge.SetTextureProvider(&r);
+            expect(m.Run(small) && m.Pixel(101, 101) == kGreen, "and softgpu samples it");
+        }
+    }
+
+    // The reload: in place, at the next run, keeping the active set.
+    {
+        auto set = tr::ReplacementSet::Load(dir, &error);
+        tr::TextureReplacer r;
+        int logged = 0;
+        r.SetLog([&](std::string_view) { ++logged; });
+        tr::TexturesIni ini;
+        auto other = std::make_unique<tr::ReplacementSet>("in-memory", ini);
+        r.AddSet(std::move(other)); // index 0: not from a folder, never reloaded
+        const int index = r.AddSet(std::move(set));
+        r.SetActiveSet(index);
+        Machine m;
+        m.ge.SetTextureProvider(&r);
+        expect(m.Run(lb) && m.Pixel(100, 100) == kRed, "before the reload");
+        expect(tr::SavePng(dir / "b.png", 32, 32, SolidImage(32, 32, kGreen), &error),
+               "write b.png");
+        std::ofstream(dir / "textures.ini", std::ios::binary)
+            << "[options]\nhash = xxh64\nignoreAddress = true\n[hashes]\n"
+            << tr::HashName(key) << " = b.png\n";
+        Machine stale;
+        stale.ge.SetTextureProvider(&r);
+        expect(stale.Run(lb) && stale.Pixel(100, 100) == kRed, "nothing changes until asked");
+        r.RequestReload();
+        Machine fresh;
+        fresh.ge.SetTextureProvider(&r);
+        expect(fresh.Run(lb) && fresh.Pixel(100, 100) == kGreen, "after the reload: the new ini");
+        expect(r.stats().reloads == 1 && r.active_set() == index && r.set_count() == 2,
+               "one pack reloaded in place, still active");
+        // A broken textures.ini: reported, and the pack before stays.
+        std::ofstream(dir / "textures.ini", std::ios::binary) << "[options]\nhash = quick\n";
+        r.RequestReload();
+        Machine kept;
+        kept.ge.SetTextureProvider(&r);
+        expect(kept.Run(lb) && kept.Pixel(100, 100) == kGreen && r.stats().reload_errors == 1,
+               "a broken reload keeps the pack in use");
+        expect(logged >= 2, "the reloads are reported");
+
+        // The folder watch: a change in the folder reloads it.
+        std::ofstream(dir / "textures.ini", std::ios::binary)
+            << "[options]\nhash = xxh64\nignoreAddress = true\n[hashes]\n"
+            << tr::HashName(key) << " = a.png\n";
+        r.RequestReload();
+        Machine red_again;
+        red_again.ge.SetTextureProvider(&r);
+        expect(red_again.Run(lb) && red_again.Pixel(100, 100) == kRed, "reloaded once more");
+        r.WatchFolders(std::chrono::milliseconds(20));
+        expect(tr::SavePng(dir / "c.png", 16, 16, SolidImage(16, 16, kGreen), &error),
+               "write c.png");
+        std::ofstream(dir / "textures.ini", std::ios::binary)
+            << "[options]\nhash = xxh64\nignoreAddress = true\n[hashes]\n"
+            << tr::HashName(key) << " = c.png\n";
+        Machine watched;
+        expect(RunUntil(r, lb, &watched,
+                        [&](const Machine &mm) { return mm.Pixel(100, 100) == kGreen; }),
+               "the watch reloads the changed pack");
+        r.WatchFolders(std::chrono::milliseconds(0));
+    }
+}
+
 } // namespace
 
 int main() {
     TestKey();
     TestIni();
     TestLookup();
+    TestFilteringLookup();
+    TestBuild();
     TestScale();
     TestSoftgpu();
     TestVram();
+    TestSoftgpuMips();
+    TestFiltering();
+    TestAsync();
     if (g_failures != 0) {
         std::fprintf(stderr, "mpo_texreplace_test: %d failure(s)\n", g_failures);
         return 1;

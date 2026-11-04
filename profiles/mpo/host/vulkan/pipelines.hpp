@@ -123,8 +123,14 @@ struct PushConstants {
     // pack): its width | height << 16, which the sampling uses instead of
     // tex_size (the level of detail keeps tex_size); 0 otherwise. ge.frag only.
     std::uint32_t samp_size = 0;
+    // F26a: a replacement with mip levels: their number past level 0 (bits
+    // 0-3) and, as a signed 1.27.4 value in bits 16-31, log2 of the image's
+    // size over the GE texture's (16 x log2(4) = 32 for a 4x pack), which
+    // takes the level of detail to the image's texels; 0 otherwise. ge.frag
+    // only.
+    std::uint32_t samp_mips = 0;
 };
-static_assert(sizeof(PushConstants) == 104);
+static_assert(sizeof(PushConstants) == 108);
 
 // How a shader reads the destination pixel (F15a).
 enum class DstRead : std::uint8_t {

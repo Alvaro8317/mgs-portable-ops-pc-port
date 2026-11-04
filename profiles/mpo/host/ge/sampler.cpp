@@ -151,6 +151,15 @@ std::uint32_t Sampler::LookupColor(std::uint32_t index, int level) const {
 }
 
 std::uint32_t Sampler::Fetch(int u_in, int v_in, int level) const {
+    if (st_.replaced != nullptr && level > 0 &&
+        static_cast<std::size_t>(level) <= st_.replaced->native_mips.size()) {
+        // F26a: the replacement's own levels below the native size.
+        const ReplacedTexture::NativeLevel &l =
+            st_.replaced->native_mips[static_cast<std::size_t>(level - 1)];
+        const auto u = static_cast<std::size_t>(u_in & (l.width - 1));
+        const auto v = static_cast<std::size_t>(v_in & (l.height - 1));
+        return l.texels[v * static_cast<std::size_t>(l.width) + u];
+    }
     if (st_.replaced != nullptr && level == 0) {
         // The replacement has the level's size (powers of two). The callers
         // clamp or wrap u and v to it already, except the sprite fast path,

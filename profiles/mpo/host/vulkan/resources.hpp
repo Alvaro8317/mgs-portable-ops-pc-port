@@ -44,16 +44,18 @@ struct Image {
     int height = 0;
 };
 
+// `levels`: mip levels (F26a), all of them in the view.
 bool CreateImage2D(const VulkanContext &ctx, int width, int height, VkFormat format,
                    VkImageUsageFlags usage, VkImageAspectFlags aspect, const char *name, Image *out,
-                   std::string *error);
+                   std::string *error, std::uint32_t levels = 1);
 void DestroyImage(const VulkanContext &ctx, Image *image);
 
 // One image layout transition with the stages/accesses spelled out.
 void ImageBarrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
                   VkImageLayout old_layout, VkImageLayout new_layout,
                   VkPipelineStageFlags src_stage, VkAccessFlags src_access,
-                  VkPipelineStageFlags dst_stage, VkAccessFlags dst_access);
+                  VkPipelineStageFlags dst_stage, VkAccessFlags dst_access,
+                  std::uint32_t levels = 1);
 
 // A linear allocator over host-visible chunks, reset once per frame (after
 // the frame's fence). Used for vertices, CLUTs (uniform buffer) and staging.

@@ -134,7 +134,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F25b | Widescreen, fase W1 (autónomo) | M7 | ✅ hecha (ola 7; `--aspect` y el ajuste Aspect del launcher; probarlo en el juego (el save de `tramo3` con 21:9, la ventana y el video con barras): pendiente del usuario) |
 | F25c | Reemplazo de texturas en VRAM, texturas HD (autónomo) | M7 | ✅ hecha (ola 7; sin framebuffers ni video, en softgpu y Vulkan; las pruebas en el juego y el coste: pendientes del usuario) |
 | F25d | El launcher en inglés y en español (autónomo) | M7 | ✅ hecha (ola 7; el idioma del sistema o `language` en `settings.toml`, la salida de `setup.py` en inglés; probar en Windows y en la Steam Deck con mando: pendiente del usuario) |
-| F26a | Texturas HD que se ven bien: mipmaps, carga sin tirones, recarga y `[filtering]` (autónomo) | M7 | 🟨 en curso (ola 8) |
+| F26a | Texturas HD que se ven bien: mipmaps, carga sin tirones, recarga y `[filtering]` (autónomo) | M7 | ✅ hecha (ola 8; mipmaps generados y del pack, carga en segundo plano con precarga, F5 y `--textures-watch`, `[filtering]`; un pack 4× en el juego sin parpadeo ni tirones, F5 y `[filtering]`: pendientes del usuario) |
 | F26b | Herramientas para armar packs HD (autónomo) | M7 | 🟨 en curso (ola 8) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 

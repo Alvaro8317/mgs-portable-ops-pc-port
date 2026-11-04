@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // ReplacementSet::Load and Lookup: ported from PPSSPP
 // GPU/Common/TextureReplacer.cpp @ v1.20.4 (GPL-2.0-or-later).
+// F26a: the mip levels (ReplacedTexture::Prepare/LoadLevelData's size
+// check), FindFiltering and the asynchronous load (ReplacedTexture::Poll on
+// PPSSPP's thread manager) follow GPU/Common/ReplacedTexture.cpp and
+// TextureReplacer.cpp @ v1.20.4 (GPL-2.0-or-later).
 
 #include "texture_replacer.hpp"
 
@@ -9,7 +13,11 @@
 #include <cstdio>
 #include <fstream>
 #include <iterator>
+#include <optional>
+#include <string_view>
 #include <system_error>
+#include <unordered_set>
+#include <utility>
 
 #include "png_io.hpp"
 #include "sampler.hpp"
@@ -44,6 +52,93 @@ std::int64_t FloorDiv(std::int64_t n, std::int64_t d) {
 
 std::int64_t CeilDiv(std::int64_t n, std::int64_t d) {
     return -FloorDiv(-n, d);
+}
+
+// LookupWildcard: the full key, then with parts of it zeroed (see Lookup).
+template <typename Map>
+typename Map::const_iterator LookupWildcard(const Map &map, const ReplacementKey &full,
+                                            bool ignore) {
+    // FindReplacement drops the address before the lookup with ignoreAddress.
+    const std::uint64_t cachekey = ignore ? full.cachekey & 0xFFFFFFFFull : full.cachekey;
+    const std::uint32_t hash = full.hash;
+    const ReplacementKey order[] = {
+        {cachekey, hash},
+        {cachekey & 0xFFFFFFFFull, 0},     // only the CLUT/size half
+        {cachekey, 0},                     // no data hash (not with ignoreAddress)
+        {cachekey & 0xFFFFFFFFull, hash},  // no address
+        {cachekey & ~0xFFFFFFFFull, hash}, // address, no CLUT (not with ignoreAddress)
+        {0, hash},                         // any texture with these texels
+    };
+    for (std::size_t i = 0; i < std::size(order); ++i) {
+        if (ignore && (i == 2 || i == 4)) continue;
+        auto it = map.find(order[i]);
+        if (it != map.end()) return it;
+    }
+    return map.end();
+}
+
+// F26a: one level of the chain as RGBA8 bytes (ScaleToNative's texels).
+std::vector<std::uint8_t> ToBytes(const std::vector<std::uint32_t> &texels) {
+    std::vector<std::uint8_t> out(texels.size() * 4);
+    for (std::size_t i = 0; i < texels.size(); ++i) {
+        const std::uint32_t c = texels[i];
+        out[i * 4] = static_cast<std::uint8_t>(c);
+        out[i * 4 + 1] = static_cast<std::uint8_t>(c >> 8);
+        out[i * 4 + 2] = static_cast<std::uint8_t>(c >> 16);
+        out[i * 4 + 3] = static_cast<std::uint8_t>(c >> 24);
+    }
+    return out;
+}
+
+std::vector<std::uint32_t> ToTexels(const std::vector<std::uint8_t> &rgba) {
+    std::vector<std::uint32_t> out(rgba.size() / 4);
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        out[i] = static_cast<std::uint32_t>(rgba[i * 4]) |
+                 (static_cast<std::uint32_t>(rgba[i * 4 + 1]) << 8) |
+                 (static_cast<std::uint32_t>(rgba[i * 4 + 2]) << 16) |
+                 (static_cast<std::uint32_t>(rgba[i * 4 + 3]) << 24);
+    }
+    return out;
+}
+
+bool ValidImage(const DecodedImage &img) {
+    return img.width > 0 && img.height > 0 && img.width <= kMaxImageSide &&
+           img.height <= kMaxImageSide &&
+           img.rgba.size() ==
+               static_cast<std::size_t>(img.width) * static_cast<std::size_t>(img.height) * 4;
+}
+
+// F26a: what WatchFolders compares: every file under the folders, with its
+// size and time (FNV-1a).
+std::uint64_t FolderSignature(const std::vector<std::filesystem::path> &dirs) {
+    std::uint64_t h = 0xCBF29CE484222325ull;
+    auto mix = [&h](const void *data, std::size_t size) {
+        const auto *p = static_cast<const unsigned char *>(data);
+        for (std::size_t i = 0; i < size; ++i) {
+            h ^= p[i];
+            h *= 0x100000001B3ull;
+        }
+    };
+    for (const std::filesystem::path &dir : dirs) {
+        std::error_code ec;
+        std::vector<std::pair<std::string, std::pair<std::uintmax_t, std::int64_t>>> files;
+        for (auto it = std::filesystem::recursive_directory_iterator(
+                 dir, std::filesystem::directory_options::skip_permission_denied, ec);
+             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+            std::error_code fec;
+            if (!it->is_regular_file(fec)) continue;
+            const std::uintmax_t size = it->file_size(fec);
+            const auto time = it->last_write_time(fec).time_since_epoch().count();
+            files.push_back({it->path().generic_string(), {size, static_cast<std::int64_t>(time)}});
+        }
+        std::sort(files.begin(), files.end());
+        for (const auto &[name, info] : files) {
+            mix(name.data(), name.size());
+            mix(&info.first, sizeof(info.first));
+            mix(&info.second, sizeof(info.second));
+        }
+    }
+    return h;
 }
 
 bool EqualsNoCase(std::string_view a, std::string_view b) {
@@ -103,9 +198,290 @@ void ScaleToNative(const std::uint8_t *rgba, int iw, int ih, int w, int h,
     }
 }
 
+std::unique_ptr<ge::ReplacedTexture> BuildReplacement(DecodedImage level0,
+                                                      std::vector<DecodedImage> levels, int w,
+                                                      int h, bool generate,
+                                                      std::vector<std::string> *notes) {
+    auto tex = std::make_unique<ge::ReplacedTexture>();
+    tex->width = w;
+    tex->height = h;
+    tex->image_width = level0.width;
+    tex->image_height = level0.height;
+    // The pack's levels: each half the one before (LoadLevelData's check).
+    int lw = level0.width;
+    int lh = level0.height;
+    for (std::size_t i = 0; i < levels.size(); ++i) {
+        DecodedImage &l = levels[i];
+        const int ew = std::max(1, lw / 2);
+        const int eh = std::max(1, lh / 2);
+        if (l.width != ew || l.height != eh) {
+            if (notes != nullptr)
+                notes->push_back("mip level " + std::to_string(i + 1) + " is " +
+                                 std::to_string(l.width) + "x" + std::to_string(l.height) +
+                                 ", expected " + std::to_string(ew) + "x" + std::to_string(eh) +
+                                 ": it and the levels after it are not used");
+            break;
+        }
+        tex->mips.push_back({l.width, l.height, std::move(l.rgba)});
+        lw = ew;
+        lh = eh;
+    }
+    // The level of the GE texture's size, if the chain has one.
+    int native_level = level0.width == w && level0.height == h ? 0 : -1;
+    for (std::size_t i = 0; native_level < 0 && i < tex->mips.size(); ++i) {
+        if (tex->mips[i].width == w && tex->mips[i].height == h)
+            native_level = static_cast<int>(i) + 1;
+    }
+    if (native_level > 0) {
+        tex->native = ToTexels(tex->mips[static_cast<std::size_t>(native_level - 1)].rgba);
+    } else {
+        ScaleToNative(level0.rgba.data(), level0.width, level0.height, w, h, &tex->native);
+    }
+    if (tex->mips.empty() && generate) {
+        // A 2 x 2 box down to the GE size; that level is `native` itself, so
+        // the GPU and softgpu sample the same texels there.
+        lw = level0.width;
+        lh = level0.height;
+        const std::vector<std::uint8_t> *prev = &level0.rgba;
+        while (lw % 2 == 0 && lh % 2 == 0 && lw / 2 >= w && lh / 2 >= h) {
+            const int nw = lw / 2;
+            const int nh = lh / 2;
+            ge::ReplacedTexture::Level next{nw, nh, {}};
+            if (nw == w && nh == h) {
+                next.rgba = ToBytes(tex->native);
+            } else {
+                std::vector<std::uint32_t> texels;
+                ScaleToNative(prev->data(), lw, lh, nw, nh, &texels);
+                next.rgba = ToBytes(texels);
+            }
+            tex->mips.push_back(std::move(next));
+            prev = &tex->mips.back().rgba;
+            lw = nw;
+            lh = nh;
+        }
+    }
+    // softgpu's levels after `native`: the pack's levels below the GE size.
+    if (native_level >= 0) {
+        for (std::size_t i = static_cast<std::size_t>(native_level); i < tex->mips.size(); ++i) {
+            const ge::ReplacedTexture::Level &l = tex->mips[i];
+            tex->native_mips.push_back({l.width, l.height, ToTexels(l.rgba)});
+        }
+    }
+    tex->image = std::move(level0.rgba);
+    tex->id = g_next_image_id.fetch_add(1, std::memory_order_relaxed);
+    return tex;
+}
+
+// F26a: what a set and its loads share (the loads may outlive the set).
+struct ReplacementSet::Shared {
+    mutable std::mutex mutex;
+    mutable std::condition_variable idle;
+    int running = 0; // loads and preloads queued or running
+    std::atomic<bool> cancelled{false};
+    // The preload.
+    bool preload_started = false;
+    std::size_t budget = 0;
+    std::unordered_map<std::string, DecodedImage> preloaded;
+    std::unordered_set<std::string> requested; // a load took or decoded it
+    PreloadStats stats;
+
+    void Done() {
+        std::lock_guard<std::mutex> lock(mutex);
+        --running;
+        idle.notify_all();
+    }
+};
+
+struct ReplacementSet::Job {
+    std::shared_ptr<Shared> shared;
+    std::string file;
+    std::vector<std::string> names;                 // level 0, then the pack's levels
+    std::vector<std::filesystem::path> paths;       // their files
+    std::vector<std::optional<DecodedImage>> given; // AddImage's, when there is one
+    int w = 0;
+    int h = 0;
+    bool generate = true;
+    std::atomic<bool> done{false};
+    std::unique_ptr<ge::ReplacedTexture> result;
+    std::string error;
+    std::vector<std::string> notes;
+};
+
 ReplacementSet::ReplacementSet(std::filesystem::path dir, TexturesIni ini)
-    : dir_(std::move(dir)), ini_(std::move(ini)) {
-    for (const TexturesIni::Entry &e : ini_.hashes) aliases_[e.key] = e.file;
+    : shared_(std::make_shared<Shared>()), dir_(std::move(dir)), ini_(std::move(ini)) {
+    for (const TexturesIni::Entry &e : ini_.hashes) {
+        aliases_[e.key] = e.file;
+        if (!e.levels.empty() && !e.file.empty()) levels_[e.file] = e.levels;
+    }
+    for (const TexturesIni::Filter &f : ini_.filtering) filtering_[f.key] = f.filter;
+}
+
+ReplacementSet::~ReplacementSet() {
+    shared_->cancelled.store(true, std::memory_order_relaxed);
+}
+
+std::filesystem::path ReplacementSet::PathOf(const std::string &file) const {
+    // The names in textures.ini are UTF-8.
+    return dir_ / std::filesystem::path(std::u8string(file.begin(), file.end()));
+}
+
+void ReplacementSet::SetLevels(const std::string &file, std::vector<std::string> levels) {
+    if (levels.empty()) {
+        levels_.erase(file);
+    } else {
+        levels_[file] = std::move(levels);
+    }
+}
+
+const std::vector<std::string> &ReplacementSet::Levels(const std::string &file) const {
+    static const std::vector<std::string> kNone;
+    auto it = levels_.find(file);
+    return it == levels_.end() ? kNone : it->second;
+}
+
+void ReplacementSet::AddFiltering(const ReplacementKey &key, ge::TextureFilter filter) {
+    filtering_[key] = filter;
+}
+
+bool ReplacementSet::FindFiltering(const ReplacementKey &full, ge::TextureFilter *filter) const {
+    if (filtering_.empty()) return false;
+    auto it = LookupWildcard(filtering_, full, ini_.ignore_address);
+    // A global wildcard (a key of zeros).
+    if (it == filtering_.end()) it = filtering_.find(ReplacementKey{0, 0});
+    if (it == filtering_.end()) return false;
+    *filter = it->second;
+    return true;
+}
+
+std::vector<std::string> ReplacementSet::TakeNotes() {
+    return std::exchange(notes_, {});
+}
+
+ReplacementSet::PreloadStats ReplacementSet::preload_stats() const {
+    std::lock_guard<std::mutex> lock(shared_->mutex);
+    return shared_->stats;
+}
+
+bool ReplacementSet::WaitIdle(std::chrono::milliseconds timeout) const {
+    std::unique_lock<std::mutex> lock(shared_->mutex);
+    return shared_->idle.wait_for(lock, timeout, [this] { return shared_->running == 0; });
+}
+
+bool ReplacementSet::Decode(const std::filesystem::path &path, const std::string &file,
+                            Shared &shared, DecodedImage *out, std::string *error) {
+    {
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        shared.requested.insert(file);
+        auto it = shared.preloaded.find(file);
+        if (it != shared.preloaded.end()) {
+            *out = std::move(it->second);
+            shared.stats.bytes -= out->rgba.size();
+            ++shared.stats.used;
+            shared.preloaded.erase(it);
+            return true;
+        }
+    }
+    return LoadPng(path, &out->width, &out->height, &out->rgba, error);
+}
+
+void ReplacementSet::RunJob(Job &job) {
+    DecodedImage level0;
+    std::vector<DecodedImage> levels;
+    for (std::size_t i = 0; i < job.names.size(); ++i) {
+        if (job.shared->cancelled.load(std::memory_order_relaxed)) {
+            job.error.clear();
+            return;
+        }
+        DecodedImage img;
+        std::string err;
+        bool ok = true;
+        if (job.given[i]) {
+            img = std::move(*job.given[i]);
+        } else {
+            ok = Decode(job.paths[i], job.names[i], *job.shared, &img, &err);
+        }
+        if (ok && !ValidImage(img)) {
+            ok = false;
+            err = job.paths[i].string() + ": " + std::to_string(img.width) + "x" +
+                  std::to_string(img.height) +
+                  (img.width > 0 && img.height > 0 && img.width <= kMaxImageSide &&
+                           img.height <= kMaxImageSide
+                       ? std::string(": bad image data")
+                       : " is outside 1x1 to " + std::to_string(kMaxImageSide) + "x" +
+                             std::to_string(kMaxImageSide));
+        }
+        if (!ok) {
+            if (i == 0) {
+                job.error = err;
+                return;
+            }
+            job.notes.push_back(err + ": mip level " + std::to_string(i) +
+                                " and the levels after it are not used");
+            break;
+        }
+        if (i == 0) {
+            level0 = std::move(img);
+        } else {
+            levels.push_back(std::move(img));
+        }
+    }
+    job.result = BuildReplacement(std::move(level0), std::move(levels), job.w, job.h, job.generate,
+                                  &job.notes);
+}
+
+void ReplacementSet::StartPreload(const std::shared_ptr<DecodePool> &pool,
+                                  std::size_t budget_bytes) {
+    if (!pool || budget_bytes == 0) return;
+    std::vector<std::string> files;
+    {
+        std::set<std::string> seen;
+        for (const auto &[key, file] : aliases_) {
+            (void)key;
+            if (file.empty() || in_memory_.count(file) != 0) continue;
+            if (seen.insert(file).second) files.push_back(file);
+            for (const std::string &l : Levels(file))
+                if (in_memory_.count(l) == 0 && seen.insert(l).second) files.push_back(l);
+        }
+        std::sort(files.begin(), files.end());
+    }
+    {
+        std::lock_guard<std::mutex> lock(shared_->mutex);
+        if (shared_->preload_started) return;
+        shared_->preload_started = true;
+        shared_->budget = budget_bytes;
+        shared_->stats.files = files.size();
+        shared_->running += static_cast<int>(files.size());
+    }
+    for (const std::string &file : files) {
+        pool->Submit(
+            [shared = shared_, file, path = PathOf(file)] {
+                bool skip = shared->cancelled.load(std::memory_order_relaxed);
+                {
+                    std::lock_guard<std::mutex> lock(shared->mutex);
+                    if (shared->stats.bytes >= shared->budget) shared->stats.full = true;
+                    skip = skip || shared->stats.full || shared->requested.count(file) != 0;
+                }
+                if (!skip) {
+                    DecodedImage img;
+                    std::string error;
+                    if (LoadPng(path, &img.width, &img.height, &img.rgba, &error) &&
+                        ValidImage(img)) {
+                        std::lock_guard<std::mutex> lock(shared->mutex);
+                        if (shared->requested.count(file) != 0) {
+                            // A draw got there first.
+                        } else if (shared->stats.bytes + img.rgba.size() > shared->budget) {
+                            shared->stats.full = true;
+                        } else {
+                            shared->stats.bytes += img.rgba.size();
+                            ++shared->stats.decoded;
+                            shared->preloaded.emplace(file, std::move(img));
+                        }
+                    }
+                }
+                shared->Done();
+            },
+            false);
+    }
 }
 
 std::unique_ptr<ReplacementSet> ReplacementSet::Load(const std::filesystem::path &dir,
@@ -130,7 +506,9 @@ std::unique_ptr<ReplacementSet> ReplacementSet::Load(const std::filesystem::path
     }
     // Hash-named PNGs in the root first; [hashes] overrides them
     // (LoadIniValues fills the same map after ScanForHashNamedFiles).
-    std::vector<TexturesIni::Entry> scanned;
+    // F26a: with their mip levels (<key>_1.png, <key>_2.png...), joined as
+    // ComputeAliasMap does: from level 0 while they follow each other.
+    std::map<ReplacementKey, std::map<int, std::string>> by_key;
     for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
         if (!entry.is_regular_file(ec)) continue;
         const std::filesystem::path name = entry.path().filename();
@@ -139,24 +517,43 @@ std::unique_ptr<ReplacementSet> ReplacementSet::Load(const std::filesystem::path
         if (!EqualsNoCase(name.extension().string(), ".png")) continue;
         const std::string stem = name.stem().string();
         if (!IsHashFileName(stem)) continue;
-        TexturesIni::Entry e;
+        ReplacementKey key;
         int level = 0;
-        if (!ParseHashName(stem, &e.key, &level) || level != 0) continue;
-        e.file = file;
-        scanned.push_back(std::move(e));
+        if (!ParseHashName(stem, &key, &level)) continue;
+        by_key[key][level] = file;
     }
     if (ec) {
         *error = dir.string() + ": " + ec.message();
         return nullptr;
     }
-    std::sort(
-        scanned.begin(), scanned.end(),
-        [](const TexturesIni::Entry &a, const TexturesIni::Entry &b) { return a.key < b.key; });
+    std::vector<TexturesIni::Entry> scanned;
+    for (auto &[key, levels] : by_key) {
+        TexturesIni::Entry e;
+        e.key = key;
+        int next = 0;
+        for (auto &[level, file] : levels) {
+            if (level != next) {
+                if (next > 0)
+                    ini.warnings.push_back(file + ": mip level " + std::to_string(level) +
+                                           " without level " + std::to_string(next) + ", ignored");
+                break;
+            }
+            if (level == 0) {
+                e.file = std::move(file);
+            } else {
+                e.levels.push_back(std::move(file));
+            }
+            ++next;
+        }
+        if (next > 0) scanned.push_back(std::move(e));
+    }
     std::vector<TexturesIni::Entry> listed = std::move(ini.hashes);
     ini.hashes = std::move(scanned);
     ini.hashes.insert(ini.hashes.end(), std::make_move_iterator(listed.begin()),
                       std::make_move_iterator(listed.end()));
-    return std::make_unique<ReplacementSet>(dir, std::move(ini));
+    auto set = std::make_unique<ReplacementSet>(dir, std::move(ini));
+    set->from_folder_ = true;
+    return set;
 }
 
 void ReplacementSet::AddAlias(const ReplacementKey &key, std::string file) {
@@ -170,83 +567,178 @@ void ReplacementSet::AddImage(const std::string &file, int iw, int ih,
     for (auto it = images_.begin(); it != images_.end();) {
         it = std::get<0>(it->first) == file ? images_.erase(it) : std::next(it);
     }
+    for (auto it = jobs_.begin(); it != jobs_.end();) {
+        it = std::get<0>(it->first) == file ? jobs_.erase(it) : std::next(it);
+    }
 }
 
 const std::string *ReplacementSet::Lookup(const ReplacementKey &full) const {
-    const bool ignore = ini_.ignore_address;
-    // FindReplacement drops the address before the lookup with ignoreAddress.
-    const std::uint64_t cachekey = ignore ? full.cachekey & 0xFFFFFFFFull : full.cachekey;
-    const std::uint32_t hash = full.hash;
-    const ReplacementKey order[] = {
-        {cachekey, hash},
-        {cachekey & 0xFFFFFFFFull, 0},     // only the CLUT/size half
-        {cachekey, 0},                     // no data hash (not with ignoreAddress)
-        {cachekey & 0xFFFFFFFFull, hash},  // no address
-        {cachekey & ~0xFFFFFFFFull, hash}, // address, no CLUT (not with ignoreAddress)
-        {0, hash},                         // any texture with these texels
-    };
-    for (std::size_t i = 0; i < std::size(order); ++i) {
-        if (ignore && (i == 2 || i == 4)) continue;
-        auto it = aliases_.find(order[i]);
-        if (it == aliases_.end()) continue;
-        if (it->second.empty()) return nullptr; // listed as "do not replace"
-        return &it->second;
+    bool ignored = false;
+    return Lookup(full, &ignored);
+}
+
+const std::string *ReplacementSet::Lookup(const ReplacementKey &full, bool *ignored) const {
+    *ignored = false;
+    auto it = LookupWildcard(aliases_, full, ini_.ignore_address);
+    if (it == aliases_.end()) return nullptr;
+    if (it->second.empty()) {
+        *ignored = true; // listed as "do not replace"
+        return nullptr;
     }
-    return nullptr;
+    return &it->second;
 }
 
 const ge::ReplacedTexture *ReplacementSet::Get(const std::string &file, int w, int h,
-                                               std::string *error) {
+                                               std::string *error, bool *pending) {
+    if (pending != nullptr) *pending = false;
     const auto key = std::make_tuple(file, w, h);
     if (auto it = images_.find(key); it != images_.end()) return it->second.get();
     if (failed_.count(file) != 0) return nullptr;
-    // The names in textures.ini are UTF-8.
-    const std::filesystem::path path =
-        dir_ / std::filesystem::path(std::u8string(file.begin(), file.end()));
-    int iw = 0;
-    int ih = 0;
-    std::vector<std::uint8_t> rgba;
-    if (auto mem = in_memory_.find(file); mem != in_memory_.end()) {
-        iw = mem->second.width;
-        ih = mem->second.height;
-        rgba = mem->second.rgba;
-    } else {
-        std::string err;
-        if (!LoadPng(path, &iw, &ih, &rgba, &err)) {
-            failed_.insert(file);
-            *error = err;
+    std::shared_ptr<Job> job;
+    if (auto it = jobs_.find(key); it != jobs_.end()) {
+        if (!it->second->done.load(std::memory_order_acquire)) {
+            if (pending != nullptr) *pending = true;
             return nullptr;
         }
+        job = std::move(it->second);
+        jobs_.erase(it);
+    } else {
+        job = std::make_shared<Job>();
+        job->shared = shared_;
+        job->file = file;
+        job->w = w;
+        job->h = h;
+        job->generate = generate_mipmaps_;
+        job->names.push_back(file);
+        for (const std::string &l : Levels(file)) job->names.push_back(l);
+        bool all_given = true;
+        for (const std::string &name : job->names) {
+            job->paths.push_back(PathOf(name));
+            if (auto mem = in_memory_.find(name); mem != in_memory_.end()) {
+                job->given.emplace_back(
+                    DecodedImage{mem->second.width, mem->second.height, mem->second.rgba});
+            } else {
+                job->given.emplace_back(std::nullopt);
+                all_given = false;
+            }
+        }
+        if (pool_ && !all_given) {
+            // F26a: on a pool thread; the game's texture meanwhile.
+            {
+                std::lock_guard<std::mutex> lock(shared_->mutex);
+                ++shared_->running;
+            }
+            pool_->Submit(
+                [job] {
+                    RunJob(*job);
+                    job->done.store(true, std::memory_order_release);
+                    job->shared->Done();
+                },
+                true);
+            jobs_.emplace(key, job);
+            if (pending != nullptr) *pending = true;
+            return nullptr;
+        }
+        RunJob(*job);
     }
-    if (rgba.size() !=
-        static_cast<std::size_t>(std::max(iw, 0)) * static_cast<std::size_t>(std::max(ih, 0)) * 4) {
+    for (std::string &note : job->notes) notes_.push_back(std::move(note));
+    if (!job->result) {
         failed_.insert(file);
-        *error = path.string() + ": bad image data";
+        *error = job->error;
         return nullptr;
     }
-    if (iw <= 0 || ih <= 0 || iw > kMaxImageSide || ih > kMaxImageSide) {
-        failed_.insert(file);
-        *error = path.string() + ": " + std::to_string(iw) + "x" + std::to_string(ih) +
-                 " is outside 1x1 to " + std::to_string(kMaxImageSide) + "x" +
-                 std::to_string(kMaxImageSide);
-        return nullptr;
-    }
-    auto tex = std::make_unique<ge::ReplacedTexture>();
-    tex->width = w;
-    tex->height = h;
-    ScaleToNative(rgba.data(), iw, ih, w, h, &tex->native);
-    tex->image_width = iw;
-    tex->image_height = ih;
-    tex->image = std::move(rgba);
-    tex->id = g_next_image_id.fetch_add(1, std::memory_order_relaxed);
-    const ge::ReplacedTexture *out = tex.get();
-    images_.emplace(key, std::move(tex));
+    const ge::ReplacedTexture *out = job->result.get();
+    images_.emplace(key, std::move(job->result));
     return out;
 }
 
 int TextureReplacer::AddSet(std::unique_ptr<ReplacementSet> set) {
+    ConfigureSet(*set);
     sets_.push_back(std::move(set));
     return static_cast<int>(sets_.size()) - 1;
+}
+
+TextureReplacer::~TextureReplacer() {
+    StopWatching();
+}
+
+void TextureReplacer::EnsurePool(int threads) {
+    if (!pool_) pool_ = std::make_shared<DecodePool>(threads);
+}
+
+void TextureReplacer::ConfigureSet(ReplacementSet &set) {
+    set.SetGenerateMipmaps(generate_mipmaps_);
+    set.SetPool(async_ ? pool_ : nullptr);
+    if (preload_budget_ != 0) set.StartPreload(pool_, preload_budget_);
+}
+
+void TextureReplacer::SetAsync(bool on, int threads) {
+    async_ = on;
+    if (on) EnsurePool(threads);
+    for (auto &set : sets_) set->SetPool(on ? pool_ : nullptr);
+}
+
+void TextureReplacer::StartPreload(std::size_t budget_bytes, int threads) {
+    preload_budget_ = budget_bytes;
+    if (budget_bytes == 0) return;
+    EnsurePool(threads);
+    for (auto &set : sets_) set->StartPreload(pool_, budget_bytes);
+}
+
+void TextureReplacer::ReloadSets() {
+    for (auto &set : sets_) {
+        if (!set->from_folder()) continue;
+        const std::filesystem::path dir = set->dir();
+        std::string error;
+        auto fresh = ReplacementSet::Load(dir, &error);
+        if (!fresh) {
+            ++stats_.reload_errors;
+            Log("textures: reload: " + error + " (the pack loaded before stays)");
+            continue;
+        }
+        for (const std::string &w : fresh->ini().warnings)
+            Log("textures: " + dir.string() + ": " + w);
+        ConfigureSet(*fresh);
+        Log("textures: reloaded " + dir.string() + ": " + std::to_string(fresh->size()) +
+            " replacements");
+        set = std::move(fresh);
+        ++stats_.reloads;
+    }
+}
+
+void TextureReplacer::StopWatching() {
+    if (!watcher_.joinable()) return;
+    {
+        std::lock_guard<std::mutex> lock(watch_mutex_);
+        watch_stop_ = true;
+    }
+    watch_cv_.notify_all();
+    watcher_.join();
+    watch_stop_ = false;
+}
+
+void TextureReplacer::WatchFolders(std::chrono::milliseconds period) {
+    StopWatching();
+    if (period.count() <= 0) return;
+    std::vector<std::filesystem::path> dirs;
+    for (const auto &set : sets_)
+        if (set->from_folder()) dirs.push_back(set->dir());
+    if (dirs.empty()) return;
+    // The state to compare with, from before this returns.
+    const std::uint64_t first = FolderSignature(dirs);
+    watcher_ = std::thread([this, dirs = std::move(dirs), period, first] {
+        std::uint64_t seen = first;
+        std::unique_lock<std::mutex> lock(watch_mutex_);
+        while (!watch_cv_.wait_for(lock, period, [this] { return watch_stop_; })) {
+            lock.unlock();
+            const std::uint64_t now = FolderSignature(dirs);
+            lock.lock();
+            if (now != seen) {
+                seen = now;
+                RequestReload();
+            }
+        }
+    });
 }
 
 bool TextureReplacer::SetDumpDir(const std::filesystem::path &dir, std::string *error) {
@@ -299,6 +791,12 @@ void TextureReplacer::Log(const std::string &line) const {
 
 void TextureReplacer::BeginRun() {
     memo_.clear(); // RAM only: VRAM hashes live until the next flip (F25c)
+    // F26a: a reload asked for since the last run.
+    if (const std::uint32_t req = reload_requests_.load(std::memory_order_relaxed);
+        req != reloads_applied_) {
+        reloads_applied_ = req;
+        ReloadSets();
+    }
     const int want = requested_.load(std::memory_order_relaxed);
     const int next = want >= 0 && want < set_count() ? want : -1;
     if (next != active_) {
@@ -585,6 +1083,7 @@ std::uint32_t TextureReplacer::HashTexels(const ge::MemoryView &mem, const ge::S
 const ge::ReplacedTexture *TextureReplacer::Find(const ge::GeState &gs, const ge::MemoryView &mem,
                                                  const ge::SamplerState &st,
                                                  const ge::ClutLoadInfo &clut) {
+    last_filter_ = ge::TextureFilter::kAuto;
     const bool dumping = !dump_dir_.empty();
     if (active_ < 0 && !dumping) return nullptr;
     const int w = st.sizes[0].w;
@@ -609,13 +1108,30 @@ const ge::ReplacedTexture *TextureReplacer::Find(const ge::GeState &gs, const ge
     if (active_ >= 0) {
         ReplacementSet &set = *sets_[static_cast<std::size_t>(active_)];
         const ReplacementKey key{cachekey, HashTexels(mem, st, set.ini().hash)};
-        if (const std::string *file = set.Lookup(key)) {
+        bool ignored = false;
+        const std::string *file = set.Lookup(key, &ignored);
+        // F26a: [filtering], for a texture replaced or not (not for one
+        // listed as "do not replace", as FindReplacement returns first).
+        if (!ignored && set.has_filtering() && set.FindFiltering(key, &last_filter_) &&
+            last_filter_ != ge::TextureFilter::kAuto)
+            ++stats_.filtered;
+        if (file != nullptr) {
             std::string error;
-            if (const ge::ReplacedTexture *tex = set.Get(*file, w, h, &error)) {
+            bool pending = false;
+            const ge::ReplacedTexture *tex = set.Get(*file, w, h, &error, &pending);
+            for (const std::string &note : set.TakeNotes()) Log("textures: " + note);
+            if (tex != nullptr) {
                 ++stats_.replaced;
                 if (vram) ++stats_.vram_replaced;
+                if (!tex->mips.empty()) ++stats_.mipmapped;
                 stats_.distinct.insert(tex->id);
                 return tex;
+            }
+            if (pending) {
+                // F26a: the game's texture until the PNG is decoded (and not
+                // dumped: it has a replacement).
+                ++stats_.pending;
+                return nullptr;
             }
             if (!error.empty()) {
                 ++stats_.load_errors;

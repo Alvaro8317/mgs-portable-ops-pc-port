@@ -47,7 +47,8 @@ struct SamplerState {
     int texbufw[8] = {};
     // F24c: level 0 replaced by a TextureProvider (Ge::SetTextureProvider):
     // Fetch reads its `native` texels instead of memory. Other levels keep
-    // the game's texels.
+    // the game's texels (F26a: unless the replacement has levels below the
+    // native size, native_mips; Ge then sets sizes[1...] to theirs).
     const ReplacedTexture *replaced = nullptr;
 };
 

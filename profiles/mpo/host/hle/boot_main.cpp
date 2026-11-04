@@ -21,6 +21,8 @@
 //            [--watch-call <address>]...
 //            [--prompts auto|psp|xbox|playstation|nintendo|keyboard]
 //            [--textures <dir>|none] [--dump-textures <dir>]
+//            [--textures-load async|sync] [--textures-preload <MiB>]
+//            [--textures-watch <seconds>] [--textures-mipmaps 0|1]
 //            [--aspect native|<width>:<height>]
 //            [--prompt-icons auto|off|<dir>]
 //
@@ -179,6 +181,22 @@
 //                             packs from. The dump is the game's art: it never
 //                             goes into the repository (CLAUDE.md §1).
 // The report adds the lookups, the replacements and the dumped PNGs.
+// F26a: HD packs.
+//   --textures-load async     (the default) the PNGs are decoded on threads of
+//                             their own, and a texture is drawn as the game's
+//                             until its replacement is ready (PPSSPP does the
+//                             same). sync decodes each one at its first draw,
+//                             on the GE's thread. --replay-input,
+//                             --record-input and --capture always load sync,
+//                             so that no frame depends on time.
+//   --textures-preload <MiB>  decodes the pack ahead in the background, up to
+//                             that much memory (256 by default; 0: off).
+//   --textures-watch <s>      reloads the pack when a file in its folder
+//                             changes, checking every <s> seconds (0, the
+//                             default: off). F5 in the window reloads it too
+//                             (the key never reaches the game, like F11).
+//   --textures-mipmaps 0      no generated mip levels (an A/B toggle; the
+//                             pack's own levels are still used).
 //
 // F25b: widescreen, phase W1 (host/widescreen, docs/analysis/widescreen.md).
 //   --aspect <w>:<h>          (21:9, 64:27, 32:9...; native by default) wider
@@ -429,6 +447,14 @@ void copy_tree(const std::filesystem::path &from, const std::filesystem::path &t
     }
 }
 
+// F26a: a whole decimal number (nothing after it).
+bool parse_u64(const std::string &text, std::uint64_t *out) {
+    if (text.empty() || text[0] < '0' || text[0] > '9') return false;
+    char *end = nullptr;
+    *out = std::strtoull(text.c_str(), &end, 10);
+    return end != nullptr && *end == '\0';
+}
+
 // "<buttons>@<ms>[+<ms>]", buttons joined with '|' or ','.
 bool parse_press(const std::string &text, Press *out) {
     const std::size_t at = text.find('@');
@@ -601,6 +627,10 @@ int main(int argc, char **argv) {
     std::string check_overlay;
     std::string textures_dir; // empty: the default folder; "none": off
     std::string dump_textures_dir;
+    std::string textures_load = "async"; // F26a: async or sync
+    std::uint64_t textures_preload_mib = 256;
+    std::uint64_t textures_watch_s = 0;
+    bool textures_mipmaps = true;
     std::string aspect_option;                // empty: native (or the recording's)
     std::string prompt_icons_option = "auto"; // auto, off or a folder
     // Every option takes a value: a word left over is a mistake, not ignored
@@ -694,6 +724,18 @@ int main(int argc, char **argv) {
             textures_dir = value;
         } else if (option == "--dump-textures") {
             dump_textures_dir = value;
+        } else if (option == "--textures-load") {
+            if (value != "async" && value != "sync")
+                return fail("--textures-load: async or sync, not " + value);
+            textures_load = value;
+        } else if (option == "--textures-preload") {
+            if (!parse_u64(value, &textures_preload_mib) || textures_preload_mib > (1u << 20))
+                return fail("--textures-preload: a number of MiB, not " + value);
+        } else if (option == "--textures-watch") {
+            if (!parse_u64(value, &textures_watch_s) || textures_watch_s > 3600)
+                return fail("--textures-watch: seconds (0 to 3600), not " + value);
+        } else if (option == "--textures-mipmaps") {
+            textures_mipmaps = value != "0";
         } else if (option == "--aspect") {
             std::string why;
             if (!mpo::widescreen::ParseAspect(value, &why)) return fail(why);
@@ -968,7 +1010,24 @@ int main(int argc, char **argv) {
                             given ? "" : " (the default folder; --textures none turns it off)");
                 if (!mpo::texreplace::HavePng())
                     return fail("--textures: this build has no PNG support (it needs SDL3)");
+                // F26a: no frame may depend on time when it is compared or
+                // recorded.
+                const bool sync = textures_load == "sync" || !replay_path.empty() ||
+                                  !record_path.empty() || !capture_dir.empty();
+                texture_replacer.SetGenerateMipmaps(textures_mipmaps);
+                texture_replacer.SetAsync(!sync);
+                texture_replacer.StartPreload(static_cast<std::size_t>(textures_preload_mib) << 20);
                 texture_replacer.SetActiveSet(texture_replacer.AddSet(std::move(set)));
+                if (textures_watch_s != 0)
+                    texture_replacer.WatchFolders(std::chrono::seconds(textures_watch_s));
+                std::printf("textures: loading %s%s, preload %llu MiB, mipmaps %s%s; F5 reloads\n",
+                            sync ? "sync" : "async",
+                            sync && textures_load != "sync"
+                                ? " (--replay-input, --record-input or --capture)"
+                                : "",
+                            static_cast<unsigned long long>(textures_preload_mib),
+                            textures_mipmaps ? "generated" : "off",
+                            textures_watch_s != 0 ? ", watching the folder" : "");
                 texture_provider = true;
             }
             if (!dump_textures_dir.empty()) {
@@ -1052,6 +1111,7 @@ int main(int argc, char **argv) {
 #if MPO_BOOT_SDL
         std::unique_ptr<mpo::frontend::SdlPresenter> presenter;
         std::unique_ptr<mpo::frontend::SdlInput> input;
+        int texture_reloads_seen = 0; // F26a: F5 presses handled
 #if MPO_BOOT_VULKAN
         // Declared before the context: the surface goes before the window.
         std::unique_ptr<mpo::vk::SdlVulkanWindow> vk_window;
@@ -1439,6 +1499,14 @@ int main(int argc, char **argv) {
                         swapchain->Resize(event.window.data1, event.window.data2);
                 }
                 input->EndPoll();
+                // F26a: F5 reloads the texture pack (at the next GE run).
+                if (input->texture_reloads() != texture_reloads_seen) {
+                    texture_reloads_seen = input->texture_reloads();
+                    if (texture_provider) {
+                        texture_replacer.RequestReload();
+                        std::printf("textures: F5: reloading the pack\n");
+                    }
+                }
                 const int sw = mpo::frontend::kPspScreenWidth;
                 const int sh = mpo::frontend::kPspScreenHeight;
                 const mpo::vk::PresentRect where = vk_window->Destination(sw, sh, flip_aspect);
@@ -1510,6 +1578,14 @@ int main(int argc, char **argv) {
                         system.kernel().request_stop();
                 }
                 input->EndPoll();
+                // F26a: F5 reloads the texture pack (at the next GE run).
+                if (input->texture_reloads() != texture_reloads_seen) {
+                    texture_reloads_seen = input->texture_reloads();
+                    if (texture_provider) {
+                        texture_replacer.RequestReload();
+                        std::printf("textures: F5: reloading the pack\n");
+                    }
+                }
                 presenter->SetDisplayAspect(flip_aspect);
                 (void)presenter->PresentRgba(shown.data(), mpo::frontend::kPspScreenWidth,
                                              mpo::frontend::kPspScreenHeight);
@@ -1655,6 +1731,21 @@ int main(int argc, char **argv) {
                         static_cast<unsigned long long>(ts.dumped),
                         static_cast<unsigned long long>(ts.dump_errors),
                         static_cast<unsigned long long>(ts.load_errors));
+            // F26a: mip levels, the background load, [filtering], reloads.
+            std::printf("textures: %llu draws with mip levels, %llu drawn as the game's while "
+                        "loading, %llu with [filtering], %llu reloads (%llu failed)\n",
+                        static_cast<unsigned long long>(ts.mipmapped),
+                        static_cast<unsigned long long>(ts.pending),
+                        static_cast<unsigned long long>(ts.filtered),
+                        static_cast<unsigned long long>(ts.reloads),
+                        static_cast<unsigned long long>(ts.reload_errors));
+            for (int i = 0; i < texture_replacer.set_count(); ++i) {
+                const auto ps = texture_replacer.set(i).preload_stats();
+                if (ps.files == 0) continue;
+                std::printf("textures: preload of %s: %zu of %zu PNGs decoded ahead, %zu used%s\n",
+                            texture_replacer.set(i).dir().string().c_str(), ps.decoded, ps.files,
+                            ps.used, ps.full ? " (stopped at --textures-preload)" : "");
+            }
             // F25c: what is treated as a framebuffer at the end (never replaced).
             for (const std::string &line : texture_replacer.DescribeTargets())
                 std::printf("textures: framebuffer %s\n", line.c_str());

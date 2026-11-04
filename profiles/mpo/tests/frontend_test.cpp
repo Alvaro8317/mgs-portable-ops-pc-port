@@ -1379,6 +1379,26 @@ void TestWindowShortcuts() {
     (void)FeedKey(&filter, &bound, scancode::kF11, false, false);
     ExpectEq(bound.Sample().buttons, 0u, "bound F11 release");
 
+    // F26a: F5 reloads the texture pack, and never reaches the game either.
+    ExpectEq(static_cast<int>(WindowShortcutFor(scancode::kF5, false)),
+             static_cast<int>(WS::kReloadTextures), "F5");
+    ExpectEq(static_cast<int>(WindowShortcutFor(scancode::kF5, true)),
+             static_cast<int>(WS::kReloadTextures), "Alt+F5");
+    for (const KeyBinding &binding : InputMapping::Default().keys)
+        Expect(binding.key != scancode::kF5, "default map leaves F5 free");
+    ExpectEq(static_cast<int>(FeedKey(&filter, &t, scancode::kF5, true, false)),
+             static_cast<int>(WS::kReloadTextures), "F5 press reloads");
+    ExpectEq(static_cast<int>(FeedKey(&filter, &t, scancode::kF5, true, false, true)),
+             static_cast<int>(WS::kNone), "F5 repeat does not reload again");
+    Expect(filter.OnKey(scancode::kF5, false, false, false, &ignored), "F5 release is taken");
+    InputMapping f5 = InputMapping::Default();
+    f5.keys.push_back({scancode::kF5, Target::Button(ctrl::kTriangle)});
+    InputTranslator bound_f5(f5);
+    ExpectEq(static_cast<int>(FeedKey(&filter, &bound_f5, scancode::kF5, true, false)),
+             static_cast<int>(WS::kReloadTextures), "bound F5 still reloads");
+    ExpectEq(bound_f5.Sample().buttons, 0u, "bound F5 does not press triangle");
+    (void)FeedKey(&filter, &bound_f5, scancode::kF5, false, false);
+
     // Focus lost while F11 is down: its release never arrives, so the filter
     // forgets it and the next F11 toggles again.
     (void)FeedKey(&filter, &t, scancode::kF11, true, false);

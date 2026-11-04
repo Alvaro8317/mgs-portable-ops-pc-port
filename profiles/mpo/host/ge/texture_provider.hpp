@@ -11,6 +11,15 @@
 // instead of the texels in memory; the Vulkan renderer uploads `image` at its
 // own size and samples it with the same UV mapping. With a PNG of the
 // texture's size, both are the same pixels.
+//
+// F26a: a replacement may have mip levels (the pack's own, or generated from
+// a larger image down to the native size), and a textures.ini may force a
+// texture's filtering ([filtering]). Both renderers choose the level with
+// softgpu's rule (CalculateSamplingParams), in the replacement's own texels:
+// the GPU over the whole chain (`mips`), softgpu over the levels at or below
+// the native size (`native` and `native_mips`). So the levels finer than
+// native are only seen on the GPU, and a native-size PNG without levels of
+// its own draws exactly as before.
 
 #pragma once
 
@@ -24,6 +33,10 @@ namespace mpo::ge {
 
 struct SamplerState;
 
+// F26a: [filtering] of textures.ini (PPSSPP's TextureFiltering for a
+// replacement): kAuto keeps the game's filters.
+enum class TextureFilter : std::uint8_t { kAuto, kNearest, kLinear };
+
 struct ReplacedTexture {
     // At the GE texture's size (level 0: w x h), RGBA8888 (0xAABBGGRR).
     int width = 0;
@@ -35,6 +48,24 @@ struct ReplacedTexture {
     std::vector<std::uint8_t> image;
     // Unique for the process (a GPU cache keys its images with it).
     std::uint64_t id = 0;
+
+    // F26a: mip levels 1, 2... of `image` (each half the size of the one
+    // before, at least 1), RGBA8 bytes. Empty: one level.
+    struct Level {
+        int width = 0;
+        int height = 0;
+        std::vector<std::uint8_t> rgba;
+    };
+    std::vector<Level> mips;
+    // The levels of the chain coarser than the GE texture's size, at w >> i
+    // x h >> i (i = 1, 2...), RGBA8888 as `native`: what softgpu samples
+    // after `native`. Empty: softgpu has level 0 only.
+    struct NativeLevel {
+        int width = 0;
+        int height = 0;
+        std::vector<std::uint32_t> texels;
+    };
+    std::vector<NativeLevel> native_mips;
 };
 
 // What PPSSPP's texture cache knows about the CLUT besides its bytes, which
@@ -98,6 +129,10 @@ public:
     // until the next BeginRun.
     virtual const ReplacedTexture *Find(const GeState &gs, const MemoryView &mem,
                                         const SamplerState &st, const ClutLoadInfo &clut) = 0;
+    // F26a: the filtering [filtering] forces on the texture of the last
+    // Find (replaced or not), as PPSSPP's ReplacedTexture::ForceFiltering.
+    // Ge applies it to both renderers' state.
+    [[nodiscard]] virtual TextureFilter Filtering() const { return TextureFilter::kAuto; }
 };
 
 } // namespace mpo::ge

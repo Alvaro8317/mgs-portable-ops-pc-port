@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -341,6 +342,38 @@ inline void DrawTarget(ListBuilder &lb) {
                        {0, 8, 8, 16, 0, 0, 0, 0, 0xFFFF0000},
                        {8, 8, 16, 16, 0, 0, 0, 0, 0xFFFFFFFF}});
     lb.Target(kFb, 512, 480, 272);
+}
+
+// F26a: a w x h image of one colour (RGBA8).
+inline std::vector<std::uint8_t> SolidImage(int w, int h, std::uint32_t abgr) {
+    std::vector<std::uint8_t> rgba(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4);
+    for (std::size_t i = 0; i < rgba.size(); i += 4) std::memcpy(&rgba[i], &abgr, 4);
+    return rgba;
+}
+
+// F26a: a w x h opaque pattern with detail in every pixel (RGBA8), different
+// for each `seed`.
+inline std::vector<std::uint8_t> Pattern(int w, int h, int seed) {
+    std::vector<std::uint8_t> rgba(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            std::uint8_t *p = &rgba[(static_cast<std::size_t>(y) * static_cast<std::size_t>(w) +
+                                     static_cast<std::size_t>(x)) *
+                                    4];
+            p[0] = static_cast<std::uint8_t>(x * 255 / std::max(w - 1, 1) + seed * 40);
+            p[1] = static_cast<std::uint8_t>(y * 255 / std::max(h - 1, 1) + seed * 70);
+            p[2] = static_cast<std::uint8_t>(((x ^ y) & 1) != 0 ? 0xE0 - seed * 30 : 0x20 + seed);
+            p[3] = 0xFF;
+        }
+    }
+    return rgba;
+}
+
+// F26a: the 16x16 8888 texture at kRgbaAddr drawn as a `size` x `size`
+// sprite at (x, y) (16: 1:1, 8: minified twice...).
+inline void DrawRgba(ListBuilder &lb, int x, int y, int size, bool linear = false) {
+    lb.Texture(kRgbaAddr, 16, 4, 4, 3, false, 0x103, linear);
+    lb.Sprites(true, {{x, y, x + size, y + size, 0, 0, 16, 16, 0xFFFFFFFF}});
 }
 
 // A fresh, empty folder under the system's temporary folder.

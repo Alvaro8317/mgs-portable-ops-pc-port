@@ -249,6 +249,9 @@ abajo en la cruceta. **F1** (o cambiar a otra ventana) lo suelta.
 ve esas teclas: Alt+Enter no aprieta Start, aunque Enter sea Start. Para empezar en pantalla
 completa, usa **Pantalla completa** en [Ajustes](#ajustes).
 
+**F5** vuelve a cargar tu [pack de texturas](#packs-de-texturas) mientras juegas. El juego tampoco
+ve esa tecla.
+
 Cuando el juego te pide escribir algo (un nombre, una contraseña), escríbelo con el teclado.
 Retroceso borra, Enter termina y Esc cancela.
 
@@ -353,6 +356,22 @@ más grande que el original también sirve: el renderer Vulkan lo usa a su tama�
 reemplazan las texturas de la memoria de video (la mayoría de las que usa el juego), pero nunca lo
 que el juego dibuja él mismo (la pantalla, los render targets) ni los frames de los videos (título,
 cómics y créditos). Si esa carpeta no tiene un `textures.ini`, el juego se ve exactamente como antes.
+
+Para los packs HD:
+
+- **Mipmaps**: un PNG más grande que el original recibe versiones más chicas de sí mismo
+  (mipmaps), así que no parpadea cuando lo ves de lejos. Un pack puede traer las suyas, como las lee
+  PPSSPP: `a.png|a_1.png|a_2.png` en `[hashes]`, o archivos con el nombre `<clave>_1.png`,
+  `<clave>_2.png`… junto a `<clave>.png` (cada una de la mitad del tamaño de la anterior).
+- **Sin tirones**: los PNG se cargan en segundo plano mientras juegas. Hasta que uno está listo se
+  dibuja la textura del juego (uno o dos frames), como en PPSSPP. Decodificar el pack por adelantado
+  usa hasta 256 MiB de memoria; cámbialo con `setup.py play -- --textures-preload <MiB>` (`0` lo
+  apaga), o espera a cada PNG con `--textures-load sync`.
+- **`[filtering]`**: `<clave> = nearest`, `linear` o `auto` fuerza el filtro de una textura, como
+  en PPSSPP (una clave de 16 ceros vale para todas).
+- **Ver tus cambios**: aprieta **F5** en la ventana del juego para volver a leer la carpeta del
+  pack, o arranca con `setup.py play -- --textures-watch 2` para que se recargue sola cuando cambia
+  un archivo (lo revisa cada 2 segundos).
 
 Para hacer un pack, arranca el juego con `setup.py play -- --dump-textures <carpeta>`: escribe en
 `<carpeta>` cada textura que dibuja, con su clave como nombre, y un `textures.ini`. Edita los PNG

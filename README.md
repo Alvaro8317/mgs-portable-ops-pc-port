@@ -238,6 +238,9 @@ another window) releases it.
 see those keys: Alt+Enter doesn't press Start, even though Enter is Start. To start in fullscreen,
 use **Fullscreen** in [Settings](#settings).
 
+**F5** reloads your [texture pack](#texture-packs) while you play. The game doesn't see that key
+either.
+
 When the game asks you to type something (a name, a password), type it on the keyboard. Backspace
 deletes, Enter finishes and Esc cancels.
 
@@ -341,6 +344,22 @@ than the original works too: the Vulkan renderer uses it at its own size. Textur
 (most of the ones the game uses) are replaced too, but never what the game draws itself (the screen, render
 targets) nor the frames of the videos (title, comics and credits). Without a `textures.ini` in
 that folder the game looks exactly as before.
+
+For HD packs:
+
+- **Mipmaps**: a PNG larger than the original gets smaller versions of itself (mipmaps), so it
+  doesn't flicker when you see it from far away. A pack can bring its own, the way PPSSPP reads
+  them: `a.png|a_1.png|a_2.png` under `[hashes]`, or files named `<key>_1.png`, `<key>_2.png`…
+  next to `<key>.png` (each one half the size of the one before).
+- **No stutter**: the PNGs load in the background while you play. Until one is ready, the game's
+  own texture is drawn (for a frame or two), like in PPSSPP. Decoding the pack ahead takes up to
+  256 MiB of memory; change it with `setup.py play -- --textures-preload <MiB>` (`0` turns it
+  off), or wait for each PNG with `--textures-load sync`.
+- **`[filtering]`**: `<key> = nearest`, `linear` or `auto` forces a texture's filtering, as in
+  PPSSPP (a key of 16 zeros applies to every texture).
+- **Seeing your changes**: press **F5** in the game window to read the pack folder again, or start
+  with `setup.py play -- --textures-watch 2` to reload it on its own when a file changes (checked
+  every 2 seconds).
 
 To make a pack, start the game with `setup.py play -- --dump-textures <folder>`: it writes every
 texture it draws into `<folder>`, named by its key, plus a `textures.ini`. Edit the PNGs you want

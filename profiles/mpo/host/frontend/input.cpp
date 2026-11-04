@@ -300,6 +300,7 @@ SceCtrlData InputTranslator::Sample(std::uint32_t timestamp) const {
 
 WindowShortcut WindowShortcutFor(Scancode key, bool alt_held) {
     if (key == scancode::kF11) return WindowShortcut::kToggleFullscreen;
+    if (key == scancode::kF5) return WindowShortcut::kReloadTextures;
     if (alt_held && (key == scancode::kReturn || key == scancode::kKpEnter))
         return WindowShortcut::kToggleFullscreen;
     return WindowShortcut::kNone;
