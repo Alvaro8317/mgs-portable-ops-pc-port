@@ -178,6 +178,12 @@
 //                             once, as <key>.png (plus a textures.ini), to make
 //                             packs from. The dump is the game's art: it never
 //                             goes into the repository (CLAUDE.md §1).
+//                             F26b: also a dump.csv with, per key, its size,
+//                             format, RAM or VRAM, the first stage it was
+//                             drawn in, the stages, the draws and the frames;
+//                             another session into the same folder adds to
+//                             it (profiles/mpo/tools/texture_pack.py reads
+//                             it).
 // The report adds the lookups, the replacements and the dumped PNGs.
 //
 // F25b: widescreen, phase W1 (host/widescreen, docs/analysis/widescreen.md).
@@ -974,8 +980,20 @@ int main(int argc, char **argv) {
             if (!dump_textures_dir.empty()) {
                 if (!texture_replacer.SetDumpDir(dump_textures_dir, &error))
                     return fail("--dump-textures: " + error);
-                std::printf("textures: dumping the textures in use to %s\n",
-                            dump_textures_dir.c_str());
+                std::printf("textures: dumping the textures in use to %s (%zu keys in its "
+                            "dump.csv)\n",
+                            dump_textures_dir.c_str(), texture_replacer.dump_index().size());
+                // F26b: the stage loaded now, for dump.csv: the last module
+                // loaded from stage/<s>/<s>.prx.
+                texture_replacer.SetStageSource([&system] {
+                    std::string stage;
+                    for (const mpo::hle::Module *module : system.modules().modules()) {
+                        std::string name =
+                            mpo::texreplace::DumpIndex::StageFromModulePath(module->path);
+                        if (!name.empty()) stage = std::move(name);
+                    }
+                    return stage;
+                });
                 texture_provider = true;
             }
             texture_replacer.SetLog([](std::string_view line) {
@@ -1658,6 +1676,15 @@ int main(int argc, char **argv) {
             // F25c: what is treated as a framebuffer at the end (never replaced).
             for (const std::string &line : texture_replacer.DescribeTargets())
                 std::printf("textures: framebuffer %s\n", line.c_str());
+            // F26b: the dump's data file.
+            if (!dump_textures_dir.empty()) {
+                std::string dump_error;
+                if (texture_replacer.FlushDump(&dump_error))
+                    std::printf("textures: %s: %zu keys in dump.csv\n", dump_textures_dir.c_str(),
+                                texture_replacer.dump_index().size());
+                else
+                    std::fprintf(stderr, "mpo_boot: textures: dump: %s\n", dump_error.c_str());
+            }
         }
         {
             const mpo::hle::Fonts &fonts_hle = system.fonts();

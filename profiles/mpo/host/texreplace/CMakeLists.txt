@@ -11,6 +11,7 @@ add_library(mpo_xxhash STATIC ${PROJECT_SOURCE_DIR}/third_party/xxhash/xxhash.c)
 target_include_directories(mpo_xxhash SYSTEM PUBLIC ${PROJECT_SOURCE_DIR}/third_party/xxhash)
 
 add_library(mpo_texreplace STATIC
+    dump_index.cpp
     png_io.cpp
     texture_key.cpp
     texture_replacer.cpp

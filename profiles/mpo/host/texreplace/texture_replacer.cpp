@@ -249,9 +249,34 @@ int TextureReplacer::AddSet(std::unique_ptr<ReplacementSet> set) {
     return static_cast<int>(sets_.size()) - 1;
 }
 
+TextureReplacer::~TextureReplacer() {
+    std::string error;
+    if (!FlushDump(&error)) Log("textures: dump: " + error);
+}
+
+bool TextureReplacer::FlushDump(std::string *error) {
+    if (dump_dir_.empty() || !index_.dirty()) return true;
+    index_saved_flip_ = flips_;
+    return index_.Save(dump_dir_, error);
+}
+
+void TextureReplacer::SetStageSource(std::function<std::string()> source) {
+    stage_source_ = std::move(source);
+    RefreshStage();
+}
+
+void TextureReplacer::RefreshStage() {
+    if (!stage_source_) return;
+    std::string name = stage_source_();
+    if (!name.empty() && !DumpIndex::ValidStageName(name)) name.clear();
+    if (name != stage_) stage_ = std::move(name);
+}
+
 bool TextureReplacer::SetDumpDir(const std::filesystem::path &dir, std::string *error) {
+    if (!FlushDump(error)) return false;
     dump_dir_.clear();
     dumped_.clear();
+    index_ = DumpIndex{};
     if (dir.empty()) return true;
     if (!HavePng()) {
         *error = "--dump-textures: this build has no PNG support (it needs SDL3)";
@@ -289,7 +314,14 @@ bool TextureReplacer::SetDumpDir(const std::filesystem::path &dir, std::string *
         if (IsHashFileName(stem) && ParseHashName(stem, &key, &level) && level == 0)
             dumped_.insert(key);
     }
+    // F26b: the rows of earlier sessions, to add to.
+    if (!index_.Load(dir, error)) {
+        index_ = DumpIndex{};
+        return false;
+    }
     dump_dir_ = dir;
+    index_saved_flip_ = flips_;
+    RefreshStage();
     return true;
 }
 
@@ -299,6 +331,8 @@ void TextureReplacer::Log(const std::string &line) const {
 
 void TextureReplacer::BeginRun() {
     memo_.clear(); // RAM only: VRAM hashes live until the next flip (F25c)
+    // F26b: the stage loaded now, for dump.csv.
+    if (!dump_dir_.empty()) RefreshStage();
     const int want = requested_.load(std::memory_order_relaxed);
     const int next = want >= 0 && want < set_count() ? want : -1;
     if (next != active_) {
@@ -547,6 +581,11 @@ void TextureReplacer::Flip(const ge::MemoryRect *shown) {
     }
     std::erase_if(videos_, [&](const Video &v) { return v.flip + kVideoAge < flips_; });
     if (shown != nullptr) AddTargetRect(*shown);
+    // F26b: dump.csv, every kDumpSaveFlips flips while it changes.
+    if (!dump_dir_.empty() && index_.dirty() && flips_ - index_saved_flip_ >= kDumpSaveFlips) {
+        std::string error;
+        if (!FlushDump(&error)) Log("textures: dump: " + error);
+    }
 }
 
 std::uint32_t TextureReplacer::HashTexels(const ge::MemoryView &mem, const ge::SamplerState &st,
@@ -626,9 +665,16 @@ const ge::ReplacedTexture *TextureReplacer::Find(const ge::GeState &gs, const ge
     if (dumping) {
         ReplacementKey key{cachekey, HashTexels(mem, st, dump_ini_.hash)};
         if (dump_ini_.ignore_address) key = WithoutAddress(key);
-        if (dumped_.insert(key).second) Dump(key, mem, st);
+        NoteDump(key, mem, st, vram);
     }
     return nullptr;
+}
+
+void TextureReplacer::NoteDump(const ReplacementKey &key, const ge::MemoryView &mem,
+                               const ge::SamplerState &st, bool vram) {
+    index_.Note(key, st.sizes[0].w, st.sizes[0].h, st.texfmt,
+                vram ? DumpIndex::kVram : DumpIndex::kRam, stage_, flips_);
+    if (dumped_.insert(key).second) Dump(key, mem, st);
 }
 
 void TextureReplacer::Dump(const ReplacementKey &key, const ge::MemoryView &mem,

@@ -359,6 +359,37 @@ Para hacer un pack, arranca el juego con `setup.py play -- --dump-textures <carp
 que quieras cambiar y cópialos, con el `textures.ini`, a la carpeta del pack. Las texturas volcadas
 son el arte del juego: guárdalas para ti y comparte solo los PNG que hiciste tú.
 
+### Hacer un pack HD
+
+El volcado también escribe un `dump.csv`: por cada textura, su tamaño, el formato, la primera etapa
+en que apareció y cuántas veces se dibujó. Si vuelcas en la misma carpeta en varias partidas, los
+números se suman, así que juega las partes que quieras que cubra el pack. Después usa
+`texture_pack.py`, que viene con el port (`source\profiles\mpo\tools\` en el ZIP de Windows). En
+Windows córrelo con el Python del port, `python\python.exe -I source\profiles\mpo\tools\texture_pack.py ...`;
+en Linux, `python3 -I profiles/mpo/tools/texture_pack.py ...`:
+
+1. **Saber por dónde empezar**: `texture_pack.py report <volcado>` muestra primero las texturas que
+   más se dibujan (las paredes y los suelos que ves todo el rato). `--sort stage` las agrupa por la
+   etapa en que aparecieron, `--sort size` pone primero las más grandes, `--stage st02` muestra
+   solo una etapa y `--limit 50` las 50 primeras.
+2. **Escalarlas**: instala tú un escalador, por ejemplo
+   [realesrgan-ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN/releases) (descomprímelo; trae
+   sus modelos), y corre
+   `texture_pack.py upscale <volcado> <pack> --scale 4 --realesrgan <ruta de realesrgan-ncnn-vulkan>`.
+   `--top 200`, `--stage st04vo` o `--min-uses 1000` escalan solo una parte del volcado; `--model`
+   elige otro modelo de Real-ESRGAN (`realesr-animevideov3` también hace `--scale 2` y `3`).
+   También sirve cualquier otra herramienta: pon su comando después de `--`, con `{input}`,
+   `{output}` y `{scale}` donde los pida, por ejemplo `texture_pack.py upscale <volcado> <pack>
+   --scale 2 -- mi_escalador -i {input} -o {output} -s {scale}`. Los PNG conservan su nombre y su
+   transparencia, y el pack recibe el `textures.ini` del volcado. Los PNG que ya están en el pack se
+   conservan (`--overwrite` los rehace), así que puedes parar y seguir otro día.
+3. **Comprobar el pack**: `texture_pack.py check <pack> <volcado>` avisa si un PNG no es una
+   textura del volcado, si su tamaño no es un múltiplo entero del original (2×, 3×, 4×…, el mismo
+   en los dos sentidos, como mucho 4096), o si un nombre o el `textures.ini` están mal.
+4. Copia el pack a la carpeta `textures` (o arranca el juego con `--textures <pack>`).
+
+Las texturas escaladas siguen saliendo del arte del juego: tampoco las compartas.
+
 ## Si algo falla
 
 | Lo que ves | Qué hacer |
