@@ -69,6 +69,8 @@ The settings (F24a) are <config>/settings.toml, next to input.toml:
   render_scale = 1      # 1 to 8: Vulkan draws at 480x272 times this
   window_scale = 2      # 1 to 8: the window opens at 480x272 times this
   fullscreen = false    # borderless, at the desktop's resolution
+  aspect = "native"     # or "<width>:<height>" wider than 16:9 ("21:9", "32:9"):
+                        # the 3D shows more at the sides, the HUD is stretched
 
 `play` turns them into mpo_boot options. A missing file means the defaults
 above; a damaged one, or a value that is not valid, too, with a notice: it
@@ -123,8 +125,12 @@ DEFAULT_SETTINGS = {
     'render_scale': 1,
     'window_scale': 2,
     'fullscreen': False,
+    'aspect': 'native',
 }
 _RENDERERS = ('vulkan', 'soft')
+# The aspects mpo_boot --aspect takes (host/widescreen, F25b): native, or
+# <width>:<height> from the PSP's 480x272 up to 4:1. Up to 16:9 it is native.
+_ASPECT_RE = re.compile(r'([1-9][0-9]{0,4}):([1-9][0-9]{0,4})')
 _MAX_RENDER_SCALE = 8
 _MAX_WINDOW_SCALE = 8
 
@@ -227,7 +233,22 @@ def default_config_dir(environ=None, system=None):
   return pathlib.Path(base) / 'mpo-pc-port'
 
 
+def valid_aspect(value):
+  """True for "native" or a "<w>:<h>" mpo_boot --aspect takes."""
+  if not isinstance(value, str):
+    return False
+  if value == 'native':
+    return True
+  match = _ASPECT_RE.fullmatch(value)
+  if not match:
+    return False
+  width, height = int(match.group(1)), int(match.group(2))
+  return width * 272 >= height * 480 and width <= 4 * height
+
+
 def _valid_setting(key, value):
+  if key == 'aspect':
+    return valid_aspect(value)
   if key == 'renderer':
     return isinstance(value, str) and value in _RENDERERS
   if key == 'fullscreen':
@@ -242,6 +263,7 @@ _SETTING_RANGES = {
     'render_scale': f'1 to {_MAX_RENDER_SCALE}',
     'window_scale': f'1 to {_MAX_WINDOW_SCALE}',
     'fullscreen': 'true or false',
+    'aspect': '"native" or "<width>:<height>" from 16:9 to 4:1',
 }
 
 
@@ -301,6 +323,9 @@ def settings_options(settings, extra=(), environ=None):
   if ('--render-scale' not in given and renderer == 'vulkan' and
       not environ.get('MPO_RENDER_SCALE')):
     options += ['--render-scale', str(settings['render_scale'])]
+  # Only when it is not the default, so the default command line stays as it was.
+  if '--aspect' not in given and settings['aspect'] != 'native':
+    options += ['--aspect', settings['aspect']]
   return options
 
 

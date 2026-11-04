@@ -313,3 +313,28 @@ Para cerrar los [?] que quedan:
 - las marcas 2D: seguir las 6 llamadas a `0x0881877C` en una misión con alertas, y buscar en las
   etapas otros caminos que proyecten a pantalla;
 - la `.la2`: decodificar el formato.
+
+## 8. W1 hecha (F25b, ola 7)
+
+La fase W1 de §7 está hecha en `mpo_boot` y el launcher (detalle y evidencia en
+`docs/sessions/F25b.md`):
+
+- `mpo_boot --aspect native|<ancho>:<alto>` (también `2560x1080`, `2560/1080` o un decimal como
+  `2.37`). Hasta 16:9 es `native` y no cambia nada; más estrecho que 480 × 272 o más ancho que
+  4:1 se rechaza.
+- La dirección (`0x089E9728`), la base de la imagen, el valor original (1,0) y el SHA-256 del
+  `mgp_main` descifrado van en `profiles/mpo/config/widescreen.toml`, que se embebe en el binario
+  al compilar (`host/widescreen`). El parche se hace sobre la copia en memoria del ELF, antes de
+  arrancarlo, y solo si el SHA-256 y el valor original coinciden; si no, `mpo_boot` falla con un
+  mensaje. Es lo mismo que el `--elf` parcheado del spike (§1), sin escribir nada en disco.
+- Se escribe el valor de `widescreen.py value` (los dos calculan el cociente exacto en `double` y
+  lo redondean a `float`; los tests comparan los bits). Se mantiene el efecto secundario de §2.2
+  (el rango de profundidad), como el cheat: la versión limpia (a') queda para si da problemas.
+- El presentador estira la imagen al aspecto (`FitRect` con `display_aspect`, softgpu y Vulkan),
+  y la ventana se abre con ese aspecto. Los frames de video (los flips con un frame de `sceMpeg`
+  decodificado en los últimos 8 flips) se presentan a 480 × 272 con barras a los lados.
+- Las grabaciones guardan un registro `aspect <ancho>:<alto> <bits>` solo cuando hubo parche; la
+  repetición aplica el grabado, y avisa si se le pide otro (§5.2). Los hashes de los frames siguen
+  siendo los de la VRAM, sin cambios.
+- Pendiente del usuario: el criterio en el juego (`tramo3` con 21:9, el mismo save y las capturas
+  de la ventana).

@@ -35,8 +35,10 @@ public:
 
     [[nodiscard]] SDL_Window *window() const { return window_; }
     void DrawableSize(int *width, int *height) const;
-    // Where a 480x272 image goes in the window (FitRect).
-    [[nodiscard]] PresentRect Destination(int src_w, int src_h) const;
+    // Where a 480x272 image goes in the window (FitRect). F25b: with
+    // `display_aspect` > 0, stretched to that aspect (--aspect); 0 keeps the
+    // image's own, as a video frame with --aspect.
+    [[nodiscard]] PresentRect Destination(int src_w, int src_h, double display_aspect = 0.0) const;
     [[nodiscard]] static std::string video_driver();
 
 private:

@@ -1222,6 +1222,50 @@ void TestPromptRecording() {
     }
     std::filesystem::remove_all(dir, ec);
 }
+
+// F25b: the `aspect` record (written only when the run patched the module).
+void TestAspectRecording() {
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "mpo_frontend_test_aspect";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path wide = dir / "wide.input";
+    const std::filesystem::path native = dir / "native.input";
+    for (const bool patched : {true, false}) {
+        InputRecorder recorder;
+        Expect(recorder.Open(patched ? wide : native, nullptr), "recorder opens");
+        recorder.Header(1793059200, 0, 0, {});
+        if (patched) recorder.Aspect("64:27", 0x3F3E9697u);
+        recorder.Sample(0, SceCtrlData{});
+        recorder.End(1, 1);
+    }
+    const std::string text = ReadFile(wide);
+    Expect(text.find("\naspect 64:27 3f3e9697\n") != std::string::npos, "aspect record:\n" + text);
+    Expect(ReadFile(native).find("aspect") == std::string::npos, "native: no aspect record");
+    InputRecording rec;
+    std::string error;
+    Expect(InputRecording::Load(wide, &rec, &error), "load: " + error);
+    Expect(rec.has_aspect && rec.aspect == "64:27" && rec.aspect_x_scale == 0x3F3E9697u,
+           "aspect parsed");
+    InputRecording old;
+    Expect(InputRecording::Load(native, &old, &error), "load native: " + error);
+    Expect(!old.has_aspect && old.aspect.empty(), "native: no aspect");
+    const char *bad[] = {
+        "mpo-input 1\naspect\n",
+        "mpo-input 1\naspect 64:27\n",
+        "mpo-input 1\naspect 64x27 3f3e9697\n",
+        "mpo-input 1\naspect 64:27 3f3e96\n",
+        "mpo-input 1\naspect 64:27 zzzzzzzz\n",
+    };
+    for (const char *b : bad) {
+        InputRecording r;
+        error.clear();
+        Expect(!InputRecording::Parse(b, &r, &error) && error.find("line 2") != std::string::npos,
+               std::string("bad aspect record rejected: ") + b);
+    }
+    std::filesystem::remove_all(dir, ec);
+}
 } // namespace
 
 int main() {
@@ -1239,6 +1283,7 @@ int main() {
     TestFaceLabels();
     TestPromptSets();
     TestPromptRecording();
+    TestAspectRecording();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);
         return 1;

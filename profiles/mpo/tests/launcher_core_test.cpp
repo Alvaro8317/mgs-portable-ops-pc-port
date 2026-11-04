@@ -131,7 +131,7 @@ std::string read_text(const fs::path &path) {
 void test_settings_file(const fs::path &tmp, const fs::path &golden) {
     // setup_script_test.py reads the same golden file with setup.py's
     // load_settings: what the launcher writes is what play reads.
-    const GameSettings settings{"vulkan", 4, 3, true};
+    const GameSettings settings{"vulkan", 4, 3, true, "64:27"};
     const std::string text = format_settings(settings);
     check(text == read_text(golden), "format_settings matches settings_golden.txt");
     check(format_settings(GameSettings{}).find("render_scale = 1\nwindow_scale") ==
@@ -141,8 +141,9 @@ void test_settings_file(const fs::path &tmp, const fs::path &golden) {
               format_settings(GameSettings{}).find("fullscreen = false") != std::string::npos,
           "defaults formatted");
     // Out of range values never reach the file.
-    const std::string clamped = format_settings(GameSettings{"opengl", 20, 0, false});
+    const std::string clamped = format_settings(GameSettings{"opengl", 20, 0, false, "16:10"});
     check(clamped.find("renderer = \"vulkan\"") != std::string::npos &&
+              clamped.find("aspect = \"native\"") != std::string::npos &&
               clamped.find("render_scale = 8") != std::string::npos &&
               clamped.find("window_scale = 1") != std::string::npos,
           "clamped");
@@ -159,6 +160,24 @@ void test_settings_file(const fs::path &tmp, const fs::path &golden) {
     error.clear();
     check(!save_settings(tmp / "blocked" / "settings.toml", settings, error) && !error.empty(),
           "save fails with a reason");
+}
+
+// F25b: the aspects (setup.py's valid_aspect) and the Settings' choices.
+void test_aspect() {
+    for (const char *ok :
+         {"native", "16:9", "30:17", "21:9", "64:27", "43:18", "32:9", "4:1", "99999:25000"})
+        check(valid_aspect(ok), (std::string("valid aspect ") + ok).c_str());
+    for (const char *bad : {"", "16:10", "4:3", "41:10", "wide", "21:09x", "0:9", "021:9",
+                            "100000:30000", "21x9", "2.37", "Native", " 21:9", "21:", ":9"})
+        check(!valid_aspect(bad), (std::string("invalid aspect '") + bad + "'").c_str());
+    for (const AspectChoice &choice : kAspectChoices)
+        check(valid_aspect(choice.value) && choice.label[0] != '\0',
+              (std::string("choice ") + choice.value).c_str());
+    check(std::string(kAspectChoices[0].value) == GameSettings{}.aspect, "native first");
+    const auto wide = parse_status(R"({"settings": {"aspect": "32:9"}})");
+    check(wide && wide->settings.aspect == "32:9", "aspect from status");
+    const auto bad = parse_status(R"({"settings": {"aspect": "4:3"}})");
+    check(bad && bad->settings.aspect == "native", "invalid aspect: native");
 }
 
 void test_pixel_size() {
@@ -296,6 +315,7 @@ int main(int argc, char **argv) {
     test_status();
     test_settings_in_status();
     test_settings_file(tmp, fs::path(argv[2]));
+    test_aspect();
     test_pixel_size();
     test_progress();
     test_line_buffer();

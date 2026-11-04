@@ -34,6 +34,10 @@ struct PresenterConfig {
     bool integer_scaling = false;
     bool linear_filter = false;
     bool vsync = false;
+    // F25b (--aspect): the aspect ratio (width / height) the image is shown
+    // at, stretched; 0 keeps the image's own (480x272). The window opens at
+    // 272 * scale high and this wide.
+    double display_aspect = 0.0;
     // SDL render driver ("software", "opengl", "vulkan"...); empty lets SDL pick.
     std::string render_driver;
 };
@@ -73,6 +77,9 @@ public:
     [[nodiscard]] const std::string &last_error() const { return last_error_; }
 
     void SetTitle(const std::string &title);
+    // The aspect of the next presents (PresenterConfig::display_aspect; 0:
+    // the image's own, as for a video frame with --aspect).
+    void SetDisplayAspect(double aspect) { config_.display_aspect = aspect; }
 
 private:
     SdlPresenter() = default;
@@ -93,6 +100,14 @@ private:
 // Destination rectangle for a `src_w` x `src_h` image in a `dst_w` x `dst_h`
 // output: centred, aspect kept, and with `integer_scaling` a whole multiple
 // (at least 1x, cropped if the window is smaller).
-[[nodiscard]] SDL_FRect FitRect(int src_w, int src_h, int dst_w, int dst_h, bool integer_scaling);
+// F25b: with `display_aspect` > 0 the image is shown as if it were
+// src_h * display_aspect wide (stretched in x), the factor of the integer
+// scaling going by the height; 0 is the image's own aspect, as before.
+[[nodiscard]] SDL_FRect FitRect(int src_w, int src_h, int dst_w, int dst_h, bool integer_scaling,
+                                double display_aspect = 0.0);
+
+// F25b: the window's first size for `config`: 480x272 times the scale, or
+// 272 * scale high and display_aspect times that wide.
+void InitialWindowSize(const PresenterConfig &config, int *width, int *height);
 
 } // namespace mpo::frontend

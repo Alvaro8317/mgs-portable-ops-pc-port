@@ -15,7 +15,10 @@
 //   whenever it changed. A recording without `p` records (before F24b)
 //   showed the PSP's own prompts all along, and replays with them;
 // - a hash of the shown framebuffer every N flips, so a replay says where it
-//   stops matching the run it came from.
+//   stops matching the run it came from;
+// - F25b: the --aspect the run patched the module with, when it did (the
+//   projection's x scale changes every 3D frame). A recording without it ran
+//   at the native aspect; the replay applies the recorded one.
 //
 // The file is text, one record per line, written as the run goes (a crash
 // keeps everything up to the last flush):
@@ -23,6 +26,7 @@
 //   mpo-input 1
 //   rtc <base unix seconds> <utc offset seconds>
 //   ms0 <digest of the memory stick at start, 16 hex digits>
+//   aspect <width>:<height> <x scale, float bits as 8 hex digits> (F25b)
 //   osk-script <utf-8 as hex>
 //   s <sample> <buttons, 8 hex digits> <lx> <ly> <rx> <ry>
 //   o <sample> type <utf-8 as hex> | o <sample> backspace|finish|cancel
@@ -81,6 +85,11 @@ struct InputRecording {
     std::uint64_t ms0_digest = 0;
     bool has_ms0_digest = false;
     std::vector<std::string> osk_scripts;
+    // F25b: the aspect ("21:9") and the x scale written for it; none when the
+    // run did not patch the module.
+    std::string aspect;
+    std::uint32_t aspect_x_scale = 0;
+    bool has_aspect = false;
     // Changes in sample order; the first one is at sample 0.
     std::vector<std::pair<std::uint64_t, InputState>> changes;
     std::vector<OskEvent> osk;
@@ -106,6 +115,8 @@ public:
 
     void Header(std::int64_t rtc_base, std::int64_t rtc_utc_offset, std::uint64_t ms0_digest,
                 const std::vector<std::string> &osk_scripts);
+    // F25b: after the header, only when the run patched the module.
+    void Aspect(std::string_view aspect, std::uint32_t x_scale_bits);
     // Every sample, in order: writes it when the state changed.
     void Sample(std::uint64_t sample, const SceCtrlData &data);
     void Osk(const OskEvent &event);

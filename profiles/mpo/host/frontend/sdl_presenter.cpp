@@ -8,12 +8,27 @@
 
 namespace mpo::frontend {
 
-SDL_FRect FitRect(int src_w, int src_h, int dst_w, int dst_h, bool integer_scaling) {
+SDL_FRect FitRect(int src_w, int src_h, int dst_w, int dst_h, bool integer_scaling,
+                  double display_aspect) {
     SDL_FRect r{0.0f, 0.0f, 0.0f, 0.0f};
     if (src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) return r;
     float w = 0.0f;
     float h = 0.0f;
-    if (integer_scaling) {
+    if (display_aspect > 0.0) {
+        // The image as if it were this wide (F25b).
+        const double shown_w = static_cast<double>(src_h) * display_aspect;
+        if (integer_scaling) {
+            const int factor = std::max(
+                1, std::min(static_cast<int>(static_cast<double>(dst_w) / shown_w), dst_h / src_h));
+            h = static_cast<float>(src_h * factor);
+            w = static_cast<float>(std::round(shown_w * factor));
+        } else {
+            const double scale = std::min(static_cast<double>(dst_w) / shown_w,
+                                          static_cast<double>(dst_h) / static_cast<double>(src_h));
+            w = static_cast<float>(std::round(shown_w * scale));
+            h = static_cast<float>(std::round(static_cast<double>(src_h) * scale));
+        }
+    } else if (integer_scaling) {
         const int factor = std::max(1, std::min(dst_w / src_w, dst_h / src_h));
         w = static_cast<float>(src_w * factor);
         h = static_cast<float>(src_h * factor);
@@ -30,6 +45,15 @@ SDL_FRect FitRect(int src_w, int src_h, int dst_w, int dst_h, bool integer_scali
     return r;
 }
 
+void InitialWindowSize(const PresenterConfig &config, int *width, int *height) {
+    const int scale = std::clamp(config.scale, 1, 16);
+    *height = kPspScreenHeight * scale;
+    *width = config.display_aspect > 0.0
+                 ? static_cast<int>(std::lround(static_cast<double>(*height) *
+                                                std::min(config.display_aspect, 8.0)))
+                 : kPspScreenWidth * scale;
+}
+
 std::unique_ptr<SdlPresenter> SdlPresenter::Create(const PresenterConfig &config,
                                                    std::string *error) {
     std::unique_ptr<SdlPresenter> p(new SdlPresenter());
@@ -40,12 +64,13 @@ std::unique_ptr<SdlPresenter> SdlPresenter::Create(const PresenterConfig &config
     }
     p->video_initialised_ = true;
 
-    const int scale = std::clamp(config.scale, 1, 16);
+    int window_w = 0;
+    int window_h = 0;
+    InitialWindowSize(config, &window_w, &window_h);
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
     if (config.hidden) flags |= SDL_WINDOW_HIDDEN;
     if (config.fullscreen) flags |= SDL_WINDOW_FULLSCREEN;
-    p->window_ = SDL_CreateWindow(config.title.c_str(), kPspScreenWidth * scale,
-                                  kPspScreenHeight * scale, flags);
+    p->window_ = SDL_CreateWindow(config.title.c_str(), window_w, window_h, flags);
     if (p->window_ == nullptr) {
         if (error) *error = std::string("SDL_CreateWindow: ") + SDL_GetError();
         return nullptr;
@@ -130,7 +155,8 @@ bool SdlPresenter::PresentRgba(const std::uint8_t *rgba, int width, int height,
     int out_w = 0;
     int out_h = 0;
     SDL_GetCurrentRenderOutputSize(renderer_, &out_w, &out_h);
-    last_dst_ = FitRect(width, height, out_w, out_h, config_.integer_scaling);
+    last_dst_ =
+        FitRect(width, height, out_w, out_h, config_.integer_scaling, config_.display_aspect);
 
     SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
     SDL_RenderClear(renderer_);

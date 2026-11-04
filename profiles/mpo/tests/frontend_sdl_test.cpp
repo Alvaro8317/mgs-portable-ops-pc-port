@@ -74,6 +74,42 @@ void TestFitRect() {
     Expect(r.w == 480 && r.h == 272, "integer never below 1x");
     r = FitRect(480, 272, 0, 0, false);
     Expect(r.w == 0 && r.h == 0, "empty output");
+    // F25b: display_aspect 0 is the image's own, exactly as without it.
+    for (const bool integer : {false, true}) {
+        for (const int ww : {300, 960, 1920, 2560, 3440}) {
+            const SDL_FRect a = FitRect(480, 272, ww, 1080, integer);
+            const SDL_FRect b = FitRect(480, 272, ww, 1080, integer, 0.0);
+            Expect(a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h, "aspect 0 unchanged");
+        }
+    }
+    // Stretched to 64:27 (2560x1080): the whole of a 2560x1080 window.
+    r = FitRect(480, 272, 2560, 1080, false, 64.0 / 27.0);
+    Expect(r.x == 0 && r.y == 0 && r.w == 2560 && r.h == 1080, "64:27 fills 2560x1080");
+    // 21:9 in 3440x1440 (43:18 is the same aspect).
+    r = FitRect(480, 272, 3440, 1440, false, 43.0 / 18.0);
+    Expect(r.x == 0 && r.y == 0 && r.w == 3440 && r.h == 1440, "43:18 fills 3440x1440");
+    // 32:9 in a 16:9 window: bars above and below.
+    r = FitRect(480, 272, 1920, 1080, false, 32.0 / 9.0);
+    Expect(r.w == 1920 && r.h == 540 && r.x == 0 && r.y == 270, "32:9 letterboxed in 16:9");
+    // A video frame in a 2560x1080 window: the PSP's aspect, bars at the sides.
+    r = FitRect(480, 272, 2560, 1080, false);
+    Expect(r.h == 1080 && r.w == 1906 && r.x == 327 && r.y == 0, "video pillarboxed");
+    // Integer: the factor goes by the height, the width follows the aspect.
+    r = FitRect(480, 272, 2560, 1080, true, 64.0 / 27.0);
+    Expect(r.h == 816 && r.w == 1934 && r.x == 313 && r.y == 132, "integer 64:27 (3x)");
+    r = FitRect(480, 272, 300, 200, true, 64.0 / 27.0);
+    Expect(r.h == 272 && r.w == 645, "integer 64:27 never below 1x");
+
+    // The first window size.
+    PresenterConfig config;
+    int w = 0;
+    int h = 0;
+    InitialWindowSize(config, &w, &h);
+    Expect(w == 960 && h == 544, "window 2x");
+    config.scale = 3;
+    config.display_aspect = 64.0 / 27.0;
+    InitialWindowSize(config, &w, &h);
+    Expect(w == 1934 && h == 816, "window 3x at 64:27");
 }
 
 void TestPresenter() {

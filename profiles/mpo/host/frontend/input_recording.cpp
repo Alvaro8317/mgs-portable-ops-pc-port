@@ -164,6 +164,12 @@ bool InputRecording::Parse(std::string_view text, InputRecording *out, std::stri
             if (w.size() != 2u || !ParseNumber(w[1], &rec.ms0_digest, 16))
                 return bad("ms0 takes a 16-digit hex digest");
             rec.has_ms0_digest = true;
+        } else if (kind == "aspect") {
+            if (w.size() != 3u || w[1].find(':') == std::string_view::npos || w[2].size() != 8u ||
+                !ParseNumber(w[2], &rec.aspect_x_scale, 16))
+                return bad("aspect takes <width>:<height> <x scale bits>");
+            rec.aspect = std::string(w[1]);
+            rec.has_aspect = true;
         } else if (kind == "osk-script") {
             std::string script;
             if (w.size() > 2u || (w.size() == 2u && !FromHex(w[1], &script)))
@@ -281,6 +287,13 @@ void InputRecorder::Header(std::int64_t rtc_base, std::int64_t rtc_utc_offset,
                   rtc_utc_offset, ms0_digest);
     out_ << line;
     for (const std::string &script : osk_scripts) out_ << "osk-script " << ToHex(script) << '\n';
+    out_.flush();
+}
+
+void InputRecorder::Aspect(std::string_view aspect, std::uint32_t x_scale_bits) {
+    char bits[16];
+    std::snprintf(bits, sizeof(bits), "%08" PRIx32, x_scale_bits);
+    out_ << "aspect " << aspect << ' ' << bits << '\n';
     out_.flush();
 }
 

@@ -550,6 +550,29 @@ struct Launcher {
             ImGui::TableNextColumn();
             ImGui::Checkbox("Fullscreen (borderless, at the desktop's resolution)",
                             &settings.fullscreen);
+
+            // F25b: --aspect (the labels are in launcher_core.hpp).
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Aspect");
+            ImGui::TableNextColumn();
+            bool preset = false;
+            for (const mpo::launcher::AspectChoice &choice : mpo::launcher::kAspectChoices) {
+                if (&choice != &mpo::launcher::kAspectChoices[0]) ImGui::SameLine();
+                const bool chosen = settings.aspect == choice.value;
+                preset = preset || chosen;
+                if (ImGui::RadioButton(choice.label, chosen)) settings.aspect = choice.value;
+            }
+            if (!preset) {
+                // Another one, written by hand in settings.toml.
+                ImGui::SameLine();
+                ImGui::RadioButton(settings.aspect.c_str(), true);
+            }
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", mpo::launcher::kAspectNote);
             ImGui::EndTable();
         }
         ImGui::EndDisabled();

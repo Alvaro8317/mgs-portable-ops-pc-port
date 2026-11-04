@@ -178,6 +178,10 @@ change is saved at once and applies the next time you press **Play**:
   Vulkan only. A higher one is sharper and asks more of the GPU.
 - **Window**: the size of the window, from 1x (480x272) to 8x. You can still resize it by hand.
 - **Fullscreen**: borderless, at your desktop's resolution.
+- **Aspect**: 16:9 (the PSP's own screen, the default), or ultrawide: 21:9 (2560x1080 or
+  3440x1440) or 32:9. Wider than 16:9, the 3D shows more at the sides, like PPSSPP's widescreen
+  cheat with "Stretch"; the HUD and the menus are stretched to fit, and the videos keep 16:9 with
+  black bars at the sides. It doesn't change how the game plays.
 
 They're kept in `settings.toml`, next to `input.toml` (see [Changing the
 controls](#changing-the-controls)):
@@ -187,6 +191,7 @@ renderer = "vulkan"   # or "soft"
 render_scale = 1      # 1 to 8
 window_scale = 2      # 1 to 8
 fullscreen = false
+aspect = "native"     # or "<width>:<height>", such as "64:27" (2560x1080) or "32:9"
 ```
 
 If the file is damaged or a value isn't valid, the game starts with the default for it, and the

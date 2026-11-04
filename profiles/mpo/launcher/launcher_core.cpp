@@ -322,7 +322,29 @@ GameSettings parse_settings(const JsonValue &object) {
     if (window_scale >= 1 && window_scale <= GameSettings::kMaxWindowScale)
         settings.window_scale = window_scale;
     settings.fullscreen = bool_field(object, "fullscreen");
+    if (std::string aspect = string_field(object, "aspect"); valid_aspect(aspect))
+        settings.aspect = std::move(aspect);
     return settings;
+}
+
+bool valid_aspect(std::string_view aspect) {
+    if (aspect == "native") return true;
+    const std::size_t colon = aspect.find(':');
+    if (colon == std::string_view::npos) return false;
+    const auto number = [](std::string_view digits, long long *out) {
+        if (digits.empty() || digits.size() > 5u || digits.front() == '0') return false;
+        long long value = 0;
+        for (const char c : digits) {
+            if (c < '0' || c > '9') return false;
+            value = value * 10 + (c - '0');
+        }
+        *out = value;
+        return true;
+    };
+    long long w = 0;
+    long long h = 0;
+    return number(aspect.substr(0, colon), &w) && number(aspect.substr(colon + 1u), &h) &&
+           w * 272 >= h * 480 && w <= 4 * h;
 }
 
 std::string format_settings(const GameSettings &settings) {
@@ -339,12 +361,16 @@ std::string format_settings(const GameSettings &settings) {
                   "# 1 to %d: the window opens at 480x272 times this.\n"
                   "window_scale = %d\n"
                   "# Borderless, at the desktop's resolution.\n"
-                  "fullscreen = %s\n",
+                  "fullscreen = %s\n"
+                  "# \"native\" (16:9), or \"<width>:<height>\" wider (\"64:27\": 2560x1080).\n"
+                  "# Wider, the 3D shows more at the sides and the HUD is stretched.\n"
+                  "aspect = \"%s\"\n",
                   settings.renderer == "soft" ? "soft" : "vulkan", GameSettings::kMaxRenderScale,
                   std::clamp(settings.render_scale, 1, GameSettings::kMaxRenderScale),
                   GameSettings::kMaxWindowScale,
                   std::clamp(settings.window_scale, 1, GameSettings::kMaxWindowScale),
-                  settings.fullscreen ? "true" : "false");
+                  settings.fullscreen ? "true" : "false",
+                  valid_aspect(settings.aspect) ? settings.aspect.c_str() : "native");
     return text;
 }
 
