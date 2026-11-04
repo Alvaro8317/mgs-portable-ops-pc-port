@@ -1866,6 +1866,16 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
       - **W3**: anclar cada elemento al borde con los `.la2`, solo si se pide;
     - se descartan un framebuffer más ancho y anclar por la posición del dibujo.
 - 60+ fps con **interpolación** (la lógica sigue a 20 o 30 fps).
+  - El usuario, en Windows a 4K (2026-11-04): "a veces un poquito de falta de fluidez" con el
+    gameplay a 20 fps. Antes de interpolar, medir el ritmo de los flips (que cada frame dure 3
+    vblanks exactos) en monitores de 60 y de 144 Hz.
+- **Los textos que nombran un botón** (pedido por el usuario el 2026-11-04): "PRESS SELECT BUTTON
+  FOR HELP SCREEN" del selector de misiones no cambia con el dispositivo (es texto, §7.4 del spike
+  de los controles). Primero, con `--dump-textures`, ver si esa línea es una textura entera (se
+  podría reemplazar como los íconos de F25a) o glifos de la fuente.
+- **El arte en 2D a 4K** (el usuario, 2026-11-04): el logo del título (el ® se ve borroso) y otras
+  imágenes de 480×272 se notan a 8x. Si son texturas, un pack HD (F25c) las cubre; si es el video
+  del título, haría falta un filtro de escalado para los frames de video.
 - Texturas HD en formato de PPSSPP. **La capa está hecha en F24c** (`--textures`, `--dump-textures`,
   claves de PPSSPP) y **F25c reemplaza también las de la VRAM** (el 91,5 % de las búsquedas, F24c
   [V]), sin tocar los framebuffers ni los frames de video (`docs/sessions/F25c.md`). Falta:

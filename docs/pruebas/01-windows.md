@@ -147,3 +147,27 @@ Las texturas volcadas son arte del juego: no se comparten ni van al repo.
   ```
   y la Proporción en 16:9 (nativa).
 - Anotar qué pasó, en qué parte del juego y con qué ajustes.
+
+## Resultados (2026-11-04, el usuario, Windows, ZIP de `01a6447`)
+
+- **W1 ❌ → arreglado**: con el ZIP en otra carpeta, **Jugar** arrancaba el `mpo_boot` viejo
+  (`unknown option --fullscreen`) y compilar las etapas fallaba en CMake (la caché apuntaba a la
+  carpeta anterior). Después de `setup.py install` a mano, `stages` quiso recompilar 90 etapas: el
+  `psp_recomp` recompilado desde otra carpeta es otro binario (lleva rutas), y la etapa se daba por
+  vieja con todo el `generate.json`. Y una DLL cargada por el juego paró `stages` con
+  `WinError 5`. Arreglado en `1762fdb` (el botón **Actualizar**) y en el commit siguiente: la
+  etapa se compara por su C++ generado, y una DLL en uso se salta y queda para la próxima vez.
+- **La primera misión, a 4K (Resolución 8x, pantalla completa)**: sin bajones de FPS. Los
+  personajes son lo que más gana; el entorno (texturas de 2006) pide un pack HD.
+- **W4 ✅**: el △ del mapa de pausa cambia en el momento entre △/Y y CTL.
+  - El "PRESS SELECT BUTTON FOR HELP SCREEN" del selector de misiones **no** cambia: es texto
+    (palabras, §7.4 del spike), no un ícono. Queda en F23+.
+- **W3 ⚠️ → arreglado**: F11 y Alt+Enter funcionaban, pero con **Ventana** en 8x la ventana
+  (3840×2176) era más grande que la pantalla 4K, y salir de la pantalla completa casi no cambiaba
+  nada. Ahora la ventana se ajusta al 90 % del área útil de la pantalla.
+- **Fluidez**: a veces se nota un poco de falta de fluidez. El juego corre a **20 fps** en el
+  gameplay (la lógica está atada a eso, CLAUDE.md §4); los 60 fps con interpolación están en F23+.
+- **Cámara**: el eje Y del stick derecho y del mouse quedan **encendidos por defecto** (pedido por
+  el usuario); `vertical = false` en `input.toml` los apaga.
+- **La pantalla de título**: el ® del logo se ve borroso a 4K (es arte de 480×272, del juego).
+  Queda en F23+.
