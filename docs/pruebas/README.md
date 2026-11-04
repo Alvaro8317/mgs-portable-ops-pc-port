@@ -11,6 +11,7 @@ el juego**. Estas guías la prueban entera, repartida por dónde tiene sentido c
 | 2 | [02-wsl-repeticiones.md](02-wsl-repeticiones.md) | WSL, como siempre | Las repeticiones con hashes: que nada cambie por defecto, el volcado de la VRAM, el parche del widescreen y los íconos frame a frame |
 | 3 | [03-linux-nativo-preparar.md](03-linux-nativo-preparar.md) | Una partición con Ubuntu 24.04 | Instalar Linux con los drivers de la GPU y el port |
 | 4 | [04-linux-nativo-ventana.md](04-linux-nativo-ventana.md) | Ese Linux | Lo de Windows en Linux, más las capas de validación de Vulkan |
+| 5 | [05-texturas-hd.md](05-texturas-hd.md) | Windows | Un pack HD de punta a punta: volcar, escalar con Real-ESRGAN, comprobar y jugar (ola 8) |
 
 **Orden sugerido**: 1 y 2 se pueden hacer el mismo día (la 2 corre sola mientras haces la 1). La 3
 y la 4, cuando tengas la partición.
