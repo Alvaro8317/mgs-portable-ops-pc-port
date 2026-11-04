@@ -29,10 +29,12 @@ generado de la etapa, y la ola 7 no tocó nada de eso.
 1. Cerrar el launcher y el juego.
 2. Descomprimir el ZIP nuevo **en la misma carpeta que el anterior**, reemplazando los archivos.
    En otra carpeta también funciona, pero CMake vuelve a configurar desde cero.
-3. Con el juego ya instalado, el launcher solo muestra **Jugar** (no el botón **Instalar**), y
-   **Jugar** usaría el `mpo_boot` viejo. Así que la actualización se hace desde un `cmd` abierto en
-   la carpeta del ZIP. La ruta del ISO es la que el launcher muestra abajo, en **Instalación ›
-   ISO**:
+3. Desde el ZIP de `1762fdb` en adelante (con el arreglo del 2026-11-05), el launcher muestra
+   **Actualizar** encima de **Jugar** y deja **Jugar** apagado hasta que actualices: pulsarlo hace
+   lo mismo que el comando de abajo. Con un ZIP anterior (como el de `01a6447`), el launcher no se
+   da cuenta y **Jugar** arranca el `mpo_boot` viejo, que falla con `unknown option
+   --fullscreen`; ahí se actualiza desde un `cmd` abierto en la carpeta del ZIP. La ruta del ISO es
+   la que el launcher muestra abajo, en **Instalación › ISO**:
    ```bat
    python\python.exe -I source\profiles\mpo\scripts\setup.py install --iso "C:\ruta\a\ULUS-10202.iso"
    ```
