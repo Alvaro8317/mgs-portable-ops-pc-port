@@ -227,6 +227,22 @@ bool InputRecording::Parse(std::string_view text, InputRecording *out, std::stri
             rec.prompts.emplace_back(sample, std::move(set));
             last_sample = std::max(last_sample, sample);
             any_sample = true;
+        } else if (kind == "i") {
+            std::uint64_t sample = 0;
+            IconState state;
+            if (w.size() == 3u && w[2] == "off" && ParseNumber(w[1], &sample)) {
+                state.on = false;
+            } else if (w.size() == 4u && w[2] == "on" && ParseNumber(w[1], &sample) &&
+                       w[3].size() == 16u && ParseNumber(w[3], &state.digest, 16)) {
+                state.on = true;
+            } else {
+                return bad("i takes <sample> off or <sample> on <16-digit hex digest>");
+            }
+            if (!rec.icons.empty() && sample <= rec.icons.back().first)
+                return bad("icon states go in sample order");
+            rec.icons.emplace_back(sample, state);
+            last_sample = std::max(last_sample, sample);
+            any_sample = true;
         } else if (kind == "c") {
             FrameCheck check;
             if (w.size() != 4u || !ParseNumber(w[1], &check.flip) ||
@@ -326,6 +342,22 @@ void InputRecorder::Prompts(std::uint64_t sample, const PromptSet &set) {
     ++prompt_changes_;
 }
 
+void InputRecorder::Icons(std::uint64_t sample, const IconState &given) {
+    IconState state = given;
+    if (!state.on) state.digest = 0;
+    if (state == last_icons_) return;
+    char line[64];
+    if (state.on)
+        std::snprintf(line, sizeof(line), "i %" PRIu64 " on %016" PRIx64 "\n", sample,
+                      state.digest);
+    else
+        std::snprintf(line, sizeof(line), "i %" PRIu64 " off\n", sample);
+    out_ << line;
+    out_.flush();
+    last_icons_ = state;
+    ++icon_changes_;
+}
+
 void InputRecorder::Check(const FrameCheck &check) {
     char line[96];
     std::snprintf(line, sizeof(line), "c %" PRIu64 " %" PRIu64 " %016" PRIx64 "\n", check.flip,
@@ -369,6 +401,13 @@ std::optional<PromptSet> InputPlayer::PromptsAt(std::uint64_t sample) {
            recording_.prompts[next_prompts_].first <= sample)
         set = recording_.prompts[next_prompts_++].second;
     return set;
+}
+
+std::optional<IconState> InputPlayer::IconsAt(std::uint64_t sample) {
+    std::optional<IconState> state;
+    while (next_icons_ < recording_.icons.size() && recording_.icons[next_icons_].first <= sample)
+        state = recording_.icons[next_icons_++].second;
+    return state;
 }
 
 const FrameCheck *InputPlayer::CheckAt(std::uint64_t flip) const {

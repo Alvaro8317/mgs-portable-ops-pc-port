@@ -63,6 +63,8 @@ add_subdirectory(frontend)
 
 # F25b: widescreen (mpo_boot --aspect).
 add_subdirectory(widescreen)
+# F25a: the game's button icons by device (needs texreplace and frontend).
+add_subdirectory(prompticons)
 
 # F17a: PMF videos and PGF fonts (they use mpo_audio and mpo_ge_replay).
 add_subdirectory(video)

@@ -22,6 +22,7 @@
 //            [--prompts auto|psp|xbox|playstation|nintendo|keyboard]
 //            [--textures <dir>|none] [--dump-textures <dir>]
 //            [--aspect native|<width>:<height>]
+//            [--prompt-icons auto|off|<dir>]
 //
 // It measures the start-up (registering the dispatch table: time and memory),
 // runs PSP threads until --until-us of virtual time (default 5 s), a runtime
@@ -192,6 +193,22 @@
 //                             sides. Up to 16:9 nothing changes.
 // The patch changes every 3D frame, so --record-input writes an `aspect`
 // record and a replay applies the recorded one (--aspect against it warns).
+// F25a: the game's button icons follow the prompt set (prompticons/).
+//   --prompt-icons auto       (the default) while the prompts are not the
+//                             PSP's (see --prompts), the icons listed in the
+//                             inventory (config/prompt_icons.toml, built in,
+//                             plus <data dir>/prompts/inventory.toml) are drawn
+//                             by the port for the device; the player's own,
+//                             per style, in <data dir>/prompts/<style>/ (a
+//                             texture pack) win over them. They win over the
+//                             --textures pack on those textures only.
+//   --prompt-icons <dir>      the same with <dir> instead of <data dir>/prompts.
+//   --prompt-icons off        the game's icons (and the --textures pack's).
+// With the PSP prompts (no window, --prompts psp) nothing changes. The icons
+// switch at the same controller sample as the prompts; --record-input writes
+// an `i` record when they turn on or off, and a replay follows it (a recording
+// without `i` records keeps the game's icons). Dump textures for a pack with
+// the PSP prompts: an icon drawn by the port is not dumped.
 
 #include <algorithm>
 #include <array>
@@ -225,6 +242,7 @@
 #include "image.hpp"
 #include "input.h"
 #include "input_recording.h"
+#include "prompt_icons.hpp"
 #include "prompts.h"
 #include "psprecomp/interpreter.hpp"
 #include "psprecomp/runtime.hpp"
@@ -584,6 +602,7 @@ int main(int argc, char **argv) {
     std::string textures_dir; // empty: the default folder; "none": off
     std::string dump_textures_dir;
     std::string aspect_option; // empty: native (or the recording's)
+    std::string prompt_icons_option = "auto"; // auto, off or a folder
     // Every option takes a value: a word left over is a mistake, not ignored
     // (F19: a whole --press list quoted as one word went unnoticed).
     if (argc % 2 == 0) return fail(std::string("option without a value: ") + argv[argc - 1]);
@@ -679,6 +698,9 @@ int main(int argc, char **argv) {
             std::string why;
             if (!mpo::widescreen::ParseAspect(value, &why)) return fail(why);
             aspect_option = value;
+        } else if (option == "--prompt-icons") {
+            if (value.empty()) return fail("--prompt-icons takes auto, off or a folder");
+            prompt_icons_option = value;
         } else if (option == "--osk-text") {
             osk_texts.push_back(value);
         } else if (option == "--record-input") {
@@ -962,6 +984,35 @@ int main(int argc, char **argv) {
             });
             if (texture_provider) system.ge().ge().SetTextureProvider(&texture_replacer);
         }
+        // ---- F25a: the game's button icons, in front of the player's pack ----
+        std::unique_ptr<mpo::prompticons::PromptIconProvider> prompt_icons;
+        mpo::frontend::IconState live_icons;
+        std::uint64_t icons_digest = 0;
+        {
+            std::filesystem::path dir;
+            if (prompt_icons_option != "auto" && prompt_icons_option != "off") {
+                dir = prompt_icons_option;
+            } else if (const auto data = mpo::savedata::default_data_dir(
+                           mpo::savedata::PathEnvironment::from_process())) {
+                dir = *data / "prompts";
+            }
+            std::vector<std::string> notes;
+            prompt_icons = mpo::prompticons::LoadPromptIcons(dir, &notes, &error);
+            if (!prompt_icons) return fail("--prompt-icons: " + error);
+            for (const std::string &note : notes) std::printf("prompt icons: %s\n", note.c_str());
+            prompt_icons->SetBase(texture_provider ? &texture_replacer : nullptr);
+            prompt_icons->SetLog([](std::string_view line) {
+                std::fprintf(stderr, "mpo_boot: %.*s\n", static_cast<int>(line.size()),
+                             line.data());
+            });
+            live_icons.on = prompt_icons_option != "off";
+            icons_digest = prompt_icons->Digest();
+            live_icons.digest = live_icons.on ? icons_digest : 0;
+            // Off until the first controller sample says otherwise (as the
+            // prompts, which start as the PSP's).
+            prompt_icons->SetEnabled(false);
+            system.ge().ge().SetTextureProvider(prompt_icons.get());
+        }
         if (!overlays_dir.empty()) {
             const std::size_t overlays = system.overlays().load_libraries(overlays_dir);
             std::printf("stage overlays: %zu corpora from %s\n", overlays, overlays_dir.c_str());
@@ -1203,9 +1254,34 @@ int main(int argc, char **argv) {
             if (set == shown_prompts) return;
             shown_prompts = set;
             system.utility().set_prompts(set);
+            prompt_icons->SetPrompts(set);
             ++prompt_changes;
             system.hle().trace_event("prompts: %s from sample %llu",
                                      mpo::frontend::PromptStyleName(set.style),
+                                     static_cast<unsigned long long>(index));
+        };
+
+        // F25a: the icons on or off (the recording's `i` records while it
+        // plays, the --prompt-icons option after).
+        mpo::frontend::IconState shown_icons;
+        std::uint64_t icon_changes = 0;
+        bool icon_digest_warned = false;
+        const auto show_icons = [&](const mpo::frontend::IconState &state, std::uint64_t index) {
+            if (state.on == shown_icons.on && (!state.on || state.digest == shown_icons.digest))
+                return;
+            shown_icons = state;
+            prompt_icons->SetEnabled(state.on);
+            ++icon_changes;
+            if (state.on && state.digest != icons_digest && !icon_digest_warned) {
+                icon_digest_warned = true;
+                std::fprintf(stderr,
+                             "mpo_boot: the recording's button icons (%016llx) were drawn "
+                             "from another inventory or icon folder than these (%016llx): "
+                             "the frames that show them may differ\n",
+                             static_cast<unsigned long long>(state.digest),
+                             static_cast<unsigned long long>(icons_digest));
+            }
+            system.hle().trace_event("prompt icons: %s from sample %llu", state.on ? "on" : "off",
                                      static_cast<unsigned long long>(index));
         };
 
@@ -1236,10 +1312,15 @@ int main(int argc, char **argv) {
             // it plays).
             if (player && player->Covers(index)) {
                 if (const auto set = player->PromptsAt(index)) show_prompts(*set, index);
+                if (const auto icons = player->IconsAt(index)) show_icons(*icons, index);
             } else {
                 show_prompts(wanted_prompts(), index);
+                show_icons(live_icons, index);
             }
-            if (recorder.is_open()) recorder.Prompts(index, shown_prompts);
+            if (recorder.is_open()) {
+                recorder.Prompts(index, shown_prompts);
+                recorder.Icons(index, shown_icons);
+            }
             if (player && player->Covers(index)) {
                 for (const mpo::frontend::OskEvent &event : player->OskAt(index)) {
                     apply_osk(event);
@@ -1461,6 +1542,25 @@ int main(int argc, char **argv) {
         std::printf("prompts: %s at the end, %llu changes (--prompts %s)\n",
                     mpo::frontend::PromptStyleName(shown_prompts.style),
                     static_cast<unsigned long long>(prompt_changes), prompts_option.c_str());
+        {
+            const mpo::prompticons::PromptIconProvider::Stats &is = prompt_icons->stats();
+            std::printf("prompt icons: %s at the end, %llu changes (--prompt-icons %s), %zu in "
+                        "the inventory, digest %016llx; %llu lookups, %llu candidates, %llu "
+                        "texel hashes, %llu drawn by the port (%llu images), %llu from the "
+                        "player's style packs, %llu kept (symbols), %llu load errors\n",
+                        shown_icons.on ? "on" : "off",
+                        static_cast<unsigned long long>(icon_changes), prompt_icons_option.c_str(),
+                        prompt_icons->inventory().icons().size(),
+                        static_cast<unsigned long long>(icons_digest),
+                        static_cast<unsigned long long>(is.lookups),
+                        static_cast<unsigned long long>(is.candidates),
+                        static_cast<unsigned long long>(is.hashes),
+                        static_cast<unsigned long long>(is.drawn),
+                        static_cast<unsigned long long>(is.images),
+                        static_cast<unsigned long long>(is.from_packs),
+                        static_cast<unsigned long long>(is.kept),
+                        static_cast<unsigned long long>(is.load_errors));
+        }
         if (player) {
             const std::size_t recorded = player->recording().checks.size();
             std::printf(

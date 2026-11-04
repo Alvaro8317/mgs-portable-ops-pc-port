@@ -14,6 +14,10 @@
 // - the on-screen prompt set (F24b) at the sample from which it was shown,
 //   whenever it changed. A recording without `p` records (before F24b)
 //   showed the PSP's own prompts all along, and replays with them;
+// - whether the game's button icons followed the prompt set (F25a,
+//   prompticons/), at the sample from which they did, whenever it changed,
+//   with a digest of what the icons were drawn from. A recording without `i`
+//   records (before F25a) showed the game's own icons, and replays with them;
 // - a hash of the shown framebuffer every N flips, so a replay says where it
 //   stops matching the run it came from;
 // - F25b: the --aspect the run patched the module with, when it did (the
@@ -31,6 +35,7 @@
 //   s <sample> <buttons, 8 hex digits> <lx> <ly> <rx> <ry>
 //   o <sample> type <utf-8 as hex> | o <sample> backspace|finish|cancel
 //   p <sample> <prompt set> (F24b, prompts.h: FormatPromptSet)
+//   i <sample> off | i <sample> on <digest of the icons, 16 hex digits> (F25a)
 //   c <flip> <sample> <frame hash, 16 hex digits>
 //   end <samples> <flips>
 //
@@ -78,6 +83,14 @@ struct InputState {
     friend bool operator==(const InputState &a, const InputState &b);
 };
 
+// F25a: the game's button icons, on (following the prompt set) or off (the
+// game's own), and with what they were drawn (PromptIconProvider::Digest).
+struct IconState {
+    bool on = false;
+    std::uint64_t digest = 0; // 0 when off
+    friend bool operator==(const IconState &, const IconState &) = default;
+};
+
 struct InputRecording {
     std::int64_t rtc_base = 0;
     std::int64_t rtc_utc_offset = 0;
@@ -95,6 +108,8 @@ struct InputRecording {
     std::vector<OskEvent> osk;
     // Prompt set changes in sample order (none: the PSP set all along).
     std::vector<std::pair<std::uint64_t, PromptSet>> prompts;
+    // Icon state changes in sample order (none: off all along).
+    std::vector<std::pair<std::uint64_t, IconState>> icons;
     std::vector<FrameCheck> checks;
     // The samples and flips of the run. Without an `end` line (the run was
     // cut short) the samples are one past the last sample recorded.
@@ -124,6 +139,9 @@ public:
     // changed (the run starts with the PSP set, so that one is not written
     // at sample 0).
     void Prompts(std::uint64_t sample, const PromptSet &set);
+    // Every sample, with the icon state from it on: writes it when it
+    // changed (the run starts with them off).
+    void Icons(std::uint64_t sample, const IconState &state);
     void Check(const FrameCheck &check);
     void End(std::uint64_t samples, std::uint64_t flips);
 
@@ -131,12 +149,15 @@ public:
     [[nodiscard]] std::uint64_t osk_events() const noexcept { return osk_events_; }
     [[nodiscard]] std::uint64_t checks() const noexcept { return checks_; }
     [[nodiscard]] std::uint64_t prompt_changes() const noexcept { return prompt_changes_; }
+    [[nodiscard]] std::uint64_t icon_changes() const noexcept { return icon_changes_; }
 
 private:
     std::ofstream out_;
     InputState last_{};
     PromptSet last_prompts_ = PromptSet::Psp();
     std::uint64_t prompt_changes_ = 0;
+    IconState last_icons_{};
+    std::uint64_t icon_changes_ = 0;
     bool any_ = false;
     std::uint64_t changes_ = 0;
     std::uint64_t osk_events_ = 0;
@@ -158,6 +179,9 @@ public:
     // The prompt set to show from `sample` on, when it changes there (or
     // between the last call and it); nullopt when it stays.
     std::optional<PromptSet> PromptsAt(std::uint64_t sample);
+    // The icon state from `sample` on, when it changes there (or between the
+    // last call and it); nullopt when it stays.
+    std::optional<IconState> IconsAt(std::uint64_t sample);
     // The frame hash recorded at `flip`, if any.
     [[nodiscard]] const FrameCheck *CheckAt(std::uint64_t flip) const;
 
@@ -167,6 +191,7 @@ private:
     InputState current_{};
     std::size_t next_osk_ = 0;
     std::size_t next_prompts_ = 0;
+    std::size_t next_icons_ = 0;
     std::map<std::uint64_t, FrameCheck> checks_;
 };
 

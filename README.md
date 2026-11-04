@@ -261,11 +261,23 @@ how it reacts, see `[pad_camera]` in `input.toml` (below).
 The save, load and message screens and the on-screen keyboard show the buttons of what you're
 playing with, and switch as soon as you use something else: the keys and mouse buttons from your
 `input.toml` (Space, Esc, Right click...) on the keyboard, A/B/X/Y on an Xbox pad, the shapes on a
-PlayStation pad, and the labels of Nintendo and other pads. The game's own screens (the HUD, the
-menus, the tutorials) still show the PSP's buttons.
+PlayStation pad, and the labels of Nintendo and other pads.
 
-To always show the same ones, start the game with `--prompts`, for example
-`setup.py play -- --prompts psp` (also `xbox`, `playstation`, `nintendo` or `keyboard`).
+The game's own button icons (in the menus and the HUD, such as "△ : FLOOR CHANGE" on the pause map)
+switch too, with icons drawn by the port: a letter in a circle on a gamepad (A, B...), a key with
+its name on the keyboard (SPC, Q...), a mouse with the button marked. The shapes stay as they are on
+a PlayStation pad. For now only a few icons are known; the rest still show the PSP's buttons, and
+the tutorials and the codec too. With a texture pack, these icons win over the pack's on those
+textures only.
+
+- To always show the same ones, start the game with `--prompts`, for example
+  `setup.py play -- --prompts psp` (also `xbox`, `playstation`, `nintendo` or `keyboard`).
+- To keep the game's icons (and your pack's), add `--prompt-icons off`.
+- Your own icons go in the `prompts` folder of the data folder (next to `textures`, see
+  [Texture packs](#texture-packs)): a pack per style in `prompts/xbox/`, `prompts/playstation/`,
+  `prompts/nintendo/`, `prompts/generic/` or `prompts/keyboard/`, and more icons for the port to
+  draw in `prompts/inventory.toml` (the format is in
+  [`profiles/mpo/config/prompt_icons.toml`](profiles/mpo/config/prompt_icons.toml)).
 
 ### Changing the controls
 
