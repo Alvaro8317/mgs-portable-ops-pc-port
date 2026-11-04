@@ -70,6 +70,7 @@ Las fases sin letra y las `FXXb` siguen en serie, como antes.
 | 5 ✅ | F23a, F23b, F23c | Adelantadas a pedido del usuario el 2026-11-03, antes de cerrar M6 (F21b y F22c siguen abiertas). **No cambian el ABI del runtime** (`psprecomp::Runtime`, `AllegrexContext`, `kOverlayAbiVersion`) ni los headers del framework: las etapas que el jugador ya compiló tienen que seguir cargando. F23a: F22 · F23b: F15b · F23c: F18b (F23c se sumó el mismo día). Integrada el 2026-11-03, junto con el spike de los controles en pantalla (`docs/analysis/button-prompts.md`). |
 | 6 ✅ | F24a, F24b, F24c y un spike de widescreen | Pedidas por el usuario el 2026-11-03, con las mismas reglas que la ola 5: **no cambian el ABI del runtime** ni los headers del framework. F24a: F23b · F24b: el spike de los controles (`docs/analysis/button-prompts.md`) y F23c · F24c: F15b y el mismo spike. Integrada el 2026-11-03 (`docs/analysis/widescreen.md` es el spike). |
 | 7 ✅ | F25a, F25b, F25c, F25d y mejoras pequeñas | Pedidas por el usuario el 2026-11-04, con las mismas reglas: **no cambian el ABI del runtime** ni los headers del framework (el submódulo sigue en `92c9425`). F25a: F24b y F24c · F25b: el spike de widescreen y F24a · F25c: F24c y F15b · F25d: F24a · mejoras: el atajo de pantalla completa (F11 o Alt+Enter) y la supresión de los leaks de lavapipe; el `#include <algorithm>` sigue pendiente porque recompila las 92 etapas. Integrada el 2026-11-04 sin probar en el juego: el usuario la prueba entera de una vez (ver las notas `docs/sessions/F25*.md`). Al integrar, el provider de íconos de F25a se arregló para que reenvíe los ganchos de F25c al `TextureReplacer`. |
+| 8 🟨 | F26a, F26b | Pedidas por el usuario el 2026-11-04 para los packs de texturas HD, con las reglas de la ola 7: **no cambian el ABI del runtime** ni los headers del framework. F26a: F25c · F26b: F25c. F26a no toca el código del volcado (`SetDumpDir` y lo que escribe); F26b sí, y no toca el muestreo ni la carga de los reemplazos. |
 | — | F10b ✅ → F11b ✅ → F13 ✅ → F14b ✅ → F16b ✅ → F17b ✅ → F18b ✅ → F15b ✅ → F19 ✅ → F18c ✅ → F20b ✅ → F21 🟨 → F22 ✅ → F22b ✅ → F22c 🟨 | en serie. F15b va después de F18b desde el 2026-10-27 (ver su ficha). F18c (autónoma) se hizo en la sesión principal el 2026-10-31. **F21b** (el recorrido del usuario) corre en paralelo con F22, F22b y F22c desde el 2026-11-01 (ver su ficha). |
 
 **Pendiente de la ola 1 (resuelto)**: en la CI, `mpo_vfpu_golden_test` fallaba **solo con MSVC**
@@ -133,6 +134,8 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F25b | Widescreen, fase W1 (autónomo) | M7 | ✅ hecha (ola 7; `--aspect` y el ajuste Aspect del launcher; probarlo en el juego (el save de `tramo3` con 21:9, la ventana y el video con barras): pendiente del usuario) |
 | F25c | Reemplazo de texturas en VRAM, texturas HD (autónomo) | M7 | ✅ hecha (ola 7; sin framebuffers ni video, en softgpu y Vulkan; las pruebas en el juego y el coste: pendientes del usuario) |
 | F25d | El launcher en inglés y en español (autónomo) | M7 | ✅ hecha (ola 7; el idioma del sistema o `language` en `settings.toml`, la salida de `setup.py` en inglés; probar en Windows y en la Steam Deck con mando: pendiente del usuario) |
+| F26a | Texturas HD que se ven bien: mipmaps, carga sin tirones, recarga y `[filtering]` (autónomo) | M7 | 🟨 en curso (ola 8) |
+| F26b | Herramientas para armar packs HD (autónomo) | M7 | 🟨 en curso (ola 8) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
 Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se explica en la nota de sesión).
@@ -1571,6 +1574,62 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 ---
 
 ## F23+ — Mejoras (se planifican cuando M6 esté cerrado)
+
+### F26a — Texturas HD que se ven bien, autónomo (ola 8)
+
+- **Objetivo**: que un pack con texturas 4x más grandes se vea bien de lejos y de cerca y no dé
+  tirones, y que quien lo arma vea sus cambios sin cerrar el juego.
+- **Requisitos**: F25c (el reemplazo en la VRAM) y F23b (la resolución interna).
+- **Tareas**:
+  - **Mipmaps de los reemplazos**: hoy el reemplazo es un solo nivel, y una textura grande vista
+    de lejos parpadea. Generar la cadena de niveles al cargar el PNG (caja 2×2, en el hilo que
+    decodifica) y aceptar los niveles propios del pack (`a.png|b.png` y los `_1`, `_2`… de
+    PPSSPP, que hoy se ignoran con un aviso). En Vulkan, elegir el nivel por la derivada en el
+    shader (o con el sampler de la GPU cuando no hace falta la interpolación exacta de F15b). A
+    1× con un PNG nativo, todo idéntico a hoy (el test de F24c entre softgpu y Vulkan).
+  - **Carga sin tirones**: decodificar los PNG en hilos aparte, y mientras tanto dibujar la
+    textura original (como PPSSPP). Una precarga del pack al arrancar o en segundo plano, con un
+    límite de memoria. Con `--replay-input`, `--record-input` y `--capture`, la carga es síncrona
+    (los frames no pueden depender del tiempo); una opción la fuerza también en el juego.
+  - **Recargar el pack** con una tecla mientras se juega (F5 si está libre en el mapeo; que no
+    llegue al juego, como F11) y con una opción; usa el cambio en caliente de F24c
+    (`AddSet`/`SetActiveSet`). Los diálogos de F25a siguen funcionando.
+  - **`[filtering]`** del `textures.ini` (`nearest`, `linear`, `auto` por textura, como PPSSPP
+    v1.20.4), hoy ignorado con un aviso.
+  - No tocar el código del volcado (`SetDumpDir` y lo que escribe): lo cambia F26b.
+  - Sin pack, todo exactamente como hoy; no cambia el ABI del runtime ni los headers del
+    framework. README.md y README.es.md a la vez.
+- **Criterios de hecho**: tests sin el juego de los mipmaps (generados y del pack, en softgpu y en
+  Vulkan contra softgpu), de la carga en segundo plano (dibuja la original hasta que llega, y la
+  síncrona con las repeticiones), de la recarga y de `[filtering]`. Las capas de validación sin
+  errores. `ctest` completo en Clang y GCC. En el juego (pendiente del usuario): un pack 4x de
+  prueba sin parpadeo de lejos y sin tirones al entrar a una etapa.
+
+### F26b — Herramientas para armar packs HD, autónomo (ola 8)
+
+- **Objetivo**: que hacer un pack HD sea un camino corto: saber qué texturas importan, escalarlas
+  en lote y comprobar el pack.
+- **Requisitos**: F25c (el volcado con la VRAM).
+- **Tareas**:
+  - **Un volcado con datos**: junto a los PNG, un archivo (por ejemplo `dump.json` o un CSV) con,
+    por textura, la clave, el tamaño, el formato, si estaba en la VRAM o en la RAM, la primera
+    etapa en que salió (el nombre de la etapa cargada) y cuántas veces se usó. Que se pueda
+    volcar en varias partidas a la misma carpeta y se sumen.
+  - **`profiles/mpo/tools/texture_pack.py`** (Python, guía de Google, `python -I`), con
+    subcomandos:
+    - `report`: las texturas ordenadas por uso, por etapa o por tamaño (para saber por dónde
+      empezar: las paredes y suelos más vistos);
+    - `upscale`: escalar en lote con un escalador que instala el jugador (Real-ESRGAN
+      `realesrgan-ncnn-vulkan` u otro que se le pase como comando), conservando el alfa y los
+      nombres, y dejando el `textures.ini`. El repo no trae modelos ni binarios del escalador;
+    - `check`: validar un pack (que cada PNG tenga una clave del volcado, la proporción y que el
+      tamaño sea múltiplo del original, los nombres y el `textures.ini`).
+  - No tocar el muestreo ni la carga de los reemplazos: los cambia F26a.
+  - Los volcados y los packs hechos con el arte del juego nunca van al repo (CLAUDE.md §1); los
+    tests usan imágenes sintéticas. README.md y README.es.md (Packs de texturas) a la vez.
+- **Criterios de hecho**: tests sin el juego del archivo del volcado (escribir y sumar), y de
+  `report`, `upscale` (con un escalador falso) y `check`. `ctest` completo en Clang y GCC. En el
+  juego (pendiente del usuario): un volcado de la primera misión con su reporte.
 
 ### F25a — Íconos del HUD según el dispositivo, autónomo (ola 7)
 
