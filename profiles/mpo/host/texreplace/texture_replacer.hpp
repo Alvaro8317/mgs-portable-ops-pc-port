@@ -38,6 +38,12 @@
 // CPU may have written it in between); of one in VRAM, until the next flip
 // or a block transfer or video frame that writes it (PPSSPP checks a texture
 // once per frame too: a CPU write to VRAM is seen at the next frame).
+//
+// F26b: the dump also keeps dump.csv (dump_index.hpp): per key, its size,
+// format, RAM or VRAM, the first stage it was drawn in, the stages, the
+// draws and the frames. It adds up over sessions in the same folder. The
+// stage comes from SetStageSource (mpo_boot: the stage/<s>/<s>.prx in the
+// module list), asked at each GE run while dumping.
 
 #pragma once
 
@@ -55,6 +61,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "dump_index.hpp"
 #include "texture_key.hpp"
 #include "texture_provider.hpp"
 #include "textures_ini.hpp"
@@ -140,6 +147,10 @@ public:
     };
 
     TextureReplacer() = default;
+    // Writes dump.csv if it has rows not written yet (errors go to the log).
+    ~TextureReplacer() override;
+    TextureReplacer(const TextureReplacer &) = delete;
+    TextureReplacer &operator=(const TextureReplacer &) = delete;
 
     // Adds a loaded pack and returns its index. Call it from the GE's thread
     // (or before the game starts). Not active until SetActiveSet.
@@ -159,7 +170,19 @@ public:
     // `dir` as <key>.png (once per key), with a textures.ini (xxh64,
     // ignoreAddress) unless the folder already has one, whose options it
     // then follows. Empty: no dump.
+    // F26b: also reads the folder's dump.csv (fails when it is not one) and
+    // keeps adding to it; it is written every kDumpSaveFlips flips while it
+    // changes, on FlushDump and when the replacer is destroyed.
     bool SetDumpDir(const std::filesystem::path &dir, std::string *error);
+    // F26b: the name of the stage loaded now ("" for none), for dump.csv.
+    // Asked at the start of each GE run while dumping; a name that is not a
+    // valid stage name (DumpIndex::ValidStageName) counts as none.
+    void SetStageSource(std::function<std::string()> source);
+    // Writes dump.csv now if it changed. False, with `error`, on a failure.
+    bool FlushDump(std::string *error);
+    [[nodiscard]] const DumpIndex &dump_index() const { return index_; }
+    [[nodiscard]] const std::string &stage() const { return stage_; }
+    static constexpr std::uint64_t kDumpSaveFlips = 600;
 
     // Where load and dump errors go (one line each); nothing by default.
     void SetLog(std::function<void(std::string_view)> log) { log_ = std::move(log); }
@@ -257,6 +280,10 @@ private:
     // hashed it (cleared at every run and every block transfer).
     std::uint32_t HashTexels(const ge::MemoryView &mem, const ge::SamplerState &st, HashType type);
     void Dump(const ReplacementKey &key, const ge::MemoryView &mem, const ge::SamplerState &st);
+    // F26b: counts a draw of `key` in dump.csv and dumps its PNG once.
+    void NoteDump(const ReplacementKey &key, const ge::MemoryView &mem, const ge::SamplerState &st,
+                  bool vram);
+    void RefreshStage();
     void Log(const std::string &line) const;
 
     std::vector<std::unique_ptr<ReplacementSet>> sets_;
@@ -279,6 +306,11 @@ private:
     std::uint64_t last_draw_flip_ = 0;
     std::function<void(std::string_view)> log_;
     Stats stats_;
+    // F26b.
+    DumpIndex index_;
+    std::function<std::string()> stage_source_;
+    std::string stage_;
+    std::uint64_t index_saved_flip_ = 0;
 };
 
 } // namespace mpo::texreplace

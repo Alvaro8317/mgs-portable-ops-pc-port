@@ -351,6 +351,37 @@ texture it draws into `<folder>`, named by its key, plus a `textures.ini`. Edit 
 to change and copy them, with the `textures.ini`, into the pack folder. The dumped textures are the
 game's art: keep them for yourself and only share PNGs you made.
 
+### Making an HD pack
+
+The dump also writes a `dump.csv`: for each texture, its size, format, the first stage it showed up
+in and how often it was drawn. Dump into the same folder over several play sessions and the numbers
+add up, so play the parts you want the pack to cover. Then use `texture_pack.py`, which comes with
+the port (`source\profiles\mpo\tools\` in the Windows ZIP). On Windows run it with the port's
+Python, `python\python.exe -I source\profiles\mpo\tools\texture_pack.py ...`; on Linux,
+`python3 -I profiles/mpo/tools/texture_pack.py ...`:
+
+1. **See where to start**: `texture_pack.py report <dump>` lists the textures drawn the most first
+   (the walls and floors you see all the time). `--sort stage` groups them by the stage where they
+   first appeared, `--sort size` puts the largest first, `--stage st02` shows only one stage and
+   `--limit 50` the first 50.
+2. **Scale them**: install an upscaler yourself, for example
+   [realesrgan-ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN/releases) (unpack it, its models
+   come with it), and run
+   `texture_pack.py upscale <dump> <pack> --scale 4 --realesrgan <path to realesrgan-ncnn-vulkan>`.
+   `--top 200`, `--stage st04vo` or `--min-uses 1000` scale only part of the dump; `--model` picks
+   another Real-ESRGAN model (`realesr-animevideov3` also does `--scale 2` and `3`). Any other tool
+   works too: put its command after `--`, with `{input}`, `{output}` and `{scale}` where it takes
+   them, for example `texture_pack.py upscale <dump> <pack> --scale 2 -- mytool -i {input} -o
+   {output} -s {scale}`. The PNGs keep their names and their transparency, and the pack gets the
+   dump's `textures.ini`. PNGs already in the pack are kept (`--overwrite` redoes them), so you can
+   stop and go on later.
+3. **Check the pack**: `texture_pack.py check <pack> <dump>` says if a PNG isn't a texture of the
+   dump, isn't a whole multiple of the original size (2×, 3×, 4×…, the same in both directions, at
+   most 4096), or if a name or the `textures.ini` is wrong.
+4. Copy the pack into the `textures` folder (or start the game with `--textures <pack>`).
+
+The scaled textures are still made from the game's art: don't share them either.
+
 ## If something goes wrong
 
 | What you see | What to do |

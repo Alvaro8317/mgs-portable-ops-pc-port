@@ -12,18 +12,23 @@
 //   draw the same bytes as before; a replacement is drawn texel for texel
 //   (CLUT4 swizzled icon, at its size and from a 4x PNG); the hot switch
 //   between two sets takes effect at the next list run;
-// - the dump: a PNG per key and a textures.ini, which then work as a pack.
+// - the dump: a PNG per key and a textures.ini, which then work as a pack;
+// - F26b: the dump's dump.csv (parse, write, add up over sessions, the stage,
+//   RAM and VRAM, framebuffers left out, the periodic save).
 // PNG files are written and read through SDL3 (png_io.hpp); without it,
 // those checks are skipped (and said so).
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "dump_index.hpp"
 #include "png_io.hpp"
 #include "texreplace_test_util.hpp"
 #include "texture_key.hpp"
@@ -277,6 +282,117 @@ std::vector<std::uint32_t> IconPixels(const Machine &m, int x0, int y0) {
     return px;
 }
 
+// ---- F26b: dump.csv ----
+
+std::string ReadText(const std::filesystem::path &path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+void TestDumpIndex() {
+    // The stage of a module's path.
+    expect(tr::DumpIndex::StageFromModulePath("disc0:/PSP_GAME/USRDIR/stage/st04vo/st04vo.prx") ==
+               "st04vo",
+           "stage from a disc0 path");
+    expect(tr::DumpIndex::StageFromModulePath("umd0:stage/init/init.prx") == "init",
+           "stage after a device name");
+    expect(tr::DumpIndex::StageFromModulePath("C:\\game\\stage\\r_main01\\r_main01.prx") ==
+               "r_main01",
+           "stage from a Windows path");
+    expect(tr::DumpIndex::StageFromModulePath("disc0:/PSP_GAME/USRDIR/modules/kjfs.prx").empty(),
+           "a module that is not a stage");
+    expect(tr::DumpIndex::StageFromModulePath("disc0:/backstage/x/y.prx").empty(),
+           "\"stage/\" must be a whole folder name");
+    expect(tr::DumpIndex::StageFromModulePath("disc0:/stage/st04vo").empty(),
+           "a stage folder without a file");
+    expect(tr::DumpIndex::StageFromModulePath("disc0:/stage/a b,c/x.prx").empty(),
+           "a name with other characters is not a stage name");
+    expect(tr::DumpIndex::StageFromModulePath("disc0:/stage/old/stage/st02/st02.prx") == "st02",
+           "the last stage/ folder");
+
+    // Note: sizes, format, memory, first stage, stages, uses and frames.
+    const tr::ReplacementKey a{0x0000000009f357c0ull, 0x0cdcc7e2u};
+    const tr::ReplacementKey b{0x00000000000a0104ull, 0x12345678u};
+    tr::DumpIndex index;
+    index.Note(a, 32, 16, mpo::ge::TexFormat::kClut4, tr::DumpIndex::kRam, "", 0);
+    index.Note(a, 32, 16, mpo::ge::TexFormat::kClut4, tr::DumpIndex::kRam, "st04vo", 0);
+    index.Note(a, 32, 16, mpo::ge::TexFormat::kClut4, tr::DumpIndex::kVram, "st04vo", 1);
+    index.Note(a, 32, 16, mpo::ge::TexFormat::kClut4, tr::DumpIndex::kRam, "briefing", 1);
+    index.Note(a, 32, 16, mpo::ge::TexFormat::kClut4, tr::DumpIndex::kRam, "st04vo", 2);
+    index.Note(b, 128, 64, mpo::ge::TexFormat::kDxt5, tr::DumpIndex::kVram, "st02", 7);
+    expect(index.size() == 2 && index.dirty(), "two keys, not written yet");
+    const tr::DumpIndex::Entry *ea = index.Find(a);
+    expect(ea != nullptr && ea->uses == 5 && ea->frames == 3, "uses count draws, frames flips");
+    expect(ea != nullptr && ea->first_stage.empty(), "first drawn before any stage");
+    expect(ea != nullptr && ea->stages == std::vector<std::string>{"st04vo", "briefing"},
+           "the stages in the order they were met");
+    expect(ea != nullptr && ea->memory == (tr::DumpIndex::kRam | tr::DumpIndex::kVram),
+           "RAM and VRAM");
+    const std::string text = index.Serialize();
+    const std::string expected =
+        "key,width,height,format,memory,first_stage,stages,uses,frames\n"
+        "00000000000a010412345678,128,64,DXT5,vram,st02,st02,1,1\n"
+        "0000000009f357c00cdcc7e2,32,16,CLUT4,ram+vram,,st04vo;briefing,5,3\n";
+    expect(text == expected, "the file text:\n" + text);
+
+    // Parse gives the same file back; Save and Load too.
+    tr::DumpIndex back;
+    std::string error;
+    expect(back.Parse(text, &error), "the file parses: " + error);
+    expect(back.Serialize() == text && !back.dirty(), "and serializes the same");
+    expect(back.Parse("\xEF\xBB\xBF" + text, &error) == false, "a BOM is not the header");
+    expect(back.Parse(text, &error), "parses again");
+    std::string crlf;
+    for (char c : text) crlf += c == '\n' ? std::string("\r\n") : std::string(1, c);
+    tr::DumpIndex from_crlf;
+    expect(from_crlf.Parse(crlf, &error) && from_crlf.Serialize() == text, "CRLF lines");
+    const std::filesystem::path dir = FreshDir("mpo_texreplace_test_index");
+    tr::DumpIndex loaded;
+    expect(loaded.Load(dir, &error) && loaded.size() == 0, "no dump.csv: an empty index");
+    expect(index.Save(dir, &error) && !index.dirty(), "saved: " + error);
+    expect(!std::filesystem::exists(dir / "dump.csv.tmp"), "no temporary file left");
+    expect(ReadText(dir / "dump.csv") == text, "the file on disk");
+    expect(loaded.Load(dir, &error) && loaded.Serialize() == text, "loaded back: " + error);
+    // Adding up: another session over the loaded rows.
+    loaded.Note(a, 32, 16, mpo::ge::TexFormat::kClut4, tr::DumpIndex::kRam, "st02", 0);
+    loaded.Note(a, 32, 16, mpo::ge::TexFormat::kClut4, tr::DumpIndex::kRam, "st02", 0);
+    const tr::DumpIndex::Entry *la = loaded.Find(a);
+    expect(la != nullptr && la->uses == 7 && la->frames == 4 && la->first_stage.empty() &&
+               la->stages.size() == 3 && la->stages[2] == "st02",
+           "a later session adds its uses, frames and stages");
+
+    // Untrusted input: every malformed file is refused.
+    const std::string header = "key,width,height,format,memory,first_stage,stages,uses,frames\n";
+    const char *bad_rows[] = {
+        "0000000009f357c00cdcc7e2,32,16,CLUT4,ram,,,1\n",             // 8 fields
+        "0000000009F357C00CDCC7E2,32,16,CLUT4,ram,,,1,1\n",           // upper case
+        "0000000009f357c00cdcc7e,32,16,CLUT4,ram,,,1,1\n",            // 23 digits
+        "0000000009f357c00cdcc7e2,0,16,CLUT4,ram,,,1,1\n",            // width 0
+        "0000000009f357c00cdcc7e2,32,4097,CLUT4,ram,,,1,1\n",         // too tall
+        "0000000009f357c00cdcc7e2,32,16,CLUT2,ram,,,1,1\n",           // format
+        "0000000009f357c00cdcc7e2,32,16,CLUT4,edram,,,1,1\n",         // memory
+        "0000000009f357c00cdcc7e2,32,16,CLUT4,ram,a b,,1,1\n",        // stage
+        "0000000009f357c00cdcc7e2,32,16,CLUT4,ram,,st02;;st03,1,1\n", // empty stage
+        "0000000009f357c00cdcc7e2,32,16,CLUT4,ram,,st02;st02,1,1\n",  // twice
+        "0000000009f357c00cdcc7e2,32,16,CLUT4,ram,,,-1,1\n",          // negative
+        "0000000009f357c00cdcc7e2,32,16,CLUT4,ram,,,99999999999999999999,1\n",
+        ("0000000009f357c00cdcc7e2,32,16,CLUT4,ram,,,1,1\n"
+         "0000000009f357c00cdcc7e2,32,16,CLUT4,ram,,,1,1\n"), // the same key twice
+    };
+    for (const char *row : bad_rows) {
+        tr::DumpIndex bad;
+        bad.Note(a, 1, 1, mpo::ge::TexFormat::k8888, tr::DumpIndex::kRam, "", 0);
+        expect(!bad.Parse(header + row, &error), std::string("refused: ") + row);
+        expect(bad.size() == 1, "a refused file leaves the index as it was");
+    }
+    tr::DumpIndex bad;
+    expect(!bad.Parse("key,width\n", &error), "another header is refused");
+    expect(bad.Parse("", &error) && bad.size() == 0, "an empty file is an empty index");
+    std::ofstream(dir / "dump.csv", std::ios::binary) << "garbage\n";
+    expect(!bad.Load(dir, &error) && error.find("dump.csv") != std::string::npos,
+           "Load names the file it refused: " + error);
+}
+
 void TestSoftgpu() {
     ListBuilder lb;
     lb.Clear(0xFF402010);
@@ -395,6 +511,7 @@ void TestSoftgpu() {
         Machine dm;
         tr::TextureReplacer dumper;
         expect(dumper.SetDumpDir(dump, &error), "dump dir: " + error);
+        dumper.SetStageSource([] { return std::string("st04vo"); });
         dm.ge.SetTextureProvider(&dumper);
         expect(dm.Run(lb), "dump list runs");
         expect(dm.vram == plain.vram, "dumping changes nothing on screen");
@@ -411,12 +528,62 @@ void TestSoftgpu() {
         expect(tr::LoadPng(dump / (tr::HashName(icon) + ".png"), &w, &h, &back, &error) &&
                    w == 32 && h == 16,
                "the dumped icon reads back");
+        // F26b: dump.csv, written on FlushDump.
+        expect(!std::filesystem::exists(dump / "dump.csv"), "dump.csv waits for a flush");
+        expect(dumper.FlushDump(&error), "flush: " + error);
+        tr::DumpIndex first;
+        expect(first.Load(dump, &error) && first.size() == 2, "dump.csv has the two keys");
+        const tr::DumpIndex::Entry *ie = first.Find(icon);
+        expect(ie != nullptr && ie->width == 32 && ie->height == 16 && ie->format == "CLUT4" &&
+                   ie->memory == tr::DumpIndex::kRam && ie->first_stage == "st04vo" &&
+                   ie->stages == std::vector<std::string>{"st04vo"} && ie->uses == 2 &&
+                   ie->frames == 1,
+               "the icon's row: 32x16 CLUT4 in RAM, st04vo, 2 draws in 1 frame:\n" +
+                   ReadText(dump / "dump.csv"));
+        const tr::DumpIndex::Entry *re = first.Find(rgba_key);
+        expect(re != nullptr && re->width == 16 && re->height == 16 && re->format == "8888" &&
+                   re->uses == 1,
+               "the 8888 texture's row");
         Machine again;
-        tr::TextureReplacer dumper2;
-        expect(dumper2.SetDumpDir(dump, &error), "dump dir again");
-        again.ge.SetTextureProvider(&dumper2);
-        again.Run(lb);
-        expect(dumper2.stats().dumped == 0, "keys already dumped are not written again");
+        {
+            tr::TextureReplacer dumper2;
+            expect(dumper2.SetDumpDir(dump, &error), "dump dir again");
+            expect(dumper2.dump_index().size() == 2, "the second session starts from dump.csv");
+            // A stage source with a name that is not a stage name: none.
+            std::string stage = "bad name";
+            dumper2.SetStageSource([&stage] { return stage; });
+            again.ge.SetTextureProvider(&dumper2);
+            again.Run(lb);
+            dumper2.Flip(nullptr);
+            stage = "briefing";
+            again.Run(lb);
+            expect(dumper2.stats().dumped == 0, "keys already dumped are not written again");
+            again.ge.SetTextureProvider(nullptr);
+        } // written when the replacer goes away
+        tr::DumpIndex second;
+        expect(second.Load(dump, &error) && second.size() == 2, "still two keys");
+        ie = second.Find(icon);
+        expect(ie != nullptr && ie->uses == 6 && ie->frames == 3 && ie->first_stage == "st04vo" &&
+                   ie->stages == std::vector<std::string>{"st04vo", "briefing"},
+               "the sessions add up:\n" + ReadText(dump / "dump.csv"));
+        // The periodic save, every kDumpSaveFlips flips while it changes.
+        const std::filesystem::path periodic = FreshDir("mpo_texreplace_test_periodic");
+        tr::TextureReplacer dumper3;
+        expect(dumper3.SetDumpDir(periodic, &error), "periodic dump dir");
+        Machine pm;
+        pm.ge.SetTextureProvider(&dumper3);
+        pm.Run(lb);
+        for (std::uint64_t i = 1; i < tr::TextureReplacer::kDumpSaveFlips; ++i)
+            dumper3.Flip(nullptr);
+        expect(!std::filesystem::exists(periodic / "dump.csv"), "not before kDumpSaveFlips");
+        dumper3.Flip(nullptr);
+        expect(std::filesystem::exists(periodic / "dump.csv"), "written after kDumpSaveFlips");
+        // A dump.csv it cannot read: the dump does not start.
+        const std::filesystem::path broken_csv = FreshDir("mpo_texreplace_test_badcsv");
+        std::ofstream(broken_csv / "dump.csv", std::ios::binary) << "not,a,dump\n";
+        tr::TextureReplacer dumper4;
+        expect(!dumper4.SetDumpDir(broken_csv, &error), "a bad dump.csv stops the dump");
+        expect(ReadText(broken_csv / "dump.csv") == "not,a,dump\n", "and is left as it was");
     }
     auto dumped_set = tr::ReplacementSet::Load(dump, &error);
     expect(dumped_set != nullptr && dumped_set->size() == 2, "the dump loads as a pack");
@@ -545,6 +712,33 @@ void TestVram() {
     {
         Machine m;
         expect(ProbeFirst(m, ram_list) == kv, "RAM and VRAM copies share the content key");
+    }
+    // F26b: dump.csv says where the texels were: VRAM, then RAM too.
+    if (tr::HavePng()) {
+        const std::filesystem::path dir = FreshDir("mpo_texreplace_test_vram_dump");
+        std::string error;
+        {
+            tr::TextureReplacer dumper;
+            expect(dumper.SetDumpDir(dir, &error), "VRAM dump dir: " + error);
+            Machine m;
+            m.CopyToVram(kVramTex, kRgbaAddr);
+            m.ge.SetTextureProvider(&dumper);
+            expect(m.Run(vram_list), "VRAM dump list runs");
+            expect(dumper.dump_index().Find(kv) != nullptr &&
+                       dumper.dump_index().Find(kv)->memory == tr::DumpIndex::kVram,
+                   "dumped from VRAM");
+            Machine r;
+            r.ge.SetTextureProvider(&dumper);
+            expect(r.Run(ram_list), "RAM dump list runs");
+            const tr::DumpIndex::Entry *e = dumper.dump_index().Find(kv);
+            expect(e != nullptr && e->memory == (tr::DumpIndex::kRam | tr::DumpIndex::kVram) &&
+                       e->uses == 2,
+                   "the same key from RAM too");
+        }
+        tr::DumpIndex back;
+        expect(back.Load(dir, &error) && back.size() == 1 &&
+                   ReadText(dir / "dump.csv").find(",ram+vram,") != std::string::npos,
+               "ram+vram in the file:\n" + ReadText(dir / "dump.csv"));
     }
 
     // B: a texture taken from a render target is never replaced, even when
@@ -727,6 +921,7 @@ int main() {
     TestIni();
     TestLookup();
     TestScale();
+    TestDumpIndex();
     TestSoftgpu();
     TestVram();
     if (g_failures != 0) {

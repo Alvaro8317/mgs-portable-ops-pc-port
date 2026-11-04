@@ -135,7 +135,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F25c | Reemplazo de texturas en VRAM, texturas HD (autónomo) | M7 | ✅ hecha (ola 7; sin framebuffers ni video, en softgpu y Vulkan; las pruebas en el juego y el coste: pendientes del usuario) |
 | F25d | El launcher en inglés y en español (autónomo) | M7 | ✅ hecha (ola 7; el idioma del sistema o `language` en `settings.toml`, la salida de `setup.py` en inglés; probar en Windows y en la Steam Deck con mando: pendiente del usuario) |
 | F26a | Texturas HD que se ven bien: mipmaps, carga sin tirones, recarga y `[filtering]` (autónomo) | M7 | 🟨 en curso (ola 8) |
-| F26b | Herramientas para armar packs HD (autónomo) | M7 | 🟨 en curso (ola 8) |
+| F26b | Herramientas para armar packs HD (autónomo) | M7 | ✅ hecha (ola 8; `dump.csv` en el volcado y `texture_pack.py` con `report`, `upscale` y `check`; un volcado de la primera misión con su reporte y un pack escalado con Real-ESRGAN: pendientes del usuario) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
 Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se explica en la nota de sesión).
