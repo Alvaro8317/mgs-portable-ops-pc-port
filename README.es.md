@@ -185,7 +185,8 @@ cambio se guarda en el acto y vale desde la próxima vez que pulses **Play**:
 - **Resolution**: la resolución interna del juego, de 1x (los 480x272 de la PSP) a 8x
   (3840x2176). Solo con Vulkan. Una más alta se ve más nítida y le pide más a la GPU.
 - **Window**: el tamaño de la ventana, de 1x (480x272) a 8x. Se puede seguir cambiando a mano.
-- **Fullscreen**: pantalla completa sin bordes, a la resolución del escritorio.
+- **Fullscreen**: pantalla completa sin bordes, a la resolución del escritorio. **F11** o
+  **Alt+Enter** también la cambian mientras juegas.
 
 Se guardan en `settings.toml`, junto a `input.toml` (ver [Cambiar los
 controles](#cambiar-los-controles)):
@@ -223,6 +224,10 @@ En los menús del juego se confirma con **Círculo** y se vuelve con **Cruz**, c
 
 **El mouse puede girar la cámara**: haz clic en la ventana del juego para capturar el mouse y
 muévelo a la izquierda y a la derecha. **F1** (o cambiar a otra ventana) lo suelta.
+
+**F11** o **Alt+Enter** cambian entre la ventana y la pantalla completa mientras juegas. El juego no
+ve esas teclas: Alt+Enter no aprieta Start, aunque Enter sea Start. Para empezar en pantalla
+completa, usa **Fullscreen** en [Ajustes](#ajustes).
 
 Cuando el juego te pide escribir algo (un nombre, una contraseña), escríbelo con el teclado.
 Retroceso borra, Enter termina y Esc cancela.
