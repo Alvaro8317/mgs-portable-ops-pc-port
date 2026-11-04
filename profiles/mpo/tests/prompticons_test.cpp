@@ -657,7 +657,6 @@ void Show() {
     }
 }
 
-
 // F25c's hooks reach the provider behind the icons (its framebuffer and
 // video exclusions depend on them).
 class HookCounter final : public mpo::ge::TextureProvider {

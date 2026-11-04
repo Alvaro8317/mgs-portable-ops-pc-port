@@ -108,7 +108,7 @@ void test_settings_in_status() {
     check(status.has_value(), "settings status parses");
     if (!status) return;
     check(status->settings_file == "/home/p/.config/mpo-pc-port/settings.toml", "settings file");
-    const GameSettings expected{"soft", 4, 3, true, "es"};
+    const GameSettings expected{"soft", 4, 3, true, "native", "es"};
     check(status->settings == expected, "settings values");
     check(status->settings_notices.size() == 1u &&
               status->settings_notices[0].find("window_scale") != std::string::npos,

@@ -601,7 +601,7 @@ int main(int argc, char **argv) {
     std::string check_overlay;
     std::string textures_dir; // empty: the default folder; "none": off
     std::string dump_textures_dir;
-    std::string aspect_option; // empty: native (or the recording's)
+    std::string aspect_option;                // empty: native (or the recording's)
     std::string prompt_icons_option = "auto"; // auto, off or a folder
     // Every option takes a value: a word left over is a mistake, not ignored
     // (F19: a whole --press list quoted as one word went unnoticed).

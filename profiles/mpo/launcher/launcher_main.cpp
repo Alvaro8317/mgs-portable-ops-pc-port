@@ -703,8 +703,8 @@ struct Launcher {
                 if (!native) ImGui::SameLine();
                 const bool chosen = settings.aspect == choice.value;
                 preset = preset || chosen;
-                const std::string text =
-                    native ? label(Text::kAspectNative, "aspect-native") : std::string(choice.label);
+                const std::string text = native ? label(Text::kAspectNative, "aspect-native")
+                                                : std::string(choice.label);
                 if (ImGui::RadioButton(text.c_str(), chosen)) settings.aspect = choice.value;
             }
             if (!preset) {
