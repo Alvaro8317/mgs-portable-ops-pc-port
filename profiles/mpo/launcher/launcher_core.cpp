@@ -302,6 +302,8 @@ std::optional<InstallStatus> parse_status(std::string_view json) {
     status.stages_optimized = int_field(*root, "stages_optimized", 0);
     status.stages_quick_only = int_field(*root, "stages_quick_only", 0);
     status.settings_file = string_field(*root, "settings_file");
+    status.texture_pack_dir = string_field(*root, "texture_pack_dir");
+    status.texture_pack_found = bool_field(*root, "texture_pack_found");
     if (const JsonValue *settings = root->find("settings");
         settings != nullptr && settings->kind == JsonValue::Kind::kObject)
         status.settings = parse_settings(*settings);
@@ -330,6 +332,9 @@ GameSettings parse_settings(const JsonValue &object) {
     if (const std::string language = string_field(object, "language");
         valid_language_setting(language))
         settings.language = language;
+    if (const JsonValue *pack = object.find("texture_pack");
+        pack != nullptr && pack->kind == JsonValue::Kind::kBool)
+        settings.texture_pack = pack->boolean;
     return settings;
 }
 
@@ -371,6 +376,8 @@ std::string format_settings(const GameSettings &settings) {
                   "# \"native\" (16:9), or \"<width>:<height>\" wider (\"64:27\": 2560x1080).\n"
                   "# Wider, the 3D shows more at the sides and the HUD is stretched.\n"
                   "aspect = \"%s\"\n"
+                  "# Use the texture pack in the textures folder, if there is one.\n"
+                  "texture_pack = %s\n"
                   "# The launcher's language: \"auto\" (the system's), \"en\" or \"es\".\n"
                   "language = \"%s\"\n",
                   settings.renderer == "soft" ? "soft" : "vulkan", GameSettings::kMaxRenderScale,
@@ -379,6 +386,7 @@ std::string format_settings(const GameSettings &settings) {
                   std::clamp(settings.window_scale, 1, GameSettings::kMaxWindowScale),
                   settings.fullscreen ? "true" : "false",
                   valid_aspect(settings.aspect) ? settings.aspect.c_str() : "native",
+                  settings.texture_pack ? "true" : "false",
                   valid_language_setting(settings.language) ? settings.language.c_str()
                                                             : kLanguageAuto.data());
     return text;

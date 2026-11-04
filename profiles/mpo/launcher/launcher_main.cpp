@@ -731,8 +731,32 @@ struct Launcher {
             ImGui::TableNextColumn();
             ImGui::TableNextColumn();
             ImGui::TextDisabled("%s", tr(Text::kAspectNote));
+
+            // The texture pack (F24c/F25c): on by default, off plays with the
+            // game's own textures (--textures none).
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(tr(Text::kTexturePack));
+            ImGui::TableNextColumn();
+            if (ImGui::RadioButton(label(Text::kTexturePackOn, "pack-on").c_str(),
+                                   settings.texture_pack))
+                settings.texture_pack = true;
+            ImGui::SameLine();
+            if (ImGui::RadioButton(label(Text::kTexturePackOff, "pack-off").c_str(),
+                                   !settings.texture_pack))
+                settings.texture_pack = false;
             ImGui::EndDisabled();
             ImGui::EndTable();
+        }
+        if (!status->texture_pack_dir.empty()) {
+            // Below the table: the folder is often too long for its column.
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("%s", trf(status->texture_pack_found ? Text::kTexturePackFound
+                                                                    : Text::kTexturePackMissing,
+                                         {status->texture_pack_dir})
+                                         .c_str());
+            ImGui::PopStyleColor();
         }
         commit_settings(settings);
         if (!settings_error.empty())

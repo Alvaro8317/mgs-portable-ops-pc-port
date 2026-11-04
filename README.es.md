@@ -204,6 +204,9 @@ acto):
   3440x1440) o 32:9. Más ancho que 16:9, el 3D muestra más a los lados, como el cheat de
   widescreen de PPSSPP con "Stretch"; el HUD y los menús salen estirados, y los videos se quedan en
   16:9 con barras negras a los lados. No cambia cómo se juega.
+- **Pack de texturas**: **Usarlo si hay uno** (por defecto) o **Las texturas del juego**. Un pack HD
+  se ve mejor y le pide más a la GPU y a la memoria; esto lo apaga sin borrarlo (ver [Packs de
+  texturas](#packs-de-texturas)).
 
 Se guardan en `settings.toml`, junto a `input.toml` (ver [Cambiar los
 controles](#cambiar-los-controles)):
@@ -214,6 +217,7 @@ render_scale = 1      # de 1 a 8
 window_scale = 2      # de 1 a 8
 fullscreen = false
 aspect = "native"     # o "<ancho>:<alto>", como "64:27" (2560x1080) o "32:9"
+texture_pack = true   # false: las texturas del juego, aunque haya un pack
 language = "auto"     # o "en", "es"
 ```
 

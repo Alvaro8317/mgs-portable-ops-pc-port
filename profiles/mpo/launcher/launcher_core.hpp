@@ -66,6 +66,10 @@ struct GameSettings {
     // F25d: the launcher's language, "auto" (the system's), "en" or "es"
     // (launcher_text.hpp). mpo_boot gets nothing from it.
     std::string language{"auto"};
+    // The texture pack in the default folder is used when there is one;
+    // false plays with the game's textures (--textures none). Last, so the
+    // positional initializers of the earlier fields stay as they were.
+    bool texture_pack{true};
 
     bool operator==(const GameSettings &) const = default;
 };
@@ -124,6 +128,10 @@ struct InstallStatus {
     std::string settings_file;
     GameSettings settings;
     std::vector<std::string> settings_notices;
+    // Where mpo_boot looks for a texture pack (<data>/textures) and whether
+    // it has a textures.ini.
+    std::string texture_pack_dir;
+    bool texture_pack_found{};
 };
 
 std::optional<InstallStatus> parse_status(std::string_view json);

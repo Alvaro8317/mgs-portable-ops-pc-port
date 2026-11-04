@@ -71,6 +71,8 @@ The settings (F24a) are <config>/settings.toml, next to input.toml:
   fullscreen = false    # borderless, at the desktop's resolution
   aspect = "native"     # or "<width>:<height>" wider than 16:9 ("21:9", "32:9"):
                         # the 3D shows more at the sides, the HUD is stretched
+  texture_pack = true   # use the texture pack in <data>/textures if there is
+                        # one; false plays with the game's own textures
   language = "auto"     # the launcher's (F25d): "auto" (the system's), "en", "es"
 
 `play` turns them into mpo_boot options. A missing file means the defaults
@@ -129,6 +131,9 @@ DEFAULT_SETTINGS = {
     'window_scale': 2,
     'fullscreen': False,
     'aspect': 'native',
+    # A texture pack in the default folder is used when it is there; false
+    # passes --textures none (HD packs ask more of the GPU and the memory).
+    'texture_pack': True,
     # The launcher's language (F25d): "auto" follows the system's locale.
     # mpo_boot gets nothing from it, and setup.py itself prints English.
     'language': 'auto',
@@ -223,6 +228,23 @@ def default_data_dir(environ=None, system=None):
   return pathlib.Path(base) / 'mpo-pc-port' / 'install'
 
 
+def user_data_dir(environ=None, system=None):
+  """The player's data folder: saves (ms0) and the texture pack (textures).
+
+  The same as mpo_boot's (host/savedata/save_paths.cpp, default_data_dir); not
+  the install folder (default_data_dir), which is LOCALAPPDATA on Windows.
+  """
+  environ = os.environ if environ is None else environ
+  system = platform.system() if system is None else system
+  if system == 'Windows':
+    base = environ.get('APPDATA') or str(pathlib.Path.home() / 'AppData' / 'Roaming')
+    return pathlib.Path(base) / 'mpo-pc-port'
+  base = environ.get('XDG_DATA_HOME')
+  if not base or not pathlib.PurePosixPath(base).is_absolute():
+    base = str(pathlib.Path(environ.get('HOME') or pathlib.Path.home()) / '.local' / 'share')
+  return pathlib.Path(base) / 'mpo-pc-port'
+
+
 def default_config_dir(environ=None, system=None):
   """The folder of input.toml and settings.toml.
 
@@ -258,7 +280,7 @@ def _valid_setting(key, value):
     return valid_aspect(value)
   if key == 'renderer':
     return isinstance(value, str) and value in _RENDERERS
-  if key == 'fullscreen':
+  if key in ('fullscreen', 'texture_pack'):
     return isinstance(value, bool)
   if key == 'language':
     return isinstance(value, str) and value in _LANGUAGES
@@ -273,6 +295,7 @@ _SETTING_RANGES = {
     'window_scale': f'1 to {_MAX_WINDOW_SCALE}',
     'fullscreen': 'true or false',
     'aspect': '"native" or "<width>:<height>" from 16:9 to 4:1',
+    'texture_pack': 'true or false',
     'language': ' or '.join(f'"{lang}"' for lang in _LANGUAGES),
 }
 
@@ -336,6 +359,8 @@ def settings_options(settings, extra=(), environ=None):
   # Only when it is not the default, so the default command line stays as it was.
   if '--aspect' not in given and settings['aspect'] != 'native':
     options += ['--aspect', settings['aspect']]
+  if '--textures' not in given and not settings['texture_pack']:
+    options += ['--textures', 'none']
   return options
 
 
@@ -1300,6 +1325,9 @@ class Setup:
         'settings_file': str(self.settings_path),
         'settings': settings,
         'settings_notices': notices,
+        # Where mpo_boot looks for a texture pack, and whether one is there.
+        'texture_pack_dir': str(user_data_dir() / 'textures'),
+        'texture_pack_found': (user_data_dir() / 'textures' / 'textures.ini').is_file(),
     }
 
 

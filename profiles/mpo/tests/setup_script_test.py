@@ -200,7 +200,8 @@ class SettingsTest(unittest.TestCase):
     self.assertEqual(notices, [])
     self.assertEqual(setup.DEFAULT_SETTINGS, {'renderer': 'vulkan', 'render_scale': 1,
                                               'window_scale': 2, 'fullscreen': False,
-                                              'aspect': 'native', 'language': 'auto'})
+                                              'aspect': 'native', 'texture_pack': True,
+                                              'language': 'auto'})
 
   def test_reads_what_the_launcher_writes(self):
     # launcher_core_test.cpp checks that format_settings writes exactly this.
@@ -208,7 +209,8 @@ class SettingsTest(unittest.TestCase):
     settings, notices = setup.load_settings(golden)
     self.assertEqual(notices, [])
     self.assertEqual(settings, {'renderer': 'vulkan', 'render_scale': 4, 'window_scale': 3,
-                                'fullscreen': True, 'aspect': '64:27', 'language': 'es'})
+                                'fullscreen': True, 'aspect': '64:27', 'texture_pack': False,
+                                'language': 'es'})
     # And as a Windows checkout may leave it.
     crlf = golden.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
     self.assertEqual(self.load(crlf), (settings, []))
@@ -266,6 +268,17 @@ class SettingsTest(unittest.TestCase):
     self.assertEqual(self.options({'aspect': '64:27'})[-2:], ['--aspect', '64:27'])
     self.assertEqual(self.options({'aspect': '64:27'}, ['--aspect', '32:9']).count('--aspect'),
                      0)
+
+  def test_texture_pack(self):
+    # On by default, and then nothing goes to mpo_boot (it finds the pack itself).
+    self.assertNotIn('--textures', self.options())
+    self.assertEqual(self.options({'texture_pack': False})[-2:], ['--textures', 'none'])
+    self.assertNotIn('none', self.options({'texture_pack': False}, ['--textures', 'my-pack']))
+    settings, notices = self.load('texture_pack = false\n')
+    self.assertEqual((settings['texture_pack'], notices), (False, []))
+    settings, notices = self.load('texture_pack = "no"\n')
+    self.assertTrue(settings['texture_pack'])
+    self.assertEqual(len(notices), 1)
 
   def test_types_toml_could_confuse(self):
     # true is a Python int; 2.0 and "2" are not integers; a table is not a value.
@@ -585,6 +598,16 @@ class BuildFolderTest(unittest.TestCase):
       self.assertEqual(target.read_bytes(), b'new', 'the loaded library stays')
       self.assertEqual(sorted(p.name for p in root.iterdir()), ['built.dll', target.name],
                        'no .tmp left behind')
+
+  def test_user_data_dir(self):
+    self.assertEqual(setup.user_data_dir({'APPDATA': r'C:\Users\p\AppData\Roaming'}, 'Windows'),
+                     pathlib.Path(r'C:\Users\p\AppData\Roaming') / 'mpo-pc-port')
+    self.assertEqual(setup.user_data_dir({'HOME': '/home/p'}, 'Linux'),
+                     pathlib.Path('/home/p/.local/share/mpo-pc-port'))
+    self.assertEqual(setup.user_data_dir({'HOME': '/home/p', 'XDG_DATA_HOME': '/d'}, 'Linux'),
+                     pathlib.Path('/d/mpo-pc-port'))
+    self.assertEqual(setup.user_data_dir({'HOME': '/home/p', 'XDG_DATA_HOME': 'rel'}, 'Linux'),
+                     pathlib.Path('/home/p/.local/share/mpo-pc-port'), 'relative XDG ignored')
 
   def test_source_fingerprint(self):
     with tempfile.TemporaryDirectory() as tmp:

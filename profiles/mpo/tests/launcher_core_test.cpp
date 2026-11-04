@@ -119,6 +119,16 @@ void test_settings_in_status() {
               old->settings_notices.empty(),
           "no settings: defaults");
     check(!old->update_needed, "no update_needed: not needed");
+    check(old->settings.texture_pack && old->texture_pack_dir.empty() && !old->texture_pack_found,
+          "texture pack: on by default, nothing known");
+    const auto pack = parse_status(R"({"settings": {"texture_pack": false},
+                                       "texture_pack_dir": "/d/textures",
+                                       "texture_pack_found": true})");
+    check(pack && !pack->settings.texture_pack && pack->texture_pack_dir == "/d/textures" &&
+              pack->texture_pack_found,
+          "texture pack in the status");
+    const auto pack_bad = parse_status(R"({"settings": {"texture_pack": "no"}})");
+    check(pack_bad && pack_bad->settings.texture_pack, "texture pack: invalid is on");
     const auto update = parse_status(R"({"playable": true, "update_needed": true})");
     check(update && update->playable && update->update_needed, "update_needed (F25)");
     const auto bad = parse_status(R"({"settings": {"renderer": "opengl", "render_scale": 9,
@@ -156,7 +166,7 @@ std::string read_text(const fs::path &path) {
 void test_settings_file(const fs::path &tmp, const fs::path &golden) {
     // setup_script_test.py reads the same golden file with setup.py's
     // load_settings: what the launcher writes is what play reads.
-    const GameSettings settings{"vulkan", 4, 3, true, "64:27", "es"};
+    const GameSettings settings{"vulkan", 4, 3, true, "64:27", "es", false};
     const std::string text = format_settings(settings);
     check(text == read_text(golden), "format_settings matches settings_golden.txt");
     check(format_settings(GameSettings{}).find("render_scale = 1\nwindow_scale") ==
