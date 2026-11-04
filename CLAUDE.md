@@ -216,7 +216,9 @@ los hilos y fibras, en vez de depender de `ulimit`.
     confirma" (F18b [V]);
   - sin las PGF del firmware, PPGe dibuja con una fuente libre de respaldo (GNU FreeFont
     FreeSans, una tabla de glifos generada en `mpo_font`). `sceFont` sigue necesitando las PGF: sin
-    ellas solo falta el aviso "Checking Memory Stick" (F23c [V]).
+    ellas solo falta el aviso "Checking Memory Stick" (F23c [V]);
+  - los diálogos del sistema muestran los botones del último dispositivo: teclado, o un mando de
+    Xbox, PlayStation, Nintendo o genérico, según el `input.toml` activo (`--prompts`, F24b [V]).
 
 **Red (no hace falta para jugar):**
 - `sceNetAdhoc*`, `sceNetApctl*`, `sceHttp*`, `sceNpAuth`.
@@ -397,6 +399,9 @@ audio/video/saves de 1 a 2 meses) es lo que más pesa.
     cada 60 flips y la `ms0` del arranque; `--replay-input` la repite y comprueba los hashes
     (F19). Una grabación hecha en la ventana, en tiempo real y con Vulkan se repite sin ventana
     idéntica con softgpu.
+  - Un registro `p <muestra> <juego>` guarda cada cambio de los botones en pantalla, con las
+    etiquetas completas, así que la repetición no depende del `input.toml` de la máquina. Las
+    grabaciones sin `p` usan los de la PSP (F24b).
   - Las partidas se juegan por tramos que se encadenan con los saves del juego:
     `analysis/f21/play.sh <nombre> <carpeta ms0 anterior>` (F21).
   - **En WSL, Vulkan corre en `llvmpipe`** (por software, sin la GPU), y en las misiones pesadas no

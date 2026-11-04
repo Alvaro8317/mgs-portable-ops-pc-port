@@ -126,7 +126,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F23b | Resolución interna configurable, hasta 4K (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; `--render-scale 1..8`; la prueba con GPU real en Windows y el selector del launcher: pendientes) |
 | F23c | Fuente libre de respaldo para los diálogos (autónomo) | M7 | ✅ hecha (ola 5; integrada el 2026-11-03; `sceFont` sigue necesitando las PGF; Windows sin fuentes: pendiente del usuario) |
 | F24a | Ajustes del juego en el launcher (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; probar `--fullscreen` en el juego y el launcher con mando: pendiente del usuario) |
-| F24b | Controles en pantalla según el dispositivo, parte I (autónomo) | M7 | 🟨 en curso (ola 6) |
+| F24b | Controles en pantalla según el dispositivo, parte I (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; `--prompts`, los diálogos del sistema; probar con mandos reales: pendiente del usuario) |
 | F24c | Reemplazo de texturas por hash (autónomo) | M7 | 🟨 en curso (ola 6) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
