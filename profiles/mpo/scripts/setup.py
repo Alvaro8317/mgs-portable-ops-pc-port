@@ -426,6 +426,48 @@ def same_path(a, b):
   return norm(a) == norm(b)
 
 
+# What `source_fingerprint` leaves out: what mpo_boot is not built from, and
+# the local folders of a checkout (CLAUDE.md §1), which can be huge.
+_FINGERPRINT_SKIP_DIRS = frozenset(('.git', '.github', '.claude', '__pycache__', 'docs', 'tests',
+                                    'analysis', 'game', 'generated', 'progress'))
+
+
+def source_fingerprint(root=None):
+  """A digest of the port's source files (names, sizes and dates).
+
+  `install` keeps it with mpo_boot. A new release unpacked over the old one
+  (or a checkout that changed) gives another digest, so `play` and `stages`
+  know mpo_boot is older than the source and ask for `install` first: a new
+  setup.py passed options an old mpo_boot did not know (F25, Windows).
+  """
+  root = pathlib.Path(_ROOT if root is None else root)
+  digest = hashlib.sha256()
+  tops = [root / 'CMakeLists.txt', root / 'cmake', root / 'framework', root / 'third_party',
+          root / 'profiles' / 'mpo']
+  for top in tops:
+    if top.is_file():
+      found = [top]
+    elif top.is_dir():
+      found = []
+      for folder, dirs, files in os.walk(top):
+        here = pathlib.Path(folder)
+        # The framework's example profile is another game's generated code.
+        dirs[:] = sorted(d for d in dirs if d not in _FINGERPRINT_SKIP_DIRS and
+                         not d.startswith('build') and
+                         not (here.name == 'psprecomp' and d == 'profiles'))
+        found += [here / f for f in sorted(files)]
+    else:
+      continue
+    for path in found:
+      try:
+        info = path.stat()
+      except OSError:
+        continue
+      relative = path.relative_to(root).as_posix()
+      digest.update(f'{relative}\0{info.st_size}\0{info.st_mtime_ns}\n'.encode())
+  return digest.hexdigest()
+
+
 # The list of the files a toolchain archive unpacked (F22c), next to its
 # .mpo-sha256 stamp: an antivirus can quarantine one of them after unpacking
 # (clang-23.exe, the real compiler behind llvm-mingw's 13 KB clang.exe, on a
@@ -885,7 +927,8 @@ class Setup:
     started = time.monotonic()
     self._cmake_build(['mpo_boot'], 'main')
     self._note(f'main: mpo_boot ready in {time.monotonic() - started:.0f} s: the game can be played')
-    self.state['main'] = {'mpo_boot': str(self.mpo_boot), 'built': time.time()}
+    self.state['main'] = {'mpo_boot': str(self.mpo_boot), 'built': time.time(),
+                          'source': str(_ROOT), 'source_fingerprint': source_fingerprint()}
     self._save_state()
 
   def fonts_installed(self):
@@ -946,9 +989,35 @@ class Setup:
     self.state.setdefault('stages_quick', {}).pop(stage, None)
     return True
 
+  def update_needed(self):
+    """Why mpo_boot is older than the port's source, or None.
+
+    A new release in another folder leaves the build's CMake cache pointing
+    at the old one (`stages` then failed in CMake, F25); one unpacked over
+    the old folder changes the source fingerprint.
+    """
+    main = self.state.get('main')
+    if not main or not self.mpo_boot.is_file():
+      return None
+    old = cmake_cache_source(self.build / 'CMakeCache.txt')
+    if old is not None and not same_path(old, _ROOT):
+      return f'the port is now in {_ROOT}, and mpo_boot was built from {old}'
+    recorded = main.get('source_fingerprint')
+    if recorded is not None and recorded != source_fingerprint():
+      return 'the port\'s files changed since mpo_boot was built'
+    return None
+
+  def _require_current_build(self):
+    why = self.update_needed()
+    if why:
+      raise SetupError(f'the port was updated ({why}): press Update in the launcher, or run '
+                       f'`setup.py install --iso "{self.state.get("iso")}" --data "{self.data}"`'
+                       ', before this')
+
   def stages(self):
     if not self.mpo_boot.is_file():
       raise SetupError('mpo_boot is not built yet: run `setup.py install` first')
+    self._require_current_build()
     generate = _load_script('generate')
     build_overlays = _load_script('build_overlays')
     kept, _ = self.stage_corpora(build_overlays, generate)
@@ -1100,6 +1169,7 @@ class Setup:
     iso = self.state.get('iso')
     if not iso or not pathlib.Path(iso).is_file():
       raise SetupError(f'the ISO {iso} is gone: run `setup.py install --iso <new place>`')
+    self._require_current_build()
     # The folder must exist from the start: mpo_boot rescans it when a stage
     # has no corpus, so libraries that `stages` installs later are picked up.
     self.overlays.mkdir(parents=True, exist_ok=True)
@@ -1156,6 +1226,8 @@ class Setup:
         'toolchain': self.state.get('toolchain', {}).get('versions'),
         'disc_installed': (self.game / 'install.toml').is_file(),
         'playable': self.mpo_boot.is_file() and 'main' in self.state,
+        # F25: mpo_boot is older than the source (a new release): install again.
+        'update_needed': self.update_needed() is not None,
         'fonts': self.fonts_installed(),
         'stages_total': total,
         # A stage with either library runs compiled; `optimized` is the end state.

@@ -51,6 +51,10 @@ MPO_TEXT(kCompileAfterInstall, "Then compile every stage in the background", "De
 MPO_TEXT(kInstallTime, "The first install takes 20 to 40 minutes and needs about 15 GB free (10 GB once done). You can play as soon as it ends; the stages keep compiling while you play.", "La primera instalación tarda de 20 a 40 minutos y necesita unos 15 GB libres (10 GB al terminar). Puedes jugar en cuanto acabe; las etapas se siguen compilando mientras juegas.")
 MPO_TEXT(kAntivirus, "Some antivirus programs (Avast in particular) remove part of the compiler by mistake. Adding an exception for {0} first avoids it (see README.md).", "Algunos antivirus (sobre todo Avast) borran parte del compilador por error. Para evitarlo, añade antes una excepción para {0} (ver README.es.md).")
 MPO_TEXT(kInstallButton, "Install", "Instalar")
+MPO_TEXT(kUpdateSection, "Update", "Actualizar")
+MPO_TEXT(kUpdateNeeded, "This version of the port is newer than the installed game.", "Esta versión del port es más nueva que el juego instalado.")
+MPO_TEXT(kUpdateHelp, "Update compiles the game again with this version (only what changed; the stages already compiled are kept). Play waits until then.", "Actualizar vuelve a compilar el juego con esta versión (solo lo que cambió; las etapas ya compiladas se conservan). Jugar espera hasta entonces.")
+MPO_TEXT(kUpdateButton, "Update", "Actualizar")
 
 // Play.
 MPO_TEXT(kPlaySection, "Play", "Jugar")
@@ -100,6 +104,7 @@ MPO_TEXT(kAddFonts, "Add the fonts...", "Añadir las fuentes...")
 
 // What runs (the title above its progress bar and log).
 MPO_TEXT(kWorkInstall, "Install", "Instalación")
+MPO_TEXT(kWorkUpdate, "Update", "Actualización")
 MPO_TEXT(kWorkFonts, "Fonts", "Fuentes")
 MPO_TEXT(kWorkImportSave, "Import save", "Importar una partida")
 MPO_TEXT(kWorkExportSaves, "Export saves", "Exportar las partidas")

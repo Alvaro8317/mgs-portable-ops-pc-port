@@ -76,6 +76,11 @@ The installer finds them there without being asked. You can also pick the folder
 The launcher works with the mouse, the keyboard or a gamepad. It speaks English, or Spanish when
 your system is in Spanish; **Language** in its settings changes it.
 
+**Updating**: unpack the new ZIP (in the same folder or another one) and open its
+`mpo_launcher.exe`. It shows **Update** above **Play**: press it to compile the game again with the
+new version. Only what changed is compiled, the stages already compiled are kept, and your saves
+and settings stay where they are.
+
 ### If your antivirus removes a file
 
 Some antivirus programs, **Avast** in particular, flag part of the compiler as a threat and

@@ -500,6 +500,56 @@ class BuildFolderTest(unittest.TestCase):
       self.assertTrue((s.build / 'kept.o').exists(), 'objects stay')
       s._forget_moved_source()  # no cache: nothing to do
 
+  def test_update_needed(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      s = setup.Setup(argparse.Namespace(data=tmp))
+      self.assertIsNone(s.update_needed(), 'nothing installed')
+      s.mpo_boot.parent.mkdir(parents=True)
+      s.mpo_boot.write_bytes(b'')
+      s.state['main'] = {'mpo_boot': str(s.mpo_boot), 'built': 0}
+      self.assertIsNone(s.update_needed(), 'an install from before F25: no cache, no fingerprint')
+      cache = s.build / 'CMakeCache.txt'
+      cache.write_text(f'CMAKE_HOME_DIRECTORY:INTERNAL={setup._ROOT}\n', encoding='utf-8')
+      self.assertIsNone(s.update_needed(), 'built from this source')
+      # A new release in another folder (F25, Windows): stages failed in CMake
+      # and play ran the old mpo_boot with options it did not know.
+      old = pathlib.Path(tmp) / 'Downloads' / 'release (1)' / 'source'
+      cache.write_text(f'CMAKE_HOME_DIRECTORY:INTERNAL={old}\n', encoding='utf-8')
+      self.assertIn('mpo_boot was built from', s.update_needed())
+      status = s.status()
+      self.assertTrue(status['playable'])
+      self.assertTrue(status['update_needed'])
+      s.state['iso'] = str(pathlib.Path(tmp) / 'game.iso')
+      with self.assertRaises(setup.SetupError) as raised:
+        s._require_current_build()
+      self.assertIn('setup.py install --iso', str(raised.exception))
+      # Unpacked over the same folder: the fingerprint tells.
+      cache.write_text(f'CMAKE_HOME_DIRECTORY:INTERNAL={setup._ROOT}\n', encoding='utf-8')
+      s.state['main']['source_fingerprint'] = setup.source_fingerprint()
+      self.assertIsNone(s.update_needed())
+      s.state['main']['source_fingerprint'] = '0' * 64
+      self.assertIn('changed', s.update_needed())
+
+  def test_source_fingerprint(self):
+    with tempfile.TemporaryDirectory() as tmp:
+      root = pathlib.Path(tmp)
+      host = root / 'profiles' / 'mpo' / 'host'
+      host.mkdir(parents=True)
+      (root / 'CMakeLists.txt').write_text('x', encoding='utf-8')
+      source = host / 'a.cpp'
+      source.write_text('int a;', encoding='utf-8')
+      first = setup.source_fingerprint(root)
+      self.assertEqual(setup.source_fingerprint(root), first, 'stable')
+      # What mpo_boot is not built from does not count.
+      for skipped in ('tests', 'docs', 'build-local', '__pycache__'):
+        (root / 'profiles' / 'mpo' / skipped).mkdir(exist_ok=True)
+        (root / 'profiles' / 'mpo' / skipped / 'f.txt').write_text('y', encoding='utf-8')
+      (root / 'framework' / 'psprecomp' / 'profiles').mkdir(parents=True)
+      (root / 'framework' / 'psprecomp' / 'profiles' / 'g.cpp').write_text('z', encoding='utf-8')
+      self.assertEqual(setup.source_fingerprint(root), first, 'skipped folders')
+      source.write_text('int a, b;', encoding='utf-8')
+      self.assertNotEqual(setup.source_fingerprint(root), first, 'a source changed')
+
   def test_failure_shows_only_this_run(self):
     with tempfile.TemporaryDirectory() as tmp:
       s = setup.Setup(argparse.Namespace(data=tmp))

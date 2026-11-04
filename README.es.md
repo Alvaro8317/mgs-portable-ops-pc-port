@@ -80,6 +80,11 @@ está en español, y si no en inglés (con **Install**, **Play** y **Settings** 
 **Jugar** y **Ajustes**). Se cambia en **Idioma**, arriba de todo antes de instalar y en los
 [Ajustes](#ajustes) después.
 
+**Actualizar**: descomprime el ZIP nuevo (en la misma carpeta o en otra) y abre su
+`mpo_launcher.exe`. Muestra **Actualizar** encima de **Jugar**: púlsalo para volver a compilar el
+juego con la versión nueva. Solo se compila lo que cambió, las etapas ya compiladas se conservan, y
+tus saves y tus ajustes siguen donde estaban.
+
 ### Si el antivirus borra un archivo
 
 Algunos antivirus, sobre todo **Avast**, marcan parte del compilador como una amenaza y la ponen en

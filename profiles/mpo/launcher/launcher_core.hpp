@@ -108,6 +108,9 @@ struct InstallStatus {
     std::string iso;
     bool disc_installed{};
     bool playable{};
+    // F25: mpo_boot is older than the port's source (a new release): the
+    // launcher asks to install again before Play.
+    bool update_needed{};
     // The firmware fonts are in the install (F22c). Without them the dialogs
     // use the fallback font (F23c).
     bool fonts{};

@@ -295,6 +295,7 @@ std::optional<InstallStatus> parse_status(std::string_view json) {
     status.iso = string_field(*root, "iso");
     status.disc_installed = bool_field(*root, "disc_installed");
     status.playable = bool_field(*root, "playable");
+    status.update_needed = bool_field(*root, "update_needed");
     status.fonts = bool_field(*root, "fonts");
     status.stages_total = int_field(*root, "stages_total", -1);
     status.stages_installed = int_field(*root, "stages_installed", 0);

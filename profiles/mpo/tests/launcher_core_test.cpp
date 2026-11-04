@@ -118,6 +118,9 @@ void test_settings_in_status() {
     check(old && old->settings == GameSettings{} && old->settings_file.empty() &&
               old->settings_notices.empty(),
           "no settings: defaults");
+    check(!old->update_needed, "no update_needed: not needed");
+    const auto update = parse_status(R"({"playable": true, "update_needed": true})");
+    check(update && update->playable && update->update_needed, "update_needed (F25)");
     const auto bad = parse_status(R"({"settings": {"renderer": "opengl", "render_scale": 9,
                                                    "window_scale": 0, "fullscreen": "yes",
                                                    "language": "fr"}})");

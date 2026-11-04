@@ -441,7 +441,9 @@ struct Launcher {
         if (work.exit_code()) {
             const bool ok = *work.exit_code() == 0;
             if (!ok) fail(trf(Text::kFailWork, {tr(work_title)}), work);
-            if (ok && work_title == Text::kWorkInstall && compile_stages_after_install)
+            // After an update too: the stages left to compile go on.
+            if (ok && (work_title == Text::kWorkInstall || work_title == Text::kWorkUpdate) &&
+                compile_stages_after_install)
                 start_stages_when_idle = true;
             work.reset();
             refresh_status();
@@ -518,11 +520,24 @@ struct Launcher {
         ImGui::EndDisabled();
     }
 
+    // F25: a new release (or a changed checkout) is newer than mpo_boot.
+    // Play would start the old mpo_boot with the new setup.py's options, and
+    // the stages would not configure: install again first.
+    void draw_update() {
+        ImGui::SeparatorText(tr(Text::kUpdateSection));
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "%s", tr(Text::kUpdateNeeded));
+        ImGui::TextWrapped("%s", tr(Text::kUpdateHelp));
+        ImGui::BeginDisabled(status->iso.empty() || game.running() || stages.running());
+        if (ImGui::Button(label(Text::kUpdateButton, "update").c_str(), ImVec2(260.0f, 0.0f)))
+            start_work(Text::kWorkUpdate, command("install", {"--iso", status->iso}));
+        ImGui::EndDisabled();
+    }
+
     void draw_play() {
         ImGui::SeparatorText(tr(Text::kPlaySection));
         const bool all =
             status->stages_total > 0 && status->stages_optimized >= status->stages_total;
-        ImGui::BeginDisabled(game.running());
+        ImGui::BeginDisabled(game.running() || status->update_needed);
         if (ImGui::Button(
                 label(game.running() ? Text::kPlaying : Text::kPlayButton, "play").c_str(),
                 ImVec2(260.0f, 64.0f))) {
@@ -550,7 +565,7 @@ struct Launcher {
             }
             ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f), progress.c_str());
             if (ImGui::Button(label(Text::kStopCompiling, "stop").c_str())) stop_stages();
-        } else if (!all && !work.running()) {
+        } else if (!all && !work.running() && !status->update_needed) {
             if (ImGui::Button(label(Text::kCompileInBackground, "compile").c_str())) start_stages();
         }
     }
@@ -855,6 +870,7 @@ struct Launcher {
             draw_language_line();
             draw_install();
         } else {
+            if (status->update_needed) draw_update();
             draw_play();
             draw_settings();
             draw_saves();
