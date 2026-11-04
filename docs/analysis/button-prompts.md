@@ -194,6 +194,11 @@ Para que dependa del dispositivo hace falta:
 - que `button_symbol()` y las palabras "Start"/"Select" del OSK lo consulten;
 - que la fuente tenga esos caracteres (con la fuente libre de F23c también).
 
+**Hecho en F24b** [V]: `host/frontend/prompts.*` (`DeviceTracker`, `PromptSet`, `--prompts`),
+`host/hle/prompt_draw.*` (las teclas se dibujan como un recuadro con texto ASCII, así que no hacen
+falta glifos nuevos) y el registro `p` de las grabaciones. Con el juego de la PSP los diálogos
+dibujan lo mismo que antes, byte a byte (`docs/sessions/F24b.md`).
+
 ## 5. El "último dispositivo" en el frontend
 
 - **Hoy no se guarda** [V]: `SdlInput::HandleEvent` (`host/frontend/sdl_input.cpp`) recibe cada evento

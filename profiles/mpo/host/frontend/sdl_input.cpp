@@ -29,6 +29,16 @@ static_assert(static_cast<int>(PadButton::kDpadRight) == SDL_GAMEPAD_BUTTON_DPAD
 static_assert(kPadAxisCount == SDL_GAMEPAD_AXIS_COUNT);
 static_assert(static_cast<int>(PadAxis::kLeftY) == SDL_GAMEPAD_AXIS_LEFTY);
 static_assert(static_cast<int>(PadAxis::kRightTrigger) == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+static_assert(kGamepadTypeCount == SDL_GAMEPAD_TYPE_COUNT);
+static_assert(static_cast<int>(GamepadType::kXboxOne) == SDL_GAMEPAD_TYPE_XBOXONE);
+static_assert(static_cast<int>(GamepadType::kPs5) == SDL_GAMEPAD_TYPE_PS5);
+static_assert(static_cast<int>(GamepadType::kJoyconPair) ==
+              SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR);
+static_assert(static_cast<int>(GamepadType::kSteam) == SDL_GAMEPAD_TYPE_STEAM);
+static_assert(static_cast<int>(FaceLabel::kA) == SDL_GAMEPAD_BUTTON_LABEL_A);
+static_assert(static_cast<int>(FaceLabel::kY) == SDL_GAMEPAD_BUTTON_LABEL_Y);
+static_assert(static_cast<int>(FaceLabel::kCross) == SDL_GAMEPAD_BUTTON_LABEL_CROSS);
+static_assert(static_cast<int>(FaceLabel::kTriangle) == SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE);
 
 const char *MouseButtonName(int button) {
     switch (button) {
@@ -52,6 +62,36 @@ int MouseButtonFromName(std::string_view name) {
         if (name == MouseButtonName(button)) return button;
     }
     return 0;
+}
+
+std::string LayoutKeyName(Scancode key) {
+    // Letters, digits and punctuation (SDL_SCANCODE_A..SLASH), not Return,
+    // Escape, Backspace, Tab or Space (40-44).
+    if (key < SDL_SCANCODE_A || key > SDL_SCANCODE_SLASH ||
+        (key >= SDL_SCANCODE_RETURN && key <= SDL_SCANCODE_SPACE))
+        return {};
+    const SDL_Keycode code =
+        SDL_GetKeyFromScancode(static_cast<SDL_Scancode>(key), SDL_KMOD_NONE, false);
+    if (code == SDLK_UNKNOWN) return {};
+    const char *name = SDL_GetKeyName(code);
+    return name != nullptr ? std::string(name) : std::string();
+}
+
+GamepadType GamepadTypeOf(SDL_Gamepad *pad) {
+    const SDL_GamepadType type = SDL_GetGamepadType(pad);
+    if (type < 0 || type >= SDL_GAMEPAD_TYPE_COUNT) return GamepadType::kUnknown;
+    return static_cast<GamepadType>(type);
+}
+
+std::array<FaceLabel, 4> FaceLabelsOf(SDL_Gamepad *pad) {
+    std::array<FaceLabel, 4> face{};
+    for (int i = 0; i < 4; ++i) {
+        const SDL_GamepadButtonLabel label = SDL_GetGamepadButtonLabel(
+            pad, static_cast<SDL_GamepadButton>(SDL_GAMEPAD_BUTTON_SOUTH + i));
+        if (label > SDL_GAMEPAD_BUTTON_LABEL_UNKNOWN && label <= SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE)
+            face[static_cast<std::size_t>(i)] = static_cast<FaceLabel>(label);
+    }
+    return face;
 }
 
 float AxisValueFromSdl(Sint16 value) {
@@ -93,6 +133,7 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
     case SDL_EVENT_KEY_UP: {
         const bool down = event.type == SDL_EVENT_KEY_DOWN;
         if (event.key.repeat) return true;
+        if (down) devices_.OnKeyboardInput();
         if (down && captured_ && event.key.scancode == SDL_SCANCODE_F1) {
             ReleaseMouseCapture();
             return true;
@@ -110,6 +151,7 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
         // they are not the player's mouse.
         if (event.button.which == SDL_TOUCH_MOUSEID) return false;
         const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+        if (down) devices_.OnKeyboardInput();
         if (down && !captured_ && translator_->mapping().mouse_camera.enabled) {
             // This click only captures the mouse.
             captured_ = true;
@@ -144,6 +186,7 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
             return true;
         }
         gamepads_.push_back(pad);
+        devices_.OnGamepadAdded(event.gdevice.which, GamepadTypeOf(pad), FaceLabelsOf(pad));
         const char *name = SDL_GetGamepadName(pad);
         Note(std::string("gamepad added: ") + (name ? name : "?"));
         return true;
@@ -156,6 +199,7 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
             SDL_CloseGamepad(*it);
             gamepads_.erase(it);
         }
+        devices_.OnGamepadRemoved(event.gdevice.which);
         // The removed pad may have been holding buttons or a stick.
         translator_->ReleasePad();
         Note("gamepad removed");
@@ -164,6 +208,7 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
     case SDL_EVENT_GAMEPAD_BUTTON_UP: {
         const bool down = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+        if (down) devices_.OnGamepadButton(event.gbutton.which);
         if (event.gbutton.button < kPadButtonCount) {
             translator_->OnPadButton(static_cast<PadButton>(event.gbutton.button), down);
         }
@@ -176,6 +221,8 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
     }
     case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
         const float value = AxisValueFromSdl(event.gaxis.value);
+        devices_.OnGamepadAxis(event.gaxis.which, value,
+                               std::max(translator_->mapping().analog.deadzone, kMinAxisActivity));
         if (event.gaxis.axis < kPadAxisCount) {
             translator_->OnPadAxis(static_cast<PadAxis>(event.gaxis.axis), value);
         }

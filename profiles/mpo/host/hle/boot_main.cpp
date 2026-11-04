@@ -19,6 +19,7 @@
 //            [--check-every N] [--input-log 0|1]
 //            [--mac aa:bb:cc:dd:ee:ff] [--wlan 0|1] [--ap-seed N] [--ap-place N]
 //            [--watch-call <address>]...
+//            [--prompts auto|psp|xbox|playstation|nintendo|keyboard]
 //
 // It measures the start-up (registering the dispatch table: time and memory),
 // runs PSP threads until --until-us of virtual time (default 5 s), a runtime
@@ -137,6 +138,18 @@
 //                             else (the set also changes every local day).
 // A replay needs the same --ap-seed and --ap-place as its recording (and the
 // RTC base, which the recording keeps). The report adds the AP scans.
+//
+// F24b: the button prompts of the system dialogs (prompts.h).
+//   --prompts auto            (the default) with --window 1, the prompts of
+//                             the device used last: the keyboard and mouse
+//                             (the names of the keys input.toml binds) or the
+//                             gamepad's type (Xbox, PlayStation, Nintendo or
+//                             a generic pad); without a window, the PSP's.
+//   --prompts <set>           always psp, xbox, playstation, nintendo or
+//                             keyboard.
+// The set changes at a controller sample. --record-input writes a `p` record
+// when it changes, and a replay shows the recorded sets at the same samples
+// (a recording without `p` records shows the PSP's).
 //   --watch-call <address>    (diagnostics) traces each call of the guest
 //                             function at <address>: $a0..$a3, $f12 and $ra
 //                             when it is entered, $v0 and $f0 when it returns.
@@ -155,6 +168,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -175,6 +189,7 @@
 #include "image.hpp"
 #include "input.h"
 #include "input_recording.h"
+#include "prompts.h"
 #include "psprecomp/interpreter.hpp"
 #include "psprecomp/runtime.hpp"
 #include "recomp/vfpu_executor.hpp"
@@ -525,6 +540,7 @@ int main(int argc, char **argv) {
     std::uint64_t check_every = 60u;
     bool until_given = false;
     bool input_log = false;
+    std::string prompts_option = "auto";
     std::string check_overlay;
     // Every option takes a value: a word left over is a mistake, not ignored
     // (F19: a whole --press list quoted as one word went unnoticed).
@@ -622,6 +638,10 @@ int main(int argc, char **argv) {
         } else if (option == "--replay-end") {
             if (value != "stop" && value != "live") return fail("--replay-end takes stop or live");
             replay_end_live = value == "live" ? 1 : 0;
+        } else if (option == "--prompts") {
+            if (value != "auto" && !mpo::frontend::PromptStyleFromName(value))
+                return fail("--prompts takes auto, psp, xbox, playstation, nintendo or keyboard");
+            prompts_option = value;
         } else if (option == "--input-log") {
             input_log = value != "0";
         } else if (option == "--mac") {
@@ -924,6 +944,10 @@ int main(int argc, char **argv) {
         const auto osk_keyboard = [&](const SDL_Event &event) {
             if (!text_input) return false;
             using mpo::frontend::OskAction;
+            // F24b: typing into the OSK is keyboard input too.
+            if ((event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) ||
+                event.type == SDL_EVENT_TEXT_INPUT)
+                input->devices().OnKeyboardInput();
             if (event.type == SDL_EVENT_TEXT_INPUT) {
                 pending_osk.push_back({0u, OskAction::kType, event.text.text});
                 return true;
@@ -1016,6 +1040,42 @@ int main(int argc, char **argv) {
 #endif
         [[maybe_unused]] std::uint64_t presented_targets = 0;
         [[maybe_unused]] std::uint64_t presented_uploads = 0;
+        // ---- F24b: the button prompts ----
+        std::optional<mpo::frontend::PromptStyle> fixed_prompts;
+        if (prompts_option != "auto")
+            fixed_prompts = mpo::frontend::PromptStyleFromName(prompts_option);
+        mpo::frontend::KeyNamer key_namer;
+#if MPO_BOOT_SDL
+        if (window) key_namer = &mpo::frontend::LayoutKeyName;
+#endif
+        mpo::frontend::PromptSet shown_prompts = mpo::frontend::PromptSet::Psp();
+        mpo::frontend::PromptSet live_prompts = mpo::frontend::PromptSet::Psp();
+        if (fixed_prompts)
+            live_prompts = mpo::frontend::BuildPromptSet(*fixed_prompts, translator.mapping(),
+                                                         nullptr, key_namer);
+        [[maybe_unused]] std::uint64_t prompts_generation = ~std::uint64_t{0};
+        std::uint64_t prompt_changes = 0;
+        // What the player's devices ask for now.
+        const auto wanted_prompts = [&]() -> const mpo::frontend::PromptSet & {
+#if MPO_BOOT_SDL
+            if (!fixed_prompts && input && input->devices().generation() != prompts_generation) {
+                prompts_generation = input->devices().generation();
+                live_prompts = mpo::frontend::BuildPromptSetForDevice(
+                    input->devices().last(), translator.mapping(), key_namer);
+            }
+#endif
+            return live_prompts;
+        };
+        const auto show_prompts = [&](const mpo::frontend::PromptSet &set, std::uint64_t index) {
+            if (set == shown_prompts) return;
+            shown_prompts = set;
+            system.utility().set_prompts(set);
+            ++prompt_changes;
+            system.hle().trace_event("prompts: %s from sample %llu",
+                                     mpo::frontend::PromptStyleName(set.style),
+                                     static_cast<unsigned long long>(index));
+        };
+
         // F19: every sample the game takes, live or from the recording.
         std::uint64_t sample_count = 0;
         bool replay_over = false;
@@ -1039,6 +1099,14 @@ int main(int argc, char **argv) {
         system.ctrl().set_sampler([&](std::uint64_t now) {
             const std::uint64_t index = sample_count++;
             mpo::frontend::SceCtrlData data;
+            // F24b: the prompts from this sample on (the recording's while
+            // it plays).
+            if (player && player->Covers(index)) {
+                if (const auto set = player->PromptsAt(index)) show_prompts(*set, index);
+            } else {
+                show_prompts(wanted_prompts(), index);
+            }
+            if (recorder.is_open()) recorder.Prompts(index, shown_prompts);
             if (player && player->Covers(index)) {
                 for (const mpo::frontend::OskEvent &event : player->OskAt(index)) {
                     apply_osk(event);
@@ -1244,6 +1312,9 @@ int main(int argc, char **argv) {
                         static_cast<unsigned long long>(flip_count),
                         static_cast<unsigned long long>(recorder.checks()));
         }
+        std::printf("prompts: %s at the end, %llu changes (--prompts %s)\n",
+                    mpo::frontend::PromptStyleName(shown_prompts.style),
+                    static_cast<unsigned long long>(prompt_changes), prompts_option.c_str());
         if (player) {
             const std::size_t recorded = player->recording().checks.size();
             std::printf(

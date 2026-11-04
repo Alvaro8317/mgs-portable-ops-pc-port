@@ -5,8 +5,12 @@
 // values), strides, address folding and bad framebuffers; host input ->
 // SceCtrlData with synthetic events, and the analog stick maths against
 // values worked out by hand from PPSSPP's formulas. F19: the input recording
-// (write, parse back, replay, bad files) and the memory stick digest.
+// (write, parse back, replay, bad files) and the memory stick digest. F24b:
+// the last device, the prompt sets per mapping and device, and the `p`
+// record of the recordings.
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -14,8 +18,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "color.hpp" // mpo_ge (F11a): PPSSPP's converters, used as the reference.
@@ -23,6 +29,7 @@
 #include "framebuffer.h"
 #include "input.h"
 #include "input_recording.h"
+#include "prompts.h"
 
 namespace {
 
@@ -890,6 +897,331 @@ void TestInputRecording() {
     std::filesystem::remove_all(dir, ec);
 }
 
+// ---- F24b: on-screen prompts ----
+
+std::string LabelText(const PromptSet &set, std::uint32_t button) {
+    return set.For(button).text;
+}
+
+bool IsKey(const PromptSet &set, std::uint32_t button) {
+    return set.For(button).kind == PromptLabel::Kind::kKey;
+}
+
+void TestDeviceTracker() {
+    DeviceTracker t;
+    Expect(t.last().kind == Device::Kind::kNone, "nothing used yet");
+    ExpectEq(t.generation(), 0u, "generation starts at 0");
+    // A pad connected before anything was used becomes the device.
+    t.OnGamepadAdded(7, GamepadType::kPs5, FaceLabelsForType(GamepadType::kPs5));
+    Expect(t.last().kind == Device::Kind::kGamepad && t.last().type == GamepadType::kPs5 &&
+               t.last().id == 7u,
+           "first pad is the device");
+    ExpectEq(t.generation(), 1u, "one change");
+    t.OnKeyboardInput();
+    Expect(t.last().kind == Device::Kind::kKeyboard, "a key press: keyboard");
+    t.OnKeyboardInput();
+    ExpectEq(t.generation(), 2u, "the same device again is not a change");
+    // A second pad plugged in does not take over until it is used.
+    t.OnGamepadAdded(9, GamepadType::kXboxOne, FaceLabelsForType(GamepadType::kXboxOne));
+    Expect(t.last().kind == Device::Kind::kKeyboard, "plugging a pad in is not input");
+    // Stick noise under the threshold, NaN and unknown pads do nothing.
+    t.OnGamepadAxis(9, 0.2f, 0.25f);
+    t.OnGamepadAxis(9, -0.249f, 0.25f);
+    t.OnGamepadAxis(9, std::nanf(""), 0.25f);
+    t.OnGamepadButton(42);
+    Expect(t.last().kind == Device::Kind::kKeyboard, "noise and unknown pads ignored");
+    ExpectEq(t.generation(), 2u, "no change from noise");
+    t.OnGamepadAxis(9, -0.25f, 0.25f);
+    Expect(t.last().kind == Device::Kind::kGamepad && t.last().id == 9u, "a tilt at the threshold");
+    t.OnGamepadButton(7);
+    Expect(t.last().type == GamepadType::kPs5, "a press on the other pad");
+    // Removing the active pad: the other one takes over, then the keyboard.
+    t.OnGamepadRemoved(7);
+    Expect(t.last().id == 9u && t.last().type == GamepadType::kXboxOne, "removed: next pad");
+    t.OnGamepadRemoved(3); // Not connected: nothing.
+    Expect(t.last().id == 9u, "removing an unknown pad");
+    t.OnKeyboardInput();
+    t.OnGamepadRemoved(9); // Not the device: it stays the keyboard.
+    Expect(t.last().kind == Device::Kind::kKeyboard, "removing an idle pad");
+    t.OnGamepadAdded(11, GamepadType::kSwitchPro, FaceLabelsForType(GamepadType::kSwitchPro));
+    t.OnGamepadButton(11);
+    t.OnGamepadRemoved(11);
+    Expect(t.last().kind == Device::Kind::kKeyboard, "last pad removed: keyboard");
+    const std::uint64_t generation = t.generation();
+    t.OnGamepadAdded(12, GamepadType::kPs4, FaceLabelsForType(GamepadType::kPs4));
+    ExpectEq(t.generation(), generation, "a pad added after the keyboard: no change");
+}
+
+void TestFaceLabels() {
+    using F = FaceLabel;
+    const auto face = [](GamepadType type) { return FaceLabelsForType(type); };
+    Expect(face(GamepadType::kXboxOne) == std::array{F::kA, F::kB, F::kX, F::kY}, "Xbox ABXY");
+    Expect(face(GamepadType::kUnknown) == std::array{F::kA, F::kB, F::kX, F::kY}, "unknown ABXY");
+    Expect(face(GamepadType::kPs3) == std::array{F::kCross, F::kCircle, F::kSquare, F::kTriangle},
+           "PlayStation shapes");
+    Expect(face(GamepadType::kJoyconPair) == std::array{F::kB, F::kA, F::kY, F::kX},
+           "Nintendo BAYX");
+    Expect(face(GamepadType::kGameCube) == std::array{F::kA, F::kX, F::kB, F::kY}, "GameCube AXBY");
+    Expect(FaceLabelForType(GamepadType::kPs4, PadButton::kStart) == F::kUnknown,
+           "not a face button");
+    for (const PromptStyle style :
+         {PromptStyle::kPsp, PromptStyle::kXbox, PromptStyle::kPlayStation, PromptStyle::kNintendo,
+          PromptStyle::kGeneric, PromptStyle::kKeyboard})
+        Expect(PromptStyleFromName(PromptStyleName(style)) == style,
+               std::string("style name ") + PromptStyleName(style));
+    Expect(!PromptStyleFromName("auto") && !PromptStyleFromName("Xbox"), "unknown style names");
+    Expect(PromptStyleForGamepad(GamepadType::kSteam) == PromptStyle::kXbox &&
+               PromptStyleForGamepad(GamepadType::kPs3) == PromptStyle::kPlayStation &&
+               PromptStyleForGamepad(GamepadType::kGameCube) == PromptStyle::kNintendo &&
+               PromptStyleForGamepad(GamepadType::kStandard) == PromptStyle::kGeneric,
+           "style per gamepad type");
+}
+
+void TestPromptSets() {
+    const InputMapping defaults = InputMapping::Default();
+    // The PSP's own, as the dialogs drew them before F24b.
+    const PromptSet psp = PromptSet::Psp();
+    Expect(LabelText(psp, ctrl::kCircle) == "○" && LabelText(psp, ctrl::kCross) == "×" &&
+               LabelText(psp, ctrl::kTriangle) == "△" && LabelText(psp, ctrl::kSquare) == "□",
+           "PSP symbols");
+    Expect(psp.For(ctrl::kCircle).kind == PromptLabel::Kind::kSymbol &&
+               psp.For(ctrl::kStart).kind == PromptLabel::Kind::kWord &&
+               LabelText(psp, ctrl::kStart) == "Start" && LabelText(psp, ctrl::kSelect) == "Select",
+           "PSP words");
+    Expect(psp.For(ctrl::kUp).text.empty(), "no prompt for the d-pad");
+    Expect(BuildPromptSet(PromptStyle::kPsp, defaults) == psp, "psp ignores the mapping");
+
+    // The keyboard with F22's map: keys first, then mouse buttons.
+    const PromptSet kb = BuildPromptSetForDevice(Device{}, defaults);
+    Expect(kb.style == PromptStyle::kKeyboard, "nothing used yet: keyboard");
+    Expect(LabelText(kb, ctrl::kCross) == "Space" &&
+               LabelText(kb, ctrl::kCircle) == "Right click" &&
+               LabelText(kb, ctrl::kSquare) == "Left click" &&
+               LabelText(kb, ctrl::kTriangle) == "Ctrl" && LabelText(kb, ctrl::kStart) == "Esc" &&
+               LabelText(kb, ctrl::kSelect) == "Tab" && LabelText(kb, ctrl::kLTrigger) == "Q" &&
+               LabelText(kb, ctrl::kRTrigger) == "E",
+           "keyboard labels from the default map");
+    Expect(IsKey(kb, ctrl::kCross) && IsKey(kb, ctrl::kStart), "keyboard labels are key caps");
+    Expect(kb.osk_finish.text == "Enter" && kb.osk_delete.text == "Backspace", "keyboard OSK keys");
+
+    // A rebinding is followed; an exact binding wins over a combination, and
+    // an unbound button keeps the PSP's prompt.
+    InputMapping custom = defaults;
+    custom.keys = {
+        {scancode::kX, Target::Button(ctrl::kCross | ctrl::kCircle)},
+        {scancode::kReturn, Target::Button(ctrl::kCross)},
+        {scancode::kW, Target::Button(ctrl::kTriangle)},
+        {scancode::kI, Target::Button(ctrl::kCircle)},
+        {scancode::kQ, Target::Button(ctrl::kStart | ctrl::kSelect)},
+    };
+    custom.mouse_buttons = {{MouseButton::kX2, Target::Button(ctrl::kSquare)}};
+    const PromptSet kc = BuildPromptSet(PromptStyle::kKeyboard, custom);
+    Expect(LabelText(kc, ctrl::kCross) == "Enter", "exact binding first");
+    Expect(LabelText(kc, ctrl::kCircle) == "I", "an exact key after a combination");
+    Expect(LabelText(kc, ctrl::kStart) == "Q", "a combination when nothing is exact");
+    Expect(LabelText(kc, ctrl::kSquare) == "Mouse 5", "mouse binding");
+    Expect(LabelText(kc, ctrl::kLTrigger) == "L" && !IsKey(kc, ctrl::kLTrigger),
+           "unbound: PSP word");
+    // The layout namer: AZERTY's Z on the W position; names it cannot draw
+    // fall back to the built-in ones.
+    const KeyNamer azerty = [](Scancode key) -> std::string {
+        if (key == scancode::kW) return "Z";
+        if (key == scancode::kI) return "\xD0\x96"; // Cyrillic: not in the fonts
+        return {};
+    };
+    const PromptSet kz = BuildPromptSet(PromptStyle::kKeyboard, custom, nullptr, azerty);
+    Expect(LabelText(kz, ctrl::kTriangle) == "Z", "layout name");
+    Expect(LabelText(kz, ctrl::kCross) == "Enter", "namer empty: built-in name");
+    const PromptSet kn = BuildPromptSet(
+        PromptStyle::kKeyboard,
+        [] {
+            InputMapping m;
+            m.keys = {{scancode::kI, Target::Button(ctrl::kCircle)}};
+            return m;
+        }(),
+        nullptr, azerty);
+    Expect(LabelText(kn, ctrl::kCircle) == "I", "undrawable layout name: built-in name");
+    ExpectEq(KeyName(scancode::kLeftCtrl) == "Ctrl" && KeyName(scancode::kRightCtrl) == "Ctrl" &&
+                 KeyName(30) == "1" && KeyName(39) == "0" && KeyName(58) == "F1" &&
+                 KeyName(69) == "F12" && KeyName(98) == "Num 0" && KeyName(300) == "Key 300",
+             true, "key names");
+
+    // Gamepads, by type (the default map is positional: south is cross).
+    Device xbox;
+    xbox.kind = Device::Kind::kGamepad;
+    xbox.type = GamepadType::kXboxOne;
+    xbox.face = FaceLabelsForType(xbox.type);
+    const PromptSet x = BuildPromptSetForDevice(xbox, defaults);
+    Expect(x.style == PromptStyle::kXbox, "Xbox style");
+    Expect(LabelText(x, ctrl::kCross) == "A" && LabelText(x, ctrl::kCircle) == "B" &&
+               LabelText(x, ctrl::kSquare) == "X" && LabelText(x, ctrl::kTriangle) == "Y" &&
+               LabelText(x, ctrl::kStart) == "Menu" && LabelText(x, ctrl::kSelect) == "View" &&
+               LabelText(x, ctrl::kLTrigger) == "LB" && LabelText(x, ctrl::kRTrigger) == "RB",
+           "Xbox One labels");
+    Expect(IsKey(x, ctrl::kCross) && x.osk_finish.text.empty(), "Xbox: key caps, no OSK keys");
+    Device x360 = xbox;
+    x360.type = GamepadType::kXbox360;
+    const PromptSet x3 = BuildPromptSetForDevice(x360, defaults);
+    Expect(LabelText(x3, ctrl::kStart) == "Start" && LabelText(x3, ctrl::kSelect) == "Back",
+           "Xbox 360 start and back");
+    Device ps5 = xbox;
+    ps5.type = GamepadType::kPs5;
+    ps5.face = FaceLabelsForType(ps5.type);
+    const PromptSet p5 = BuildPromptSetForDevice(ps5, defaults);
+    Expect(p5.style == PromptStyle::kPlayStation, "PlayStation style");
+    Expect(p5.For(ctrl::kCross) == psp.For(ctrl::kCross) &&
+               p5.For(ctrl::kCircle) == psp.For(ctrl::kCircle) &&
+               p5.For(ctrl::kTriangle) == psp.For(ctrl::kTriangle) &&
+               p5.For(ctrl::kSquare) == psp.For(ctrl::kSquare),
+           "PlayStation shapes are the PSP's symbols");
+    Expect(LabelText(p5, ctrl::kStart) == "Options" && LabelText(p5, ctrl::kSelect) == "Create" &&
+               LabelText(p5, ctrl::kLTrigger) == "L1",
+           "PS5 labels");
+    Device sw = xbox;
+    sw.type = GamepadType::kSwitchPro;
+    sw.face = FaceLabelsForType(sw.type);
+    const PromptSet n = BuildPromptSetForDevice(sw, defaults);
+    Expect(n.style == PromptStyle::kNintendo, "Nintendo style");
+    // Positional: the PSP's cross is the south button, labeled B on a Switch.
+    Expect(LabelText(n, ctrl::kCross) == "B" && LabelText(n, ctrl::kCircle) == "A" &&
+               LabelText(n, ctrl::kSquare) == "Y" && LabelText(n, ctrl::kTriangle) == "X" &&
+               LabelText(n, ctrl::kStart) == "+" && LabelText(n, ctrl::kSelect) == "-" &&
+               LabelText(n, ctrl::kRTrigger) == "R",
+           "Switch labels");
+    // A generic pad whose own labels are the shapes (SDL_GetGamepadButtonLabel).
+    Device generic = xbox;
+    generic.type = GamepadType::kStandard;
+    generic.face = FaceLabelsForType(GamepadType::kPs4);
+    const PromptSet g = BuildPromptSetForDevice(generic, defaults);
+    Expect(g.style == PromptStyle::kGeneric && LabelText(g, ctrl::kCross) == "×" &&
+               LabelText(g, ctrl::kStart) == "Start" && LabelText(g, ctrl::kSelect) == "Back",
+           "generic pad with its own face labels");
+    // Unknown face labels fall back to the type's.
+    generic.face = {};
+    Expect(LabelText(BuildPromptSetForDevice(generic, defaults), ctrl::kCross) == "A",
+           "unknown face labels: the type's");
+    // L only on the trigger, cross on the north button, circle unbound.
+    InputMapping pad_custom = defaults;
+    pad_custom.pad_buttons = {{PadButton::kNorth, Target::Button(ctrl::kCross)}};
+    pad_custom.pad_axes = {{PadAxis::kLeftTrigger, +1, Target::Button(ctrl::kLTrigger)}};
+    const PromptSet pc = BuildPromptSetForDevice(ps5, pad_custom);
+    Expect(LabelText(pc, ctrl::kCross) == "△" && LabelText(pc, ctrl::kLTrigger) == "L2" &&
+               pc.For(ctrl::kCircle) == psp.For(ctrl::kCircle),
+           "rebound pad: " + LabelText(pc, ctrl::kCross));
+    // A fixed --prompts style with no pad: the style's usual pad.
+    Expect(LabelText(BuildPromptSet(PromptStyle::kXbox, defaults), ctrl::kStart) == "Menu" &&
+               LabelText(BuildPromptSet(PromptStyle::kPlayStation, defaults), ctrl::kStart) ==
+                   "Options" &&
+               LabelText(BuildPromptSet(PromptStyle::kNintendo, defaults), ctrl::kCross) == "B" &&
+               LabelText(BuildPromptSet(PromptStyle::kGeneric, defaults), ctrl::kSelect) == "Back",
+           "fixed styles");
+
+    // The `p` record's words, both ways.
+    for (const PromptSet &set : {psp, kb, kc, x, p5, n, g}) {
+        const std::string text = FormatPromptSet(set);
+        std::vector<std::string_view> words;
+        std::size_t start = 0;
+        while (start < text.size()) {
+            const std::size_t end = std::min(text.find(' ', start), text.size());
+            words.push_back(std::string_view(text).substr(start, end - start));
+            start = end + 1;
+        }
+        PromptSet back;
+        Expect(ParsePromptSet(words, &back) && back == set, "round trip: " + text);
+    }
+    Expect(FormatPromptSet(psp) == "psp", "the PSP set has no labels");
+    PromptSet out;
+    const std::vector<std::string_view> bad_sets[] = {
+        {},
+        {"xbox"},
+        {"auto"},
+        {"psp", "s41"},
+        {"xbox", "s41", "k", "k", "k", "k", "k", "k", "k", "k", "q"},
+        {"xbox", "z41", "k", "k", "k", "k", "k", "k", "k", "k", "k"},
+        {"xbox", "s4", "k", "k", "k", "k", "k", "k", "k", "k", "k"},
+    };
+    for (const auto &words : bad_sets) Expect(!ParsePromptSet(words, &out), "bad prompt set");
+}
+
+void TestPromptRecording() {
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "mpo_frontend_test_prompts";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path path = dir / "run.input";
+    Device xbox;
+    xbox.kind = Device::Kind::kGamepad;
+    xbox.type = GamepadType::kXboxOne;
+    xbox.face = FaceLabelsForType(xbox.type);
+    const PromptSet kb = BuildPromptSet(PromptStyle::kKeyboard, InputMapping::Default());
+    const PromptSet x = BuildPromptSetForDevice(xbox, InputMapping::Default());
+
+    // Samples 0..9: the PSP set, the keyboard from 2, Xbox from 5, the PSP
+    // again from 8. The recorder writes only the changes.
+    InputRecorder recorder;
+    Expect(recorder.Open(path, nullptr), "recorder opens");
+    recorder.Header(1793059200, 0, 0, {});
+    for (std::uint64_t i = 0; i < 10; ++i) {
+        const PromptSet &set = i >= 8   ? PromptSet::Psp()
+                               : i >= 5 ? x
+                               : i >= 2 ? kb
+                                        : PromptSet::Psp();
+        recorder.Prompts(i, set);
+        recorder.Sample(i, SceCtrlData{});
+    }
+    recorder.End(10, 10);
+    ExpectEq(recorder.prompt_changes(), 3u, "prompt changes: 2, 5, 8");
+    const std::string text = ReadFile(path);
+    Expect(text.find("p 2 keyboard k") != std::string::npos &&
+               text.find("p 5 xbox k41 k42 k59 k58 k4d656e75") != std::string::npos &&
+               text.find("p 8 psp\n") != std::string::npos && text.find("p 0") == std::string::npos,
+           "p records:\n" + text);
+
+    InputRecording rec;
+    std::string error;
+    Expect(InputRecording::Load(path, &rec, &error), "load: " + error);
+    ExpectEq(rec.prompts.size(), 3u, "parsed prompt sets");
+    InputPlayer player(rec);
+    for (std::uint64_t i = 0; i < 10; ++i) {
+        const std::optional<PromptSet> set = player.PromptsAt(i);
+        if (i == 2)
+            Expect(set && *set == kb, "keyboard at exactly sample 2");
+        else if (i == 5)
+            Expect(set && *set == x, "Xbox at exactly sample 5");
+        else if (i == 8)
+            Expect(set && *set == PromptSet::Psp(), "PSP at exactly sample 8");
+        else
+            Expect(!set, "no change at sample " + std::to_string(i));
+    }
+    // Skipping samples: the last change at or before the sample.
+    InputPlayer skip(rec);
+    const std::optional<PromptSet> late = skip.PromptsAt(6);
+    Expect(late && *late == x, "the last change up to sample 6");
+
+    // A recording from before F24b (no `p`) never changes the prompts.
+    InputRecording old;
+    Expect(InputRecording::Parse("mpo-input 1\ns 0 0 128 128 128 128\ns 3 4000 128 128 128 "
+                                 "128\nend 5 5\n",
+                                 &old, &error),
+           "old recording: " + error);
+    InputPlayer old_player(old);
+    for (std::uint64_t i = 0; i < 5; ++i) Expect(!old_player.PromptsAt(i), "old: no prompts");
+    ExpectEq(old.prompts.size(), 0u, "old: no prompt sets");
+
+    const char *bad[] = {
+        "mpo-input 1\np 0\n",      "mpo-input 1\np 0 xbox\n",
+        "mpo-input 1\np x psp\n",  "mpo-input 1\np 3 psp\np 3 psp\n",
+        "mpo-input 1\np 0 auto\n",
+    };
+    for (const char *b : bad) {
+        InputRecording r;
+        error.clear();
+        Expect(!InputRecording::Parse(b, &r, &error) && error.find("line") != std::string::npos,
+               std::string("bad p record rejected: ") + b);
+    }
+    std::filesystem::remove_all(dir, ec);
+}
 } // namespace
 
 int main() {
@@ -903,6 +1235,10 @@ int main() {
     TestCustomMapping();
     TestCtrlData();
     TestInputRecording();
+    TestDeviceTracker();
+    TestFaceLabels();
+    TestPromptSets();
+    TestPromptRecording();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);
         return 1;

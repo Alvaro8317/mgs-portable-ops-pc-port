@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "hle/hle_args.hpp"
+#include "hle/prompt_draw.hpp"
 #include "hle/system.hpp"
 #include "savedata/guest_text.hpp"
 
@@ -99,22 +100,6 @@ std::u16string utf8_to_utf16(const std::string &text) {
         }
     }
     return out;
-}
-
-// The button symbols, drawn as text (PPSSPP draws atlas images).
-const char *button_symbol(std::uint32_t button) {
-    switch (button) {
-    case sd::button::kCircle:
-        return "○";
-    case sd::button::kCross:
-        return "×";
-    case sd::button::kTriangle:
-        return "△";
-    case sd::button::kSquare:
-        return "□";
-    default:
-        return "";
-    }
 }
 
 const char *mode_name(std::uint32_t mode) {
@@ -347,7 +332,10 @@ void Utility::start_draw(std::uint32_t fade) {
     ppge_.draw_rect(0.0f, 0.0f, 480.0f, 272.0f, Ppge::faded(0x20000000u, fade));
 }
 
-// PSPDialog::DisplayButtons.
+// PSPDialog::DisplayButtons. The prompts come from the active set (F24b):
+// the PSP's symbols are drawn where they always were; key caps start at the
+// symbol's spot, and the one on the left is moved left when it would run
+// into the one on the right.
 void Utility::display_buttons(bool ok, bool cancel, std::uint32_t fade, std::uint32_t ok_button,
                               std::uint32_t cancel_button, bool button_swap,
                               const std::string &ok_caption, const std::string &back_caption) {
@@ -359,17 +347,35 @@ void Utility::display_buttons(bool ok, bool cancel, std::uint32_t fade, std::uin
     text.shadow_color = Ppge::faded(0x80000000u, fade);
     Ppge::Style symbol = text;
     symbol.align = Ppge::kCenter;
+    const PromptStyles styles{symbol, text, text};
     float x1 = 183.5f;
     float x2 = 261.5f;
     if (button_swap) std::swap(x1, x2);
-    if (ok) {
-        ppge_.draw_text(button_symbol(ok_button), x2 + 5.75f, 261.75f, symbol);
-        ppge_.draw_text(ok_caption.empty() ? "Enter" : ok_caption, x2 + 14.5f, 252.0f, text);
-    }
-    if (cancel) {
-        ppge_.draw_text(button_symbol(cancel_button), x1 + 5.75f, 261.75f, symbol);
-        ppge_.draw_text(back_caption.empty() ? "Back" : back_caption, x1 + 14.5f, 252.0f, text);
-    }
+    const auto place = [](float x) {
+        PromptPlace p;
+        p.left = x;
+        p.symbol_x = x + 5.75f;
+        p.symbol_y = 261.75f;
+        p.word_x = x;
+        p.word_y = 252.0f;
+        p.caption_x = x + 14.5f;
+        p.caption_y = 252.0f;
+        return p;
+    };
+    // The one on the left ends this far before the one on the right starts.
+    constexpr float kGap = 8.0f;
+    const auto draw = [&](const frontend::PromptLabel &label, float x, std::string_view caption) {
+        PromptPlace p = place(x);
+        const float right_slot = std::max(x1, x2);
+        if (x < right_slot && label.kind == frontend::PromptLabel::Kind::kKey) {
+            const float overrun =
+                prompt_right(ppge_, label, p, styles, caption) - (right_slot - kGap);
+            if (overrun > 0.0f) p = shifted(p, -overrun);
+        }
+        (void)draw_prompt(ppge_, label, p, styles, caption);
+    };
+    if (ok) draw(prompts_.For(ok_button), x2, ok_caption.empty() ? "Enter" : ok_caption);
+    if (cancel) draw(prompts_.For(cancel_button), x1, back_caption.empty() ? "Back" : back_caption);
 }
 
 // PSPMsgDialog::Update's drawing and DisplayMessage.
@@ -461,8 +467,16 @@ void Utility::draw_net(sd::DialogType type) {
     Ppge::Style button = text;
     button.align = Ppge::kLeft;
     Ppge::Style symbol = text;
-    ppge_.draw_text(button_symbol(v.cancel_button), 265.0f, 250.0f, symbol);
-    ppge_.draw_text("Cancel", 285.0f, 243.0f, button);
+    PromptPlace cancel;
+    cancel.left = 259.0f;
+    cancel.symbol_x = 265.0f;
+    cancel.symbol_y = 250.0f;
+    cancel.word_x = 259.0f;
+    cancel.word_y = 243.0f;
+    cancel.caption_x = 285.0f;
+    cancel.caption_y = 243.0f;
+    (void)draw_prompt(ppge_, prompts_.For(v.cancel_button), cancel, {symbol, button, button},
+                      "Cancel");
     ppge_.end();
     ++stats_.drawn_frames;
 }
@@ -527,17 +541,50 @@ void Utility::draw_osk() {
     const Ppge::Style guide = style(Ppge::kLeft, 0.6f);
     Ppge::Style symbol = guide;
     symbol.align = Ppge::kCenter;
-    ppge_.draw_text(button_symbol(sd::button::kSquare), 373.0f, 230.0f, symbol);
-    ppge_.draw_text("Space", 390.0f, 222.0f, action);
-    ppge_.draw_text(button_symbol(v.ok_button), 53.0f, 230.0f, symbol);
-    ppge_.draw_text(button_symbol(v.cancel_button), 53.0f, 255.0f, symbol);
-    ppge_.draw_text("Select", 75.0f, 222.0f, action);
-    ppge_.draw_text("Delete", 75.0f, 247.0f, action);
-    ppge_.draw_text("Start", 135.0f, 220.0f, guide);
-    ppge_.draw_text("Finish", 185.0f, 222.0f, action);
+    // F24b: the prompts of the active set. With the PSP's, the same calls as
+    // PSPOskDialog's, in the same order; key caps push what follows them on
+    // their row to the right. A keyboard set shows the PC keyboard's own
+    // Enter and Backspace (boot_main.cpp) for Finish and Delete.
+    const PromptStyles styles{symbol, guide, action};
+    const auto at = [](float symbol_x, float symbol_y, float word_x, float word_y, float caption_x,
+                       float caption_y) {
+        PromptPlace p;
+        p.left = symbol_x > 0.0f ? symbol_x - 6.0f : word_x;
+        p.symbol_x = symbol_x;
+        p.symbol_y = symbol_y;
+        p.word_x = word_x;
+        p.word_y = word_y;
+        p.caption_x = caption_x;
+        p.caption_y = caption_y;
+        return p;
+    };
+    const auto osk_label = [](const frontend::PromptLabel &own, const frontend::PromptLabel &button)
+        -> const frontend::PromptLabel & { return own.text.empty() ? button : own; };
+    using frontend::PromptLabel;
+    // A row's second prompt starts at its PSP spot or after the first one.
+    constexpr float kRowGap = 10.0f;
+    const auto follow = [](const PromptPlace &p, const PromptLabel &label, float after) {
+        if (label.kind != PromptLabel::Kind::kKey || after + kRowGap <= p.left) return p;
+        return shifted(p, after + kRowGap - p.left);
+    };
+    (void)draw_prompt(ppge_, prompts_.For(sd::button::kSquare),
+                      at(373.0f, 230.0f, 367.0f, 222.0f, 390.0f, 222.0f), styles, "Space");
+    const PromptPlace select = at(53.0f, 230.0f, 47.0f, 222.0f, 75.0f, 222.0f);
+    const PromptPlace remove = at(53.0f, 255.0f, 47.0f, 247.0f, 75.0f, 247.0f);
+    const float select_x = draw_prompt_label(ppge_, prompts_.For(v.ok_button), select, styles);
+    const float remove_x = draw_prompt_label(
+        ppge_, osk_label(prompts_.osk_delete, prompts_.For(v.cancel_button)), remove, styles);
+    const float row1 = draw_caption(ppge_, "Select", select_x, select, styles);
+    const float row2 = draw_caption(ppge_, "Delete", remove_x, remove, styles);
+    const PromptLabel &finish = osk_label(prompts_.osk_finish, prompts_.For(sd::button::kStart));
+    (void)draw_prompt(ppge_, finish,
+                      follow(at(0.0f, 0.0f, 135.0f, 220.0f, 185.0f, 222.0f), finish, row1), styles,
+                      "Finish");
     if (v.can_shift) {
-        ppge_.draw_text("Select", 135.0f, 245.0f, guide);
-        ppge_.draw_text("Shift", 185.0f, 247.0f, action);
+        const PromptLabel &shift = prompts_.For(sd::button::kSelect);
+        (void)draw_prompt(ppge_, shift,
+                          follow(at(0.0f, 0.0f, 135.0f, 245.0f, 185.0f, 247.0f), shift, row2),
+                          styles, "Shift");
     }
     ppge_.end();
     ++stats_.drawn_frames;

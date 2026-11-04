@@ -44,8 +44,10 @@
 #include <vector>
 
 #include "font_test_util.h"
+#include "hle/prompt_draw.hpp"
 #include "hle/system.hpp"
 #include "media_engine.h"
+#include "prompts.h"
 #include "psprecomp/interpreter.hpp"
 #include "psprecomp/runtime.hpp"
 #include "psprecomp/sha256.hpp"
@@ -2357,7 +2359,14 @@ void test_ppge_fonts() {
     CHECK(!ec);
 }
 
-void test_utility() {
+// F24b: the last frame of run_utility with the PSP's prompts, as the
+// dialogs drew it before F24b (taken with that code).
+constexpr const char *kPspPromptsFrame =
+    "877ba8bde8f870f849c66efe7ebfb7807856663d9c341aa790104a4308934ddf";
+
+// F24b: `prompts` is the set the dialogs draw. Returns the SHA-256 of the
+// last PPGe frame (the OSK's) and the text images PPGe drew.
+std::pair<std::string, std::uint64_t> run_utility(const mpo::frontend::PromptSet &prompts) {
     namespace sd = mpo::savedata;
     const std::filesystem::path ms0 = std::filesystem::temp_directory_path() / "mpo_hle_test_ms0";
     std::filesystem::remove_all(ms0);
@@ -2366,6 +2375,7 @@ void test_utility() {
     config.ms0_root = ms0;
     Fixture f(config);
     psprecomp::Runtime &rt = f.runtime;
+    f.system->utility().set_prompts(prompts);
     const auto put = [&rt](std::uint32_t address, const void *data, std::size_t size) {
         const auto *bytes = static_cast<const std::uint8_t *>(data);
         for (std::size_t k = 0; k < size; ++k)
@@ -2615,9 +2625,145 @@ void test_utility() {
     CHECK_EQ(f.system->utility().ppge().stats().lists, 32u);
     CHECK_EQ(f.system->ge().stats().interrupts, interrupts_before);
     CHECK(!f.system->volatile_memory().locked());
+    const mh::Ppge::Output out = f.system->utility().ppge().output();
+    const std::string frame = guest_sha256(rt, out.list, out.list_end - out.list) + " " +
+                              guest_sha256(rt, out.data, out.data_end - out.data) + " " +
+                              guest_sha256(rt, out.text, out.text_end - out.text);
     std::error_code ec;
     std::filesystem::remove_all(ms0, ec);
     CHECK(!ec);
+    return {psprecomp::sha256_bytes(std::span<const std::uint8_t>(
+                reinterpret_cast<const std::uint8_t *>(frame.data()), frame.size())),
+            f.system->utility().ppge().stats().texts};
+}
+
+// F18b's dialogs with the PSP's prompts (they draw what they drew before
+// F24b: the hash was taken with the code from before it), then with an Xbox
+// pad's and the keyboard's: the same dialogs, frames and text images, other
+// pixels.
+void test_utility() {
+    namespace fe = mpo::frontend;
+    const auto [psp, psp_texts] = run_utility(fe::PromptSet::Psp());
+    std::fprintf(stderr, "PSP prompts: last frame %s, %llu texts\n", psp.c_str(),
+                 static_cast<unsigned long long>(psp_texts));
+    CHECK(psp == kPspPromptsFrame);
+    fe::Device pad;
+    pad.kind = fe::Device::Kind::kGamepad;
+    pad.type = fe::GamepadType::kXboxOne;
+    pad.face = fe::FaceLabelsForType(pad.type);
+    const fe::InputMapping mapping = fe::InputMapping::Default();
+    const auto [xbox, xbox_texts] = run_utility(fe::BuildPromptSetForDevice(pad, mapping));
+    const auto [keys, keys_texts] =
+        run_utility(fe::BuildPromptSet(fe::PromptStyle::kKeyboard, mapping));
+    CHECK(xbox != psp && keys != psp && keys != xbox);
+    CHECK_EQ(xbox_texts, psp_texts);
+    CHECK_EQ(keys_texts, psp_texts);
+}
+
+// F24b: the prompts of the dialogs. With the PSP's set, draw_prompt makes
+// exactly the PPGe calls the dialogs made before; a key cap is a box and
+// its text, and pushes the caption right; Utility hands each PSP button the
+// label of the active set.
+void test_prompt_draw() {
+    namespace fe = mpo::frontend;
+    mh::SystemConfig config;
+    Fixture f(config);
+    psprecomp::Runtime &rt = f.runtime;
+    mh::Ppge &ppge = f.system->utility().ppge();
+    const auto frame = [&](const auto &draw) {
+        CHECK(ppge.begin());
+        draw();
+        ppge.end();
+        const mh::Ppge::Output out = ppge.output();
+        return guest_sha256(rt, out.list, out.list_end - out.list) + " " +
+               guest_sha256(rt, out.data, out.data_end - out.data) + " " +
+               guest_sha256(rt, out.text, out.text_end - out.text);
+    };
+    mh::Ppge::Style text;
+    text.align = mh::Ppge::kLeft;
+    text.scale = 0.55f;
+    text.shadow = true;
+    mh::Ppge::Style symbol = text;
+    symbol.align = mh::Ppge::kCenter;
+    mh::Ppge::Style guide = text;
+    guide.scale = 0.6f;
+    const mh::PromptStyles styles{symbol, guide, text};
+    mh::PromptPlace place;
+    place.left = 261.5f;
+    place.symbol_x = 261.5f + 5.75f;
+    place.symbol_y = 261.75f;
+    place.word_x = 135.0f;
+    place.word_y = 220.0f;
+    place.caption_x = 261.5f + 14.5f;
+    place.caption_y = 252.0f;
+    const fe::PromptSet psp = fe::PromptSet::Psp();
+    // PSPDialog::DisplayButtons as before F24b, and the OSK's "Start".
+    const std::string before = frame([&] {
+        ppge.draw_text("○", 261.5f + 5.75f, 261.75f, symbol);
+        ppge.draw_text("Enter", 261.5f + 14.5f, 252.0f, text);
+        ppge.draw_text("Start", 135.0f, 220.0f, guide);
+        ppge.draw_text("Finish", 261.5f + 14.5f, 252.0f, text);
+    });
+    float right = 0.0f;
+    const std::string now = frame([&] {
+        (void)mh::draw_prompt(ppge, psp.For(mpo::savedata::button::kCircle), place, styles,
+                              "Enter");
+        right =
+            mh::draw_prompt(ppge, psp.For(mpo::savedata::button::kStart), place, styles, "Finish");
+    });
+    CHECK(now == before);
+    float finish_width = 0.0f;
+    float finish_height = 0.0f;
+    ppge.measure_text(&finish_width, &finish_height, "Finish", text.scale);
+    CHECK(right == place.caption_x + finish_width);
+
+    // A key cap: two rectangles and the text in them, then the caption
+    // after the cap.
+    const fe::PromptLabel key{fe::PromptLabel::Kind::kKey, "Backspace"};
+    float cap_right = 0.0f;
+    const std::uint64_t texts = ppge.stats().texts;
+    const std::string cap =
+        frame([&] { cap_right = mh::draw_prompt(ppge, key, place, styles, "Delete"); });
+    CHECK(cap != before);
+    CHECK_EQ(ppge.stats().texts - texts, 2u);
+    float key_width = 0.0f;
+    float key_height = 0.0f;
+    ppge.measure_text(&key_width, &key_height, "Backspace", text.scale);
+    float delete_width = 0.0f;
+    ppge.measure_text(&delete_width, &key_height, "Delete", text.scale);
+    // The caption starts after the cap (wider than the PSP's symbol).
+    CHECK(cap_right > place.left + key_width + delete_width);
+    CHECK(mh::prompt_right(ppge, key, place, styles, "Delete") == cap_right);
+    CHECK(mh::prompt_right(ppge, psp.For(mpo::savedata::button::kCircle), place, styles,
+                           "Finish") == right);
+    // An empty key draws only its caption, at the PSP's spot.
+    const std::string empty =
+        frame([&] { (void)mh::draw_prompt(ppge, fe::PromptLabel{}, place, styles, "Finish"); });
+    const std::string caption_only =
+        frame([&] { ppge.draw_text("Finish", place.caption_x, place.caption_y, text); });
+    CHECK(empty == caption_only);
+    const mh::PromptPlace moved = mh::shifted(place, -10.0f);
+    CHECK(moved.left == place.left - 10.0f && moved.caption_x == place.caption_x - 10.0f &&
+          moved.symbol_x == place.symbol_x - 10.0f && moved.word_x == place.word_x - 10.0f &&
+          moved.symbol_y == place.symbol_y);
+
+    // The labels the dialogs ask for: the PSP's until a set is given.
+    mh::Utility &utility = f.system->utility();
+    CHECK(utility.prompts() == psp);
+    fe::Device pad;
+    pad.kind = fe::Device::Kind::kGamepad;
+    pad.type = fe::GamepadType::kXboxOne;
+    pad.face = fe::FaceLabelsForType(pad.type);
+    utility.set_prompts(fe::BuildPromptSetForDevice(pad, fe::InputMapping::Default()));
+    // MPO's dialogs confirm with circle (buttonSwap = 0): B on an Xbox pad.
+    CHECK(utility.prompts().For(mpo::savedata::button::kCircle).text == "B");
+    CHECK(utility.prompts().For(mpo::savedata::button::kCross).text == "A");
+    CHECK(utility.prompts().For(mpo::savedata::button::kSquare).text == "X");
+    CHECK(utility.prompts().For(mpo::savedata::button::kStart).text == "Menu");
+    utility.set_prompts(
+        fe::BuildPromptSet(fe::PromptStyle::kKeyboard, fe::InputMapping::Default()));
+    CHECK(utility.prompts().For(mpo::savedata::button::kCircle).text == "Right click");
+    CHECK(utility.prompts().osk_finish.text == "Enter");
 }
 
 // F20b: the AP Scan as MPO drives it (docs/analysis/apscan.md): a handler
@@ -2891,6 +3037,7 @@ int main() {
     run_test("test_font", &test_font);
     run_test("test_ppge_fonts", &test_ppge_fonts);
     run_test("test_utility", &test_utility);
+    run_test("test_prompt_draw", &test_prompt_draw);
     run_test("test_net", &test_net);
     std::printf("mpo_hle_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

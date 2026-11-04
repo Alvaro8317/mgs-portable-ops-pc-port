@@ -210,6 +210,17 @@ bool InputRecording::Parse(std::string_view text, InputRecording *out, std::stri
             last_sample = std::max(last_sample, event.sample);
             any_sample = true;
             rec.osk.push_back(std::move(event));
+        } else if (kind == "p") {
+            std::uint64_t sample = 0;
+            PromptSet set;
+            if (w.size() < 3u || !ParseNumber(w[1], &sample) ||
+                !ParsePromptSet(std::span<const std::string_view>(w).subspan(2), &set))
+                return bad("p takes <sample> <prompt set>");
+            if (!rec.prompts.empty() && sample <= rec.prompts.back().first)
+                return bad("prompt sets go in sample order");
+            rec.prompts.emplace_back(sample, std::move(set));
+            last_sample = std::max(last_sample, sample);
+            any_sample = true;
         } else if (kind == "c") {
             FrameCheck check;
             if (w.size() != 4u || !ParseNumber(w[1], &check.flip) ||
@@ -294,6 +305,14 @@ void InputRecorder::Osk(const OskEvent &event) {
     ++osk_events_;
 }
 
+void InputRecorder::Prompts(std::uint64_t sample, const PromptSet &set) {
+    if (set == last_prompts_) return;
+    out_ << "p " << sample << ' ' << FormatPromptSet(set) << '\n';
+    out_.flush();
+    last_prompts_ = set;
+    ++prompt_changes_;
+}
+
 void InputRecorder::Check(const FrameCheck &check) {
     char line[96];
     std::snprintf(line, sizeof(line), "c %" PRIu64 " %" PRIu64 " %016" PRIx64 "\n", check.flip,
@@ -329,6 +348,14 @@ std::vector<OskEvent> InputPlayer::OskAt(std::uint64_t sample) {
     while (next_osk_ < recording_.osk.size() && recording_.osk[next_osk_].sample <= sample)
         events.push_back(recording_.osk[next_osk_++]);
     return events;
+}
+
+std::optional<PromptSet> InputPlayer::PromptsAt(std::uint64_t sample) {
+    std::optional<PromptSet> set;
+    while (next_prompts_ < recording_.prompts.size() &&
+           recording_.prompts[next_prompts_].first <= sample)
+        set = recording_.prompts[next_prompts_++].second;
+    return set;
 }
 
 const FrameCheck *InputPlayer::CheckAt(std::uint64_t flip) const {
