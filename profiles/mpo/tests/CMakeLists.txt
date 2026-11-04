@@ -116,6 +116,14 @@ add_executable(mpo_texreplace_test texreplace_test.cpp)
 target_link_libraries(mpo_texreplace_test PRIVATE mpo_texreplace mpo_xxhash)
 mpo_target_warnings(mpo_texreplace_test)
 add_test(NAME mpo_texreplace_test COMMAND mpo_texreplace_test)
+# F25b: widescreen (--aspect, the profile, the patch, the video frames).
+add_executable(mpo_widescreen_test widescreen_test.cpp)
+target_link_libraries(mpo_widescreen_test PRIVATE mpo_widescreen mpo_sha256)
+target_compile_definitions(mpo_widescreen_test PRIVATE
+    MPO_WIDESCREEN_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/../config/widescreen.toml"
+    MPO_SUPPORTED_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/../config/supported.toml")
+mpo_target_warnings(mpo_widescreen_test)
+add_test(NAME mpo_widescreen_test COMMAND mpo_widescreen_test)
 # F12: transform mode, splines, lines, lighting, fog, clipping, bounding box.
 add_executable(mpo_ge_transform_test ge_transform_test.cpp)
 target_link_libraries(mpo_ge_transform_test PRIVATE mpo_ge)

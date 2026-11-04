@@ -690,6 +690,32 @@ struct Launcher {
             ImGui::TableNextColumn();
             ImGui::TableNextColumn();
             ImGui::Checkbox(label(Text::kFullscreen, "fullscreen").c_str(), &settings.fullscreen);
+
+            // F25b: --aspect (the values are in launcher_core.hpp).
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(tr(Text::kAspect));
+            ImGui::TableNextColumn();
+            bool preset = false;
+            for (const mpo::launcher::AspectChoice &choice : mpo::launcher::kAspectChoices) {
+                const bool native = &choice == &mpo::launcher::kAspectChoices[0];
+                if (!native) ImGui::SameLine();
+                const bool chosen = settings.aspect == choice.value;
+                preset = preset || chosen;
+                const std::string text =
+                    native ? label(Text::kAspectNative, "aspect-native") : std::string(choice.label);
+                if (ImGui::RadioButton(text.c_str(), chosen)) settings.aspect = choice.value;
+            }
+            if (!preset) {
+                // Another one, written by hand in settings.toml.
+                ImGui::SameLine();
+                ImGui::RadioButton(settings.aspect.c_str(), true);
+            }
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", tr(Text::kAspectNote));
             ImGui::EndDisabled();
             ImGui::EndTable();
         }

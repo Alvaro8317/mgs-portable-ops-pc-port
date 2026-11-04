@@ -128,6 +128,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F24a | Ajustes del juego en el launcher (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; probar `--fullscreen` en el juego y el launcher con mando: pendiente del usuario) |
 | F24b | Controles en pantalla según el dispositivo, parte I (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; `--prompts`, los diálogos del sistema; probar con mandos reales: pendiente del usuario) |
 | F24c | Reemplazo de texturas por hash (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; solo texturas en RAM: las de VRAM, el 91 % de las búsquedas, quedan para las HD) |
+| F25b | Widescreen, fase W1 (autónomo) | M7 | ✅ hecha (ola 7; `--aspect` y el ajuste Aspect del launcher; probarlo en el juego (el save de `tramo3` con 21:9, la ventana y el video con barras): pendiente del usuario) |
 | F25c | Reemplazo de texturas en VRAM, texturas HD (autónomo) | M7 | ✅ hecha (ola 7; sin framebuffers ni video, en softgpu y Vulkan; las pruebas en el juego y el coste: pendientes del usuario) |
 | F25d | El launcher en inglés y en español (autónomo) | M7 | ✅ hecha (ola 7; el idioma del sistema o `language` en `settings.toml`, la salida de `setup.py` en inglés; probar en Windows y en la Steam Deck con mando: pendiente del usuario) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
@@ -1569,6 +1570,38 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 
 ## F23+ — Mejoras (se planifican cuando M6 esté cerrado)
 
+### F25b — Widescreen, fase W1, autónomo (ola 7)
+
+- **Objetivo**: la fase W1 de `docs/analysis/widescreen.md` (§7): jugar en ultrawide "como
+  PPSSPP", con el 3D más ancho y bien proporcionado y el HUD estirado.
+- **Requisitos**: el spike de widescreen (ola 6), F24a (los ajustes del launcher) y F23b (el
+  presentador a N×).
+- **Tareas**:
+  - Una opción `--aspect native|<ancho>:<alto>` en `mpo_boot`. Con un aspecto más ancho que 16:9,
+    escribe `(480/272) / aspecto` en la constante `0x089E9728` de `mgp_main` (la escala en x de las
+    proyecciones de la cámara) antes de arrancarlo, después de validar el SHA-256 del ELF y que la
+    constante valga 1,0.
+  - La dirección, el SHA-256 y el valor original van en la configuración del perfil
+    (`profiles/mpo/config/`, regla 3 de CLAUDE.md), nunca en código genérico.
+  - El presentador (softgpu y Vulkan) estira la imagen al aspecto pedido, y la ventana se abre con
+    ese aspecto. Los frames del video (PMF) van con barras negras a los lados (pillarbox), a
+    480×272.
+  - Con `native` (el valor por defecto, 16:9) todo queda exactamente como hoy: no se escribe nada y
+    los hashes de las repeticiones no cambian.
+  - Decidir y documentar cómo entra el parche en las grabaciones, para que la repetición siga siendo
+    determinista.
+  - Si es natural, el ajuste en el launcher (los Settings de F24a, `settings.toml` y
+    `setup.py play`), con un cambio mínimo y las cadenas en inglés en un solo sitio: F25d traduce
+    el launcher a la vez.
+  - README.md y README.es.md a la vez, si cambian.
+  - No cambia el ABI del runtime ni los headers del framework.
+- **Criterios de hecho**: tests sin el juego (el parseo del aspecto y el valor de la constante, el
+  parche sobre un ELF sintético con sus rechazos, la configuración del perfil, el rectángulo de
+  presentación, la regla del video, el registro en la grabación y los ajustes de `setup.py` y del
+  launcher). `ctest` completo en Clang y GCC. **En el juego (pendiente del usuario)**: `tramo3` con
+  21:9 deja el mismo save que sin él, y las capturas de la ventana muestran el 3D bien proporcionado
+  y el video con barras.
+
 ### F25c — Reemplazo de texturas en VRAM (texturas HD), autónomo (ola 7)
 
 - **Objetivo**: que `--textures` también reemplace las texturas que el juego tiene en la VRAM
@@ -1779,7 +1812,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     - el HUD no se mueve y sale estirado;
     - fases:
       - **W1**, corta: `--aspect` parchea la constante al arrancar, estira la imagen y pone
-        barras negras en el video;
+        barras negras en el video. **Hecha en F25b** (ola 7, `docs/sessions/F25b.md`; con el
+        ajuste Aspect del launcher). Falta verla en el juego (pendiente del usuario);
       - **W2**: el HUD centrado en Vulkan, con los marcadores que siguen al 3D;
       - **W3**: anclar cada elemento al borde con los `.la2`, solo si se pide;
     - se descartan un framebuffer más ancho y anclar por la posición del dibujo.

@@ -200,7 +200,7 @@ class SettingsTest(unittest.TestCase):
     self.assertEqual(notices, [])
     self.assertEqual(setup.DEFAULT_SETTINGS, {'renderer': 'vulkan', 'render_scale': 1,
                                               'window_scale': 2, 'fullscreen': False,
-                                              'language': 'auto'})
+                                              'aspect': 'native', 'language': 'auto'})
 
   def test_reads_what_the_launcher_writes(self):
     # launcher_core_test.cpp checks that format_settings writes exactly this.
@@ -208,7 +208,7 @@ class SettingsTest(unittest.TestCase):
     settings, notices = setup.load_settings(golden)
     self.assertEqual(notices, [])
     self.assertEqual(settings, {'renderer': 'vulkan', 'render_scale': 4, 'window_scale': 3,
-                                'fullscreen': True, 'language': 'es'})
+                                'fullscreen': True, 'aspect': '64:27', 'language': 'es'})
     # And as a Windows checkout may leave it.
     crlf = golden.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
     self.assertEqual(self.load(crlf), (settings, []))
@@ -248,6 +248,24 @@ class SettingsTest(unittest.TestCase):
     settings, notices = self.load('render_scale = 4\nwindow_scale = 2.5\n')
     self.assertEqual((settings['render_scale'], settings['window_scale']), (4, 2))
     self.assertEqual(len(notices), 1)
+
+  def test_aspect(self):
+    # F25b: what mpo_boot --aspect takes (host/widescreen/widescreen.cpp).
+    for value in ('native', '16:9', '30:17', '21:9', '64:27', '43:18', '32:9', '4:1',
+                  '99999:25000'):
+      settings, notices = self.load(f'aspect = "{value}"\n')
+      self.assertEqual((settings['aspect'], notices), (value, []), value)
+    for value in ('"16:10"', '"4:3"', '"41:10"', '"wide"', '"21:09x"', '"0:9"', '"021:9"',
+                  '"100000:30000"', '"21x9"', '2.37', 'true', '"Native"', '" 21:9"'):
+      settings, notices = self.load(f'aspect = {value}\n')
+      self.assertEqual(settings['aspect'], 'native', value)
+      self.assertEqual(len(notices), 1, value)
+      self.assertIn('using "native"', notices[0])
+    # Only a wider one goes to mpo_boot, so the default command line is as before.
+    self.assertNotIn('--aspect', self.options())
+    self.assertEqual(self.options({'aspect': '64:27'})[-2:], ['--aspect', '64:27'])
+    self.assertEqual(self.options({'aspect': '64:27'}, ['--aspect', '32:9']).count('--aspect'),
+                     0)
 
   def test_types_toml_could_confuse(self):
     # true is a Python int; 2.0 and "2" are not integers; a table is not a value.

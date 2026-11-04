@@ -159,7 +159,7 @@ if(TARGET mpo_generated_mgp_main)
     include(${PROJECT_SOURCE_DIR}/third_party/ppsspp_cpu/ppsspp_vfpu_tables.cmake)
     add_executable(mpo_boot boot_main.cpp)
     target_link_libraries(mpo_boot PRIVATE psprecomp_core mpo_hle mpo_recomp mpo_generated_mgp_main
-                          mpo_ge_replay mpo_savedata mpo_texreplace)
+                          mpo_ge_replay mpo_savedata mpo_texreplace mpo_widescreen)
     # F10b: --window shows the display and reads the controls with SDL.
     if(TARGET mpo_frontend_sdl)
         target_link_libraries(mpo_boot PRIVATE mpo_frontend_sdl)

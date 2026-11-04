@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Widescreen, phase W1 (F25b; docs/analysis/widescreen.md). `mpo_boot --aspect
+# <w>:<h>` wider than 16:9 writes (480 / 272) / aspect into the float that the
+# camera's set-up (0x08845124) loads once and passes to the projection builder
+# as the x scale of its four projection matrices: the CWCheat widescreen code
+# of ULUS-10202 (0x201E9728). It is the only load of that constant in .text
+# [V, spike]. The HUD does not use those matrices and comes out stretched.
+#
+# mpo_boot embeds this file at build time (host/widescreen). It patches the
+# module in memory before booting it, only when its SHA-256 is `sha256` and
+# the constant holds `original`; any other module is refused with a message.
+# Addresses and hashes are not copyrighted content; the module never goes into
+# the repository (CLAUDE.md §1).
+#
+# `sha256` is the decrypted ELF's (supported.toml, `decrypt`). `image_base` is
+# where the runtime loads mgp_main (as PPSSPP does); `x_scale_address` is a
+# PSP address inside the module's first LOAD segment (.rodata).
+
+[[module]]
+name = "mgp_main"
+disc_id = "ULUS10202"
+disc_version = "1.02"
+sha256 = "ca700ea516a98949763410da537a75a08f9723718fab302bcd7ef1e6185cadf8"
+image_base = 0x08804000
+x_scale_address = 0x089E9728
+original = 0x3F800000  # 1.0f

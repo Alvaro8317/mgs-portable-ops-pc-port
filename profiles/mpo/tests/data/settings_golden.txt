@@ -10,5 +10,8 @@ render_scale = 4
 window_scale = 3
 # Borderless, at the desktop's resolution.
 fullscreen = true
+# "native" (16:9), or "<width>:<height>" wider ("64:27": 2560x1080).
+# Wider, the 3D shows more at the sides and the HUD is stretched.
+aspect = "64:27"
 # The launcher's language: "auto" (the system's), "en" or "es".
 language = "es"

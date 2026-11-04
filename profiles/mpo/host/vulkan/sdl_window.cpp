@@ -20,12 +20,13 @@ std::unique_ptr<SdlVulkanWindow> SdlVulkanWindow::Create(const frontend::Present
         return nullptr;
     }
     w->video_initialised_ = true;
-    const int scale = std::clamp(config.scale, 1, 16);
+    int window_w = 0;
+    int window_h = 0;
+    frontend::InitialWindowSize(config, &window_w, &window_h);
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN;
     if (config.hidden) flags |= SDL_WINDOW_HIDDEN;
     if (config.fullscreen) flags |= SDL_WINDOW_FULLSCREEN;
-    w->window_ = SDL_CreateWindow(config.title.c_str(), frontend::kPspScreenWidth * scale,
-                                  frontend::kPspScreenHeight * scale, flags);
+    w->window_ = SDL_CreateWindow(config.title.c_str(), window_w, window_h, flags);
     if (w->window_ == nullptr) {
         if (error) *error = std::string("SDL_CreateWindow(VULKAN): ") + SDL_GetError();
         return nullptr;
@@ -64,11 +65,12 @@ void SdlVulkanWindow::DrawableSize(int *width, int *height) const {
     }
 }
 
-PresentRect SdlVulkanWindow::Destination(int src_w, int src_h) const {
+PresentRect SdlVulkanWindow::Destination(int src_w, int src_h, double display_aspect) const {
     int w = 0;
     int h = 0;
     DrawableSize(&w, &h);
-    const SDL_FRect r = frontend::FitRect(src_w, src_h, w, h, config_.integer_scaling);
+    const SDL_FRect r =
+        frontend::FitRect(src_w, src_h, w, h, config_.integer_scaling, display_aspect);
     return PresentRect{static_cast<int>(std::lround(r.x)), static_cast<int>(std::lround(r.y)),
                        static_cast<int>(std::lround(r.w)), static_cast<int>(std::lround(r.h))};
 }

@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// profiles/mpo/config/widescreen.toml, written by CMake (configure_file).
+R"mpo_toml(@MPO_WIDESCREEN_TOML@)mpo_toml"

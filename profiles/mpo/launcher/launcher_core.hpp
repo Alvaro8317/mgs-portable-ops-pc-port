@@ -61,12 +61,32 @@ struct GameSettings {
     int window_scale{2};
     // Borderless, at the desktop's resolution (--fullscreen).
     bool fullscreen{};
+    // F25b: "native", or "<width>:<height>" wider than 16:9 (--aspect).
+    std::string aspect{"native"};
     // F25d: the launcher's language, "auto" (the system's), "en" or "es"
     // (launcher_text.hpp). mpo_boot gets nothing from it.
     std::string language{"auto"};
 
     bool operator==(const GameSettings &) const = default;
 };
+
+// F25b: the aspects the Settings offer, with their labels. The native one's
+// label and the note are translated (launcher_strings.inc, F25d); the others
+// are only numbers. settings.toml may hold any other one setup.py accepts.
+struct AspectChoice {
+    const char *value;
+    const char *label;
+};
+inline constexpr AspectChoice kAspectChoices[] = {
+    {"native", "16:9 (native)"},
+    {"64:27", "21:9 (2560x1080)"},
+    {"43:18", "21:9 (3440x1440)"},
+    {"32:9", "32:9"},
+};
+
+// True for "native" or "<w>:<h>" from the PSP's 480x272 to 4:1, with up to
+// five digits each (setup.py's valid_aspect).
+bool valid_aspect(std::string_view aspect);
 
 // The settings in a JSON object as `status --json` prints them; a key that is
 // missing or not valid keeps its default (setup.py already checked them).

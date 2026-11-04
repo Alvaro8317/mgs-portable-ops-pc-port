@@ -21,6 +21,7 @@
 //            [--watch-call <address>]...
 //            [--prompts auto|psp|xbox|playstation|nintendo|keyboard]
 //            [--textures <dir>|none] [--dump-textures <dir>]
+//            [--aspect native|<width>:<height>]
 //
 // It measures the start-up (registering the dispatch table: time and memory),
 // runs PSP threads until --until-us of virtual time (default 5 s), a runtime
@@ -177,6 +178,20 @@
 //                             packs from. The dump is the game's art: it never
 //                             goes into the repository (CLAUDE.md §1).
 // The report adds the lookups, the replacements and the dumped PNGs.
+//
+// F25b: widescreen, phase W1 (host/widescreen, docs/analysis/widescreen.md).
+//   --aspect <w>:<h>          (21:9, 64:27, 32:9...; native by default) wider
+//                             than 16:9 writes (480/272) / aspect into the x
+//                             scale of the camera's projection in mgp_main
+//                             (config/widescreen.toml: the module's SHA-256,
+//                             the address and its original value, checked
+//                             before booting), so the 3D shows more at the
+//                             sides; the window opens at that aspect and the
+//                             image is stretched to it (the HUD too). Video
+//                             frames keep 480x272, with black bars at the
+//                             sides. Up to 16:9 nothing changes.
+// The patch changes every 3D frame, so --record-input writes an `aspect`
+// record and a replay applies the recorded one (--aspect against it warns).
 
 #include <algorithm>
 #include <array>
@@ -219,6 +234,7 @@
 #include "texreplace/texture_replacer.hpp"
 #include "vfpu/vfpu.hpp"
 #include "wav_writer.h"
+#include "widescreen.hpp"
 
 #if MPO_BOOT_SDL
 #include <SDL3/SDL.h>
@@ -567,6 +583,7 @@ int main(int argc, char **argv) {
     std::string check_overlay;
     std::string textures_dir; // empty: the default folder; "none": off
     std::string dump_textures_dir;
+    std::string aspect_option; // empty: native (or the recording's)
     // Every option takes a value: a word left over is a mistake, not ignored
     // (F19: a whole --press list quoted as one word went unnoticed).
     if (argc % 2 == 0) return fail(std::string("option without a value: ") + argv[argc - 1]);
@@ -658,6 +675,10 @@ int main(int argc, char **argv) {
             textures_dir = value;
         } else if (option == "--dump-textures") {
             dump_textures_dir = value;
+        } else if (option == "--aspect") {
+            std::string why;
+            if (!mpo::widescreen::ParseAspect(value, &why)) return fail(why);
+            aspect_option = value;
         } else if (option == "--osk-text") {
             osk_texts.push_back(value);
         } else if (option == "--record-input") {
@@ -727,6 +748,28 @@ int main(int argc, char **argv) {
                     recording.changes.size(), recording.osk.size(), recording.checks.size(),
                     recording.complete ? "" : ", cut short (no end line)");
         player = std::make_unique<mpo::frontend::InputPlayer>(std::move(recording));
+    }
+    // ---- F25b: the aspect, the option's or the recording's ----
+    mpo::widescreen::Aspect aspect;
+    {
+        std::string why;
+        if (!aspect_option.empty()) {
+            aspect = *mpo::widescreen::ParseAspect(aspect_option, &why);
+        } else if (player && player->recording().has_aspect) {
+            const auto recorded = mpo::widescreen::ParseAspect(player->recording().aspect, &why);
+            if (!recorded) return fail("the recording's aspect: " + why);
+            aspect = *recorded;
+            std::printf("replay: aspect %s, as recorded\n", aspect.text().c_str());
+        }
+        if (player) {
+            const mpo::frontend::InputRecording &rec = player->recording();
+            const std::uint32_t recorded_bits =
+                rec.has_aspect ? rec.aspect_x_scale : mpo::widescreen::XScaleBits({});
+            if (recorded_bits != mpo::widescreen::XScaleBits(aspect))
+                std::printf("replay: the recording ran with aspect %s and this run with %s: the "
+                            "replay may not match\n",
+                            rec.has_aspect ? rec.aspect.c_str() : "native", aspect.text().c_str());
+        }
     }
     const bool replay_live = replay_end_live < 0 ? window : replay_end_live == 1;
     if (!until_given && (window || player)) until_us = std::uint64_t{1} << 62u;
@@ -806,8 +849,23 @@ int main(int argc, char **argv) {
 
     std::ifstream elf_file(elf_path, std::ios::binary);
     if (!elf_file) return fail("cannot read " + elf_path);
-    const std::vector<std::uint8_t> elf((std::istreambuf_iterator<char>(elf_file)),
-                                        std::istreambuf_iterator<char>());
+    std::vector<std::uint8_t> elf((std::istreambuf_iterator<char>(elf_file)),
+                                  std::istreambuf_iterator<char>());
+    if (!aspect.native()) {
+        // F25b: the module in memory, before it boots (never on disk).
+        const std::uint32_t bits = mpo::widescreen::XScaleBits(aspect);
+        const auto patched =
+            mpo::widescreen::PatchModule(elf, mpo::widescreen::Profile::Builtin(), bits, &error);
+        if (!patched) return fail(error);
+        std::printf("aspect: %s (%.3f:1): %s 0x%08X = %.6f (0x%08X), the 3D is wider and the HUD "
+                    "stretched; video frames keep 480x272\n",
+                    aspect.text().c_str(), aspect.ratio(), patched->module->name.c_str(),
+                    patched->module->x_scale_address,
+                    static_cast<double>(mpo::widescreen::BitsToFloat(bits)), bits);
+    }
+    // 0: the image's own aspect (native, and the video frames).
+    const double display_aspect = aspect.native() ? 0.0 : aspect.ratio();
+    mpo::widescreen::VideoFrameRule video_rule;
 
     // Start-up: the dispatch table of every corpus.
     print_memory("before the runtime", memory_use());
@@ -973,6 +1031,7 @@ int main(int argc, char **argv) {
             presenter_config.scale = window_scale;
             presenter_config.fullscreen = fullscreen;
             presenter_config.linear_filter = linear_filter;
+            presenter_config.display_aspect = display_aspect;
 #if MPO_BOOT_VULKAN
             if (vulkan) {
                 vk_window = mpo::vk::SdlVulkanWindow::Create(presenter_config, &error);
@@ -1279,6 +1338,10 @@ int main(int argc, char **argv) {
             }
             if (!present && !capture) return;
             const bool capture_now = capture && flip_count % capture_every == 0u;
+            // F25b: the GE's frames stretched to --aspect, the video's with bars.
+            [[maybe_unused]] const double flip_aspect =
+                display_aspect > 0.0 && !video_rule.OnFlip(system.mpeg().frames()) ? display_aspect
+                                                                                   : 0.0;
 #if MPO_BOOT_VULKAN && MPO_BOOT_SDL
             if (swapchain) {
                 SDL_Event event;
@@ -1297,7 +1360,7 @@ int main(int argc, char **argv) {
                 input->EndPoll();
                 const int sw = mpo::frontend::kPspScreenWidth;
                 const int sh = mpo::frontend::kPspScreenHeight;
-                const mpo::vk::PresentRect where = vk_window->Destination(sw, sh);
+                const mpo::vk::PresentRect where = vk_window->Destination(sw, sh, flip_aspect);
                 std::vector<std::uint8_t> window_pixels;
                 std::vector<std::uint8_t> *window_capture =
                     capture_now && capture_window ? &window_pixels : nullptr;
@@ -1366,15 +1429,20 @@ int main(int argc, char **argv) {
                         system.kernel().request_stop();
                 }
                 input->EndPoll();
+                presenter->SetDisplayAspect(flip_aspect);
                 (void)presenter->PresentRgba(shown.data(), mpo::frontend::kPspScreenWidth,
                                              mpo::frontend::kPspScreenHeight);
             }
 #endif
         });
 
-        if (recorder.is_open())
+        if (recorder.is_open()) {
             recorder.Header(system.rtc().base_seconds(), system.rtc().utc_offset(), ms0_digest,
                             osk_texts);
+            // F25b: only when patched, so a native recording is as before.
+            if (!aspect.native())
+                recorder.Aspect(aspect.text(), mpo::widescreen::XScaleBits(aspect));
+        }
 
         const auto t2 = std::chrono::steady_clock::now();
         if (!system.boot(elf, "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN", &error)) return fail(error);

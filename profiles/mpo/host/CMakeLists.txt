@@ -15,15 +15,19 @@ add_library(mpo_disc STATIC
 target_include_directories(mpo_disc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 mpo_target_warnings(mpo_disc)
 
+# SHA-256 on its own (F25b): mpo_widescreen uses it without the installer.
+add_library(mpo_sha256 STATIC util/sha256.cpp)
+target_include_directories(mpo_sha256 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+mpo_target_warnings(mpo_sha256)
+
 add_library(mpo_host STATIC
     crypto/psp_module.cpp
     install/installer.cpp
     install/save_profile.cpp
     install/supported_versions.cpp
-    util/sha256.cpp
 )
 target_include_directories(mpo_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(mpo_host PUBLIC mpo_disc)
+target_link_libraries(mpo_host PUBLIC mpo_disc mpo_sha256)
 target_include_directories(mpo_host SYSTEM PRIVATE
     ${PROJECT_SOURCE_DIR}/third_party/tomlplusplus/include)
 # Errors come back as toml::parse_result instead of exceptions.
@@ -56,6 +60,9 @@ add_subdirectory(texreplace)
 add_subdirectory(apscan)
 
 add_subdirectory(frontend)
+
+# F25b: widescreen (mpo_boot --aspect).
+add_subdirectory(widescreen)
 
 # F17a: PMF videos and PGF fonts (they use mpo_audio and mpo_ge_replay).
 add_subdirectory(video)
