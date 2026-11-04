@@ -461,6 +461,10 @@ void Mpeg::write_video_image(Context &ctx, std::uint32_t buffer, std::uint32_t f
         // A build without FFmpeg has no image: black, as before F17b.
         m.fill(buffer, 0u, valid);
     }
+    // F25c: a video frame is never replaced (PPSSPP's TextureCacheCommon
+    // videos_ list).
+    if (ge::TextureProvider *provider = system_.ge().ge().texture_provider())
+        provider->VideoWritten(buffer, valid);
 }
 
 std::uint32_t Mpeg::avc_decode(std::uint32_t mpeg, std::uint32_t au_addr, std::uint32_t frame_width,

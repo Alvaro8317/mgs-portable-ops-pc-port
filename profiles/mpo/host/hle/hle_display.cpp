@@ -246,6 +246,18 @@ void Display::leave_vblank() {
 void Display::flip() {
     flipped_this_frame_ = true;
     ++flips_;
+    // F25c: the replacer ages its framebuffers and video frames per flip,
+    // and never replaces what the display shows.
+    if (ge::TextureProvider *provider = system_.ge().ge().texture_provider()) {
+        if (framebuf_.top_address != 0u) {
+            const std::uint32_t bpp = framebuf_.format == 3u ? 4u : 2u;
+            const ge::MemoryRect shown{framebuf_.top_address, framebuf_.stride * bpp, 480u * bpp,
+                                       272u};
+            provider->Flip(&shown);
+        } else {
+            provider->Flip(nullptr);
+        }
+    }
     if (on_flip_) on_flip_(framebuf_);
 }
 

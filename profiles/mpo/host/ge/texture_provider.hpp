@@ -45,6 +45,19 @@ struct ClutLoadInfo {
     std::uint32_t max_bytes = 0;
 };
 
+// F25c: `rows` rows of `row_bytes` bytes each, `stride` bytes apart, from
+// `addr` (a PSP address, with or without the VRAM base).
+struct MemoryRect {
+    std::uint32_t addr = 0;
+    std::uint32_t stride = 0;
+    std::uint32_t row_bytes = 0;
+    std::uint32_t rows = 0;
+    // From the first byte to the last, inclusive of the gaps between rows.
+    [[nodiscard]] std::uint32_t span() const {
+        return rows == 0 || row_bytes == 0 ? 0u : (rows - 1) * stride + row_bytes;
+    }
+};
+
 class TextureProvider {
 public:
     virtual ~TextureProvider() = default;
@@ -55,6 +68,31 @@ public:
         (void)addr;
         (void)size;
     }
+
+    // F25c: what lets a provider tell framebuffers and video frames from
+    // textures in VRAM (PPSSPP never replaces either). All of them are
+    // called on the GE's thread (the emulated CPU's), in the guest's order.
+    //
+    // Every draw command (PRIM, BEZIER, SPLINE), textured or not, before its
+    // texture is looked up: `gs` says where it draws (FBP/FBW/PSM, ZBP/ZBW,
+    // scissor, clear mode and depth writes).
+    virtual void BeginDraw(const GeState &gs) { (void)gs; }
+    // A block transfer copied `src` to `dst` (both rectangles as the GE
+    // walks them). The default reports the write as MemoryWritten.
+    virtual void BlockTransfer(const MemoryRect &src, const MemoryRect &dst) {
+        (void)src;
+        MemoryWritten(dst.addr, dst.span());
+    }
+    // sceMpeg wrote a decoded video frame to [addr, addr + size)
+    // (what fills PPSSPP's TextureCacheCommon::videos_).
+    virtual void VideoWritten(std::uint32_t addr, std::uint32_t size) {
+        (void)addr;
+        (void)size;
+    }
+    // A display flip (once per frame shown): `shown` is the framebuffer the
+    // display shows from now on (its visible 480 x 272 rectangle), or
+    // nullptr when there is none.
+    virtual void Flip(const MemoryRect *shown) { (void)shown; }
     // The replacement for level 0 of the texture `st` samples (`clut`: the
     // GE's 1 KiB palette), or nullptr. The pointer stays valid at least
     // until the next BeginRun.

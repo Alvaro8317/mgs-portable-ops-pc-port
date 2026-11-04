@@ -128,6 +128,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F24a | Ajustes del juego en el launcher (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; probar `--fullscreen` en el juego y el launcher con mando: pendiente del usuario) |
 | F24b | Controles en pantalla según el dispositivo, parte I (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; `--prompts`, los diálogos del sistema; probar con mandos reales: pendiente del usuario) |
 | F24c | Reemplazo de texturas por hash (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; solo texturas en RAM: las de VRAM, el 91 % de las búsquedas, quedan para las HD) |
+| F25c | Reemplazo de texturas en VRAM, texturas HD (autónomo) | M7 | ✅ hecha (ola 7; sin framebuffers ni video, en softgpu y Vulkan; las pruebas en el juego y el coste: pendientes del usuario) |
 | F25d | El launcher en inglés y en español (autónomo) | M7 | ✅ hecha (ola 7; el idioma del sistema o `language` en `settings.toml`, la salida de `setup.py` en inglés; probar en Windows y en la Steam Deck con mando: pendiente del usuario) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
@@ -1568,6 +1569,47 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 
 ## F23+ — Mejoras (se planifican cuando M6 esté cerrado)
 
+### F25c — Reemplazo de texturas en VRAM (texturas HD), autónomo (ola 7)
+
+- **Objetivo**: que `--textures` también reemplace las texturas que el juego tiene en la VRAM
+  (el 91,5 % de las búsquedas de una partida, F24c [V]), sin tocar nunca los framebuffers (lo que
+  dibuja el GE y lo que se lee de un target) ni los frames de video (lo que `sceMpeg` escribe).
+- **Requisitos**: F24c (la capa de reemplazo) y F15b (el seguimiento de targets del renderer
+  Vulkan).
+- **Tareas**:
+  - Las mismas reglas en softgpu y en Vulkan: la decisión se toma en `mpo_ge`
+    (`Ge::ReplaceTexture` y el `TextureProvider`), así que los dos renderers reciben el mismo
+    `SamplerState::replaced`.
+  - Excluir los framebuffers como PPSSPP v1.20.4 (`TextureCacheCommon`: una textura que cae en un
+    framebuffer se toma del framebuffer y nunca pasa por el replacer): llevar las zonas de la VRAM
+    que dibuja el GE (color y profundidad), las que se muestran (`sceDisplaySetFrameBuf`) y las
+    copias de bloque que salen de un target, y olvidarlas cuando dejan de usarse.
+  - Excluir los frames de video como PPSSPP (la lista `videos_`, `IsVideo` y `STATUS_VIDEO` de
+    `TextureCacheCommon`): `sceMpeg` avisa de lo que escribe y esa zona no se reemplaza ni se
+    vuelca durante unos flips.
+  - La invalidación: una textura de la VRAM que reescribe una copia de bloque, el video o la CPU
+    vuelve a hashearse. El hash se cachea por dirección hasta el siguiente flip o hasta una
+    escritura que la toque (como el control de una vez por frame de PPSSPP).
+  - El volcado (`--dump-textures`) también vuelca las texturas de la VRAM, con las mismas
+    exclusiones. El reporte de `mpo_boot` cuenta las que se saltan por framebuffer y por video.
+  - Sin pack de texturas, todo exactamente igual que hoy; no cambia el ABI del runtime ni los
+    headers del framework.
+- **Criterios de hecho**: tests sin el juego (una textura en la VRAM reemplazada, un framebuffer
+  y un frame de video no reemplazados, la invalidación por copia de bloque, por video y por flip,
+  y que sin carpeta nada cambia), en softgpu y en Vulkan contra softgpu. `ctest` completo en
+  Clang y GCC. En el juego (pendiente del usuario): un reemplazo de prueba de una textura del
+  mundo en la VRAM, visible igual en softgpu y Vulkan, y una repetición sin pack idéntica.
+- **Hecha (2026-11-04)**: ver `docs/sessions/F25c.md`.
+  - Un framebuffer es un rectángulo (el scissor a su stride) de cada draw, de lo que se muestra y
+    de las copias que salen de un target; se olvida 5 flips después de su último uso
+    (`FBO_OLD_AGE`). Un frame de video lo es durante 4 flips (`VIDEO_DECIMATE_AGE`), en la VRAM y
+    en la RAM.
+  - El hash de la VRAM se cachea hasta el flip o hasta una copia o un video que lo pisen.
+  - El renderer Vulkan no cambió: la decisión es de `mpo_ge` y el test da 0 píxeles distintos de
+    softgpu. No cambia el ABI ni el framework.
+  - Pendiente del usuario: las seis pruebas en el juego de la nota (sin pack idéntico, el volcado
+    con la VRAM, un reemplazo de una textura del mundo en softgpu y Vulkan, y el coste).
+
 ### F25d — El launcher en inglés y en español, autónomo (ola 7)
 
 - **Objetivo**: que el launcher hable el idioma del jugador (inglés o español), con el del sistema
@@ -1743,8 +1785,11 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
     - se descartan un framebuffer más ancho y anclar por la posición del dibujo.
 - 60+ fps con **interpolación** (la lógica sigue a 20 o 30 fps).
 - Texturas HD en formato de PPSSPP. **La capa está hecha en F24c** (`--textures`, `--dump-textures`,
-  claves de PPSSPP). Falta reemplazar las texturas que están en VRAM sin tocar los framebuffers ni
-  los frames de video: son el 91,5 % de las búsquedas de una partida (F24c [V]).
+  claves de PPSSPP) y **F25c reemplaza también las de la VRAM** (el 91,5 % de las búsquedas, F24c
+  [V]), sin tocar los framebuffers ni los frames de video (`docs/sessions/F25c.md`). Falta:
+  probarlo en el juego y medir el coste (pendiente del usuario), los mipmaps del pack, `.dds` y
+  `.ktx2`, un límite de memoria para los PNG cargados, las cargas en otro hilo, y hacer el pack HD
+  en sí.
 - **Íconos del HUD según el dispositivo** (paso 2 del spike de los controles): un `ReplacementSet`
   por dispositivo con PNG propios de los íconos (las claves salen de `--dump-textures` y
   `txp.py`), elegido con `DeviceTracker::generation()` y `PromptSet::style` (F24b) y guardado en

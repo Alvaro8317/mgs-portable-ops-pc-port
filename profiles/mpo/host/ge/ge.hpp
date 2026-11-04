@@ -129,7 +129,8 @@ private:
                            std::uint32_t size, std::uint32_t op);
     bool ExecuteEnd(std::uint32_t op, DisplayList &list, RunResult *result);
     void AdvanceVerts(std::uint32_t vtype, int count, std::uint32_t bytes_read);
-    // F24c: asks the provider for the draw's texture.
+    // F24c: asks the provider for the draw's texture (F25c: and tells it
+    // where the draw writes).
     void ReplaceTexture(RasterizerState *rs);
 
     MemoryView mem_;

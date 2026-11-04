@@ -391,6 +391,33 @@ mk::Uid start_thread(mh::System &system, const char *name, std::uint32_t entry,
     return static_cast<mk::Uid>(uid);
 }
 
+// F25c: what the HLE tells the GE's texture provider (the replacer): every
+// display flip, with the framebuffer shown, and every video frame sceMpeg
+// writes.
+struct ProviderLog final : mpo::ge::TextureProvider {
+    std::uint64_t flips = 0;
+    std::uint64_t shown = 0;
+    std::uint32_t last_shown = 0;
+    std::uint32_t last_shown_stride = 0;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> videos;
+    void VideoWritten(std::uint32_t addr, std::uint32_t size) override {
+        videos.emplace_back(addr, size);
+    }
+    void Flip(const mpo::ge::MemoryRect *rect) override {
+        ++flips;
+        if (rect != nullptr) {
+            ++shown;
+            last_shown = rect->addr;
+            last_shown_stride = rect->stride;
+        }
+    }
+    const mpo::ge::ReplacedTexture *Find(const mpo::ge::GeState &, const mpo::ge::MemoryView &,
+                                         const mpo::ge::SamplerState &,
+                                         const mpo::ge::ClutLoadInfo &) override {
+        return nullptr;
+    }
+};
+
 struct Fixture {
     psprecomp::Runtime runtime{32u * 1024u * 1024u};
     mh::SystemConfig config;
@@ -1114,8 +1141,11 @@ void test_vblank_and_interrupts() {
     main.sw(t0, 16, s7);
     main.leave();
 
+    ProviderLog log;
+    f.system->ge().ge().SetTextureProvider(&log);
     (void)start_thread(*f.system, "vblank", entry, 0x20u);
     CHECK(f.system->run(1'000'000u) == mk::RunResult::kDeadline);
+    f.system->ge().ge().SetTextureProvider(nullptr);
     CHECK_EQ(f.word(kData), 0u);
     CHECK_EQ(f.word(kData + 4u), 0u);
     CHECK_EQ(f.word(kData + 16u), 1u);
@@ -1130,6 +1160,12 @@ void test_vblank_and_interrupts() {
     CHECK_EQ(f.word(kData + 0x48u), 0x1234u); // $a1: its argument
     CHECK_EQ(f.system->interrupts().handled(), 59u);
     CHECK(display.flips() >= 59u);
+    // F25c: the provider sees each flip and the default framebuffer
+    // (0x04000000, 512 pixels of 8888).
+    CHECK_EQ(log.flips, display.flips());
+    CHECK_EQ(log.shown, log.flips);
+    CHECK_EQ(log.last_shown, 0x04000000u);
+    CHECK_EQ(log.last_shown_stride, 2048u);
     CHECK(!f.system->kernel().in_interrupt());
 }
 
@@ -1967,8 +2003,18 @@ void test_mpeg_decode() {
     main.sw(t0, 36, s7);
     main.leave();
 
+    ProviderLog log;
+    f.system->ge().ge().SetTextureProvider(&log);
     (void)start_thread(*f.system, "mpeg", entry, 0x20u);
     CHECK(f.system->run(2'000'000u) == mk::RunResult::kIdle);
+    f.system->ge().ge().SetTextureProvider(nullptr);
+    // F25c: each picture is reported as a video frame where it was written.
+    CHECK_EQ(log.videos.size(), static_cast<std::size_t>(2));
+    if (log.videos.size() == 2) {
+        CHECK_EQ(log.videos[0].first, 0x04000000u);
+        CHECK_EQ(log.videos[1].first, 0x04208000u);
+        CHECK(log.videos[0].second >= 64u * 16u * 4u);
+    }
     CHECK(!rt.stopped());
     CHECK_EQ(f.word(kData + 36u), 1u);
     CHECK_EQ(f.word(kData), 0u);

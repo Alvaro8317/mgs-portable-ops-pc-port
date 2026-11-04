@@ -17,8 +17,11 @@
 //    image's own pixels where the sprite maps one image pixel to one screen
 //    pixel (so it does sample the large image), softgpu its box-filtered
 //    native version (so they differ, as they should).
+// 6. (F25c) textures in VRAM: one the CPU copied there is replaced, one
+//    drawn by the GE into a render target is not (although its content has
+//    a replacement): exactly softgpu's bytes, with the same counts.
 // Needs a Vulkan 1.2 device; without one it exits 77 (skipped). Any
-// validation error fails. Cases 1 to 4 run again at render scale 2 (F23b),
+// validation error fails. Cases 1 to 4 and 6 run again at render scale 2 (F23b),
 // where what comes back to VRAM must still be softgpu's bytes. Every texture and image is made up
 // here.
 
@@ -277,6 +280,56 @@ int RunAll(bool allow_13, int render_scale = 1) {
                     "5. HD image with detail inside the blocks", mismatched, d);
         expect(mismatched == 0, "5. the GPU samples the HD image pixel for pixel");
         expect(d != 0, "5. softgpu shows the box-filtered native image instead");
+    }
+    {
+        // 6. F25c: a render target and a CPU-written texture, both in VRAM.
+        ListBuilder lb6;
+        lb6.Clear(0xFF402010);
+        DrawTarget(lb6);
+        SampleRgba(lb6, 0x04000000u | kVramTarget, 10, 150);
+        SampleRgba(lb6, kVramTex, 300, 100);
+        std::vector<tr::ReplacementKey> keys6;
+        {
+            Machine m;
+            m.CopyToVram(kVramTex, kRgbaAddr);
+            KeyProbe probe;
+            m.ge.SetTextureProvider(&probe);
+            m.Run(lb6);
+            keys6 = probe.keys;
+        }
+        expect(keys6.size() == 2, "6. two textures probed");
+        tr::TextureReplacer soft6;
+        tr::TextureReplacer vk6;
+        for (tr::TextureReplacer *r : {&soft6, &vk6}) {
+            tr::TexturesIni ini;
+            ini.ignore_address = true;
+            auto set = std::make_unique<tr::ReplacementSet>("solid", ini);
+            for (const tr::ReplacementKey &k : keys6) set->AddAlias(k, "solid.png");
+            set->AddImage("solid.png", 16, 16, Solid(kSolid));
+            r->SetActiveSet(r->AddSet(std::move(set)));
+        }
+        soft->CopyToVram(kVramTex, kRgbaAddr);
+        vk->CopyToVram(kVramTex, kRgbaAddr);
+        soft->ge.SetTextureProvider(&soft6);
+        vk->ge.SetTextureProvider(&vk6);
+        expect(soft->Run(lb6), "6. list finishes (soft)");
+        expect(vk->Run(lb6), "6. list finishes (vulkan)");
+        if (!gpu->EndFrame(true, &err)) {
+            std::fprintf(stderr, "FAIL: 6: EndFrame: %s\n", err.c_str());
+            ++g_failures;
+        }
+        const int d = DifferingPixels(*soft, *vk);
+        std::printf("  %-64s differing pixels %d\n", "6. VRAM texture replaced, render target not",
+                    d);
+        expect(d == 0, "6. VRAM matches softgpu");
+        expect(vk->Pixel(300, 100) == kSolid, "6. the CPU-written VRAM texture is replaced");
+        expect(vk->Pixel(10, 150) == 0xFF0000FFu && vk->Pixel(41, 181) == 0xFFFFFFFFu,
+               "6. the render target is drawn from the GPU's target, not replaced");
+        for (const tr::TextureReplacer *r : {&soft6, &vk6})
+            expect(r->stats().vram_replaced == 1 && r->stats().framebuffer == 1,
+                   "6. one replaced in VRAM, one skipped as a framebuffer");
+        soft->ge.SetTextureProvider(&soft_rep);
+        vk->ge.SetTextureProvider(&vk_rep);
     }
     const mpo::vk::RendererStats &st = gpu->stats();
     for (const auto &[what, count] : st.approximations)

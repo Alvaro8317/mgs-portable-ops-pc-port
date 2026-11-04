@@ -1471,16 +1471,25 @@ int main(int argc, char **argv) {
         if (texture_provider) {
             const mpo::texreplace::TextureReplacer::Stats &ts = texture_replacer.stats();
             std::printf("textures: %llu lookups, %llu replaced (%zu distinct images), %llu in "
-                        "VRAM (not replaced), %llu texel hashes (%llu KiB), %llu dumped, %llu "
-                        "dump errors, %llu load errors\n",
+                        "VRAM (%llu replaced), %llu skipped as framebuffers, %llu as video "
+                        "frames, %llu framebuffer rectangles (%llu forgotten), %llu texel hashes "
+                        "(%llu KiB), %llu dumped, %llu dump errors, %llu load errors\n",
                         static_cast<unsigned long long>(ts.lookups),
                         static_cast<unsigned long long>(ts.replaced), ts.distinct.size(),
                         static_cast<unsigned long long>(ts.vram),
+                        static_cast<unsigned long long>(ts.vram_replaced),
+                        static_cast<unsigned long long>(ts.framebuffer),
+                        static_cast<unsigned long long>(ts.video),
+                        static_cast<unsigned long long>(ts.targets),
+                        static_cast<unsigned long long>(ts.targets_aged),
                         static_cast<unsigned long long>(ts.hashes),
                         static_cast<unsigned long long>(ts.hashed_bytes / 1024u),
                         static_cast<unsigned long long>(ts.dumped),
                         static_cast<unsigned long long>(ts.dump_errors),
                         static_cast<unsigned long long>(ts.load_errors));
+            // F25c: what is treated as a framebuffer at the end (never replaced).
+            for (const std::string &line : texture_replacer.DescribeTargets())
+                std::printf("textures: framebuffer %s\n", line.c_str());
         }
         {
             const mpo::hle::Fonts &fonts_hle = system.fonts();
