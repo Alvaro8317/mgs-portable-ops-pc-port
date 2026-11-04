@@ -110,6 +110,21 @@ void TestFitRect() {
     config.display_aspect = 64.0 / 27.0;
     InitialWindowSize(config, &w, &h);
     Expect(w == 1934 && h == 816, "window 3x at 64:27");
+
+    // A window larger than the screen is fitted to 90 % of it, aspect kept.
+    w = 3840;
+    h = 2176;
+    FitWindowSize(3840, 2088, 0.9, &w, &h); // 4K minus a taskbar
+    Expect(h <= 1879 && w <= 3456 && std::abs(w * 2176 - h * 3840) <= 3840,
+           "8x on a 4K screen: fitted, aspect kept");
+    w = 960;
+    h = 544;
+    FitWindowSize(3840, 2088, 0.9, &w, &h);
+    Expect(w == 960 && h == 544, "a window that fits is left alone");
+    w = 1934;
+    h = 816;
+    FitWindowSize(0, 0, 0.9, &w, &h);
+    Expect(w == 1934 && h == 816, "no display: unchanged");
 }
 
 void TestPresenter() {

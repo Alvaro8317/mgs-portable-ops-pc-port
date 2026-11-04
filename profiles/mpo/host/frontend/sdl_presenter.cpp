@@ -54,6 +54,23 @@ void InitialWindowSize(const PresenterConfig &config, int *width, int *height) {
                  : kPspScreenWidth * scale;
 }
 
+void FitWindowSize(int bounds_w, int bounds_h, double max_fraction, int *width, int *height) {
+    if (bounds_w <= 0 || bounds_h <= 0 || *width <= 0 || *height <= 0) return;
+    const double max_w = static_cast<double>(bounds_w) * max_fraction;
+    const double max_h = static_cast<double>(bounds_h) * max_fraction;
+    if (*width <= max_w && *height <= max_h) return;
+    const double factor = std::min(max_w / *width, max_h / *height);
+    *width = std::max(1, static_cast<int>(std::floor(*width * factor)));
+    *height = std::max(1, static_cast<int>(std::floor(*height * factor)));
+}
+
+void FitWindowToDisplay(int *width, int *height) {
+    SDL_Rect bounds{};
+    const SDL_DisplayID display = SDL_GetPrimaryDisplay();
+    if (display == 0 || !SDL_GetDisplayUsableBounds(display, &bounds)) return;
+    FitWindowSize(bounds.w, bounds.h, 0.9, width, height);
+}
+
 std::unique_ptr<SdlPresenter> SdlPresenter::Create(const PresenterConfig &config,
                                                    std::string *error) {
     std::unique_ptr<SdlPresenter> p(new SdlPresenter());
@@ -67,6 +84,7 @@ std::unique_ptr<SdlPresenter> SdlPresenter::Create(const PresenterConfig &config
     int window_w = 0;
     int window_h = 0;
     InitialWindowSize(config, &window_w, &window_h);
+    FitWindowToDisplay(&window_w, &window_h);
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
     if (config.hidden) flags |= SDL_WINDOW_HIDDEN;
     if (config.fullscreen) flags |= SDL_WINDOW_FULLSCREEN;

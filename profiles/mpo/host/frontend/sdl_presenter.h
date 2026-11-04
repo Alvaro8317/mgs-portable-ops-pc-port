@@ -110,4 +110,15 @@ private:
 // 272 * scale high and display_aspect times that wide.
 void InitialWindowSize(const PresenterConfig &config, int *width, int *height);
 
+// A window of `*width` x `*height` made to fit in `bounds_w` x `bounds_h` (the
+// display's usable area) at most `max_fraction` of it, aspect kept; smaller
+// windows are left alone. With --scale 8 on a 4K screen (3840x2176) the window
+// was taller than the screen, so leaving fullscreen barely changed anything.
+void FitWindowSize(int bounds_w, int bounds_h, double max_fraction, int *width, int *height);
+
+// FitWindowSize against the primary display's usable area (90 %). The window
+// size is also the one SDL restores when fullscreen ends (F11 / Alt+Enter).
+// Needs SDL's video subsystem; without a display nothing changes.
+void FitWindowToDisplay(int *width, int *height);
+
 } // namespace mpo::frontend

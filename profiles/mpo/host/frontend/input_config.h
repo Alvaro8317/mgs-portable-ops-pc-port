@@ -22,14 +22,14 @@
 //   [mouse_camera]                # mouse motion -> d-pad while captured
 //   enabled = true
 //   pixels_per_press = 6.0
-//   vertical = false
+//   vertical = true
 //
 //   [pad_camera]                  # right stick -> d-pad (F23a)
 //   enabled = true
 //   threshold = 0.5               # tilt that starts turning
 //   hysteresis = 0.15             # stops below threshold - hysteresis
 //   min_duty = 0.25               # share of polls pressed at the threshold
-//   vertical = false
+//   vertical = true
 //
 // PSP inputs: up down left right cross circle square triangle l r start
 // select home, analog_{up,down,left,right} (the stick). A section that is

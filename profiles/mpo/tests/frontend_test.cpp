@@ -380,16 +380,18 @@ void TestMouseCamera() {
         if (t.Sample().buttons == ctrl::kRight) ++presses;
     }
     ExpectEq(presses, 3, "flick clamped to three presses");
-    // Vertical motion is ignored unless enabled; then down is +y.
+    // Vertical motion drives up/down by default (F25), down is +y; with
+    // vertical = false it is ignored.
     t.OnMouseMotion(0.0f, 10.0f);
     t.EndPoll();
-    ExpectEq(t.Sample().buttons, 0u, "vertical off by default");
+    ExpectEq(t.Sample().buttons, ctrl::kDown, "vertical on by default: down");
+    t.EndPoll();
     InputMapping m = InputMapping::Default();
-    m.mouse_camera.vertical = true;
+    m.mouse_camera.vertical = false;
     t.SetMapping(m);
     t.OnMouseMotion(0.0f, 10.0f);
     t.EndPoll();
-    ExpectEq(t.Sample().buttons, ctrl::kDown, "vertical on: down");
+    ExpectEq(t.Sample().buttons, 0u, "vertical off: ignored");
     t.ReleaseMouse();
     ExpectEq(t.Sample().buttons, 0u, "ReleaseMouse clears the camera");
     // Disabled: nothing.
@@ -435,7 +437,7 @@ PadCameraCount PollPadCamera(InputTranslator &t, float x, int polls) {
 
 void TestPadCamera() {
     const PadCameraConfig defaults;
-    Expect(defaults.enabled && !defaults.vertical, "pad camera on, horizontal only");
+    Expect(defaults.enabled && defaults.vertical, "pad camera on, both axes (F25)");
     ExpectEq(defaults.threshold, 0.5f, "default threshold");
     ExpectEq(defaults.hysteresis, 0.15f, "default hysteresis");
     ExpectEq(defaults.min_duty, 0.25f, "default min_duty");
@@ -516,11 +518,16 @@ void TestPadCamera() {
     c = PollPadCamera(t, -0.6f, 1);
     ExpectEq(c.left, 1, "flip to the left");
 
-    // Vertical: Y drives up/down only when asked.
+    // Vertical: Y drives up/down by default (F25); vertical = false ignores it.
     c = PollPadCamera(t, 0.0f, 1);
     t.OnPadAxis(PadAxis::kRightY, 1.0f);
     t.EndPoll();
-    ExpectEq(t.Sample().buttons, 0u, "vertical off by default");
+    ExpectEq(t.Sample().buttons, ctrl::kDown, "vertical on by default: +y = down");
+    InputMapping horizontal = InputMapping::Default();
+    horizontal.pad_camera.vertical = false;
+    t.SetMapping(horizontal);
+    t.EndPoll();
+    ExpectEq(t.Sample().buttons, 0u, "vertical off: ignored");
     InputMapping m = InputMapping::Default();
     m.pad_camera.vertical = true;
     t.SetMapping(m);

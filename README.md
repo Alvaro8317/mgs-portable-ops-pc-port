@@ -230,8 +230,9 @@ The game's menus confirm with **Circle** and go back with **Cross**, as on the P
 | Start | Esc or Enter |
 | Select | Tab |
 
-**The mouse can turn the camera**: click in the game window to capture the mouse, then move it left
-and right. **F1** (or switching to another window) releases it.
+**The mouse can turn the camera**: click in the game window to capture the mouse, then move it: left
+and right turn the camera, up and down work as the d-pad's up and down. **F1** (or switching to
+another window) releases it.
 
 **F11** or **Alt+Enter** switches between the window and fullscreen while you play. The game doesn't
 see those keys: Alt+Enter doesn't press Start, even though Enter is Start. To start in fullscreen,
@@ -257,8 +258,8 @@ Xbox, PlayStation and most other gamepads work, with the same layout as PPSSPP:
 | Start | Start / Menu | Options |
 | Select | Back / View | Share / Create |
 
-**The right stick turns the camera**: push it left or right. The further you push it, the faster the
-camera turns. Switching to another window stops it until you come back. To turn it off or change
+**The right stick moves the camera**: left and right turn it, up and down work as the d-pad's up and
+down. The further you push it, the faster the camera moves. Switching to another window stops it until you come back. To turn it off or change
 how it reacts, see `[pad_camera]` in `input.toml` (below).
 
 ### Buttons on screen

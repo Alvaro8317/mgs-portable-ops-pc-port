@@ -23,6 +23,7 @@ std::unique_ptr<SdlVulkanWindow> SdlVulkanWindow::Create(const frontend::Present
     int window_w = 0;
     int window_h = 0;
     frontend::InitialWindowSize(config, &window_w, &window_h);
+    frontend::FitWindowToDisplay(&window_w, &window_h);
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN;
     if (config.hidden) flags |= SDL_WINDOW_HIDDEN;
     if (config.fullscreen) flags |= SDL_WINDOW_FULLSCREEN;

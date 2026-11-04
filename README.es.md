@@ -242,7 +242,8 @@ En los menús del juego se confirma con **Círculo** y se vuelve con **Cruz**, c
 | Select | Tab |
 
 **El mouse puede girar la cámara**: haz clic en la ventana del juego para capturar el mouse y
-muévelo a la izquierda y a la derecha. **F1** (o cambiar a otra ventana) lo suelta.
+muévelo: a la izquierda y a la derecha gira la cámara, y arriba y abajo hacen lo mismo que arriba y
+abajo en la cruceta. **F1** (o cambiar a otra ventana) lo suelta.
 
 **F11** o **Alt+Enter** cambian entre la ventana y la pantalla completa mientras juegas. El juego no
 ve esas teclas: Alt+Enter no aprieta Start, aunque Enter sea Start. Para empezar en pantalla
@@ -269,8 +270,8 @@ en PPSSPP:
 | Start | Start / Menú | Options |
 | Select | Back / Vista | Share / Create |
 
-**El stick derecho gira la cámara**: muévelo a la izquierda o a la derecha. Cuanto más lo inclinas,
-más rápido gira. Si cambias a otra ventana se detiene hasta que vuelves. Para apagarlo o cambiar
+**El stick derecho mueve la cámara**: a la izquierda y a la derecha la gira, y arriba y abajo hacen lo
+mismo que arriba y abajo en la cruceta. Cuanto más lo inclinas, más rápido se mueve. Si cambias a otra ventana se detiene hasta que vuelves. Para apagarlo o cambiar
 cómo responde, mira `[pad_camera]` en `input.toml` (abajo).
 
 ### Los botones en pantalla

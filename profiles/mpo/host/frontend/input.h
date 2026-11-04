@@ -168,11 +168,12 @@ struct AnalogConfig {
 // While the mouse is captured (SdlInput), the relative motion adds up and
 // every `pixels_per_press` pixels press the d-pad for one poll of the window
 // events (one flip): moving faster turns more often. Vertical motion drives
-// up/down only when `vertical` is set.
+// up/down while `vertical` is set (on by default since F25, at the player's
+// request).
 struct MouseCameraConfig {
     bool enabled = true;
     float pixels_per_press = 6.0f;
-    bool vertical = false;
+    bool vertical = true;
     friend bool operator==(const MouseCameraConfig &, const MouseCameraConfig &) = default;
 };
 
@@ -184,14 +185,15 @@ struct MouseCameraConfig {
 // (one per flip) that grows with the tilt: `min_duty` at the threshold, every
 // poll from kPadCameraFullTilt on. The share adds up per poll, so the presses
 // depend only on the axis values at each poll. min_duty = 1 is all or
-// nothing. X drives left/right; Y drives up/down only when `vertical` is set.
+// nothing. X drives left/right; Y drives up/down while `vertical` is set (on
+// by default since the player asked for it after trying it, F25).
 // An axis that the mapping binds in pad_axes is left to that binding.
 struct PadCameraConfig {
     bool enabled = true;
     float threshold = 0.5f;
     float hysteresis = 0.15f;
     float min_duty = 0.25f;
-    bool vertical = false;
+    bool vertical = true;
     friend bool operator==(const PadCameraConfig &, const PadCameraConfig &) = default;
 };
 // The raw tilt from which the right stick presses on every poll.
