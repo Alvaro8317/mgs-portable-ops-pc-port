@@ -9,6 +9,9 @@
 // The launcher only drives setup.py (docs/analysis/distribution.md §4): every
 // step, its logs and its resumability stay in Python.
 //
+// F25d: the launcher's language is one more key of settings.toml; the texts
+// and the locale are in launcher_text.hpp.
+//
 // F24a: the game settings. setup.py reads settings.toml (and says what is
 // wrong with it) in `status --json`; the launcher shows them and writes the
 // file back, which `setup.py play` turns into mpo_boot options.
@@ -58,6 +61,9 @@ struct GameSettings {
     int window_scale{2};
     // Borderless, at the desktop's resolution (--fullscreen).
     bool fullscreen{};
+    // F25d: the launcher's language, "auto" (the system's), "en" or "es"
+    // (launcher_text.hpp). mpo_boot gets nothing from it.
+    std::string language{"auto"};
 
     bool operator==(const GameSettings &) const = default;
 };

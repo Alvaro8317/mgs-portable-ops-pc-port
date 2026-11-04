@@ -15,17 +15,25 @@
 //      window size and fullscreen, saved in settings.toml (the path and the
 //      values come from `setup.py status --json`), which `setup.py play`
 //      turns into mpo_boot options.
+//   6. in English or Spanish (F25d): the system's language, or the one chosen
+//      in Settings (`language` in settings.toml). Every text is in
+//      launcher_strings.inc; what setup.py prints stays as it is (English).
 //
 // When the game stops with an error (for example an HLE import that is not
 // implemented, CLAUDE.md §5) its last lines are shown, never hidden.
 //
 //   mpo_launcher [--data <dir>] [--source <repo>] [--python <exe>]
-//                [--screenshot <file.bmp>] [--browse-saves]
+//                [--settings <file>] [--screenshot <file.bmp>] [--browse-saves]
+//
+// --settings uses that settings.toml instead of the one in the configuration
+// folder (setup.py status/play --settings): for tests and screenshots that
+// must not touch the player's.
 //
 // --screenshot saves the window once the install state is read and quits
 // (with SDL_VIDEO_DRIVER=offscreen, for the evidence of a session).
 // --browse-saves opens the browser of "Import a save..." at start (with
-// --screenshot, the evidence of the browser, F22c).
+// --screenshot, the evidence of the browser, F22c). For a screenshot in a
+// language, LANG=es_ES.UTF-8 (or a settings.toml with `language`).
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -35,6 +43,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -46,6 +55,8 @@
 #include "imgui_impl_sdlrenderer3.h"
 #include "imgui_stdlib.h"
 #include "launcher_core.hpp"
+#include "launcher_font.hpp"
+#include "launcher_text.hpp"
 #include "task.hpp"
 
 #ifndef MPO_LAUNCHER_SOURCE_ROOT
@@ -82,6 +93,48 @@ fs::path documents_folder() {
     return documents != nullptr ? text_path(documents) : fs::path();
 }
 
+using mpo::launcher::Language;
+using mpo::launcher::Text;
+
+// The language every text is shown in (F25d): the setting's, or the
+// system's. Set before the first frame and when the setting changes.
+Language g_language = Language::kEnglish;
+
+const char *tr(Text id) {
+    return mpo::launcher::text(g_language, id);
+}
+
+std::string trf(Text id, std::initializer_list<std::string_view> args) {
+    return mpo::launcher::format_text(tr(id), args);
+}
+
+// A label whose ImGui id does not change with the language ("Jugar###play"),
+// so the gamepad's focus stays on it when the language changes.
+std::string label(Text id, const char *imgui_id) {
+    return std::string(tr(id)) + "###" + imgui_id;
+}
+
+// The system's language: Windows' (and macOS') preferred UI languages through
+// SDL; on Linux, LC_ALL, LC_MESSAGES, LANG and LANGUAGE as gettext reads them
+// (SDL only reads LANG and LANGUAGE), then SDL's. English unless one is "es".
+Language system_language() {
+    std::vector<std::string> locales;
+#if !defined(_WIN32) && !defined(__APPLE__)
+    locales = mpo::launcher::posix_locales([](const char *name) { return SDL_getenv(name); });
+#endif
+    int count = 0;
+    if (SDL_Locale **list = SDL_GetPreferredLocales(&count); list != nullptr) {
+        for (int i = 0; i < count; ++i) {
+            if (list[i] == nullptr || list[i]->language == nullptr) continue;
+            std::string locale = list[i]->language;
+            if (list[i]->country != nullptr) locale += std::string("_") + list[i]->country;
+            locales.push_back(std::move(locale));
+        }
+        SDL_free(list);
+    }
+    return mpo::launcher::language_from_locales(locales);
+}
+
 // A folder the browser offers as a button (PPSSPP's saves, F22c).
 struct Shortcut {
     std::string label;
@@ -94,9 +147,9 @@ class Browser {
 public:
     enum class Mode { kIsoFile, kFolder };
 
-    void open(const char *title, Mode mode, const fs::path &start,
+    void open(std::string title, Mode mode, const fs::path &start,
               std::vector<Shortcut> shortcuts = {}) {
-        title_ = title;
+        title_ = std::move(title);
         mode_ = mode;
         shortcuts_ = std::move(shortcuts);
         std::error_code ec;
@@ -125,22 +178,25 @@ public:
         const bool typed =
             ImGui::InputText("##path", &path_input_, ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::SameLine();
-        if (ImGui::Button("Go") || typed) go_to(text_path(path_input_));
+        if (ImGui::Button(label(Text::kBrowserGo, "go").c_str()) || typed)
+            go_to(text_path(path_input_));
         // The next item on this row, or on a new one when it does not fit:
         // Windows adds a button per drive (F22c: Cancel ended up off the window).
-        const auto next_in_row = [](const char *label, float extra) {
+        const auto next_in_row = [](const std::string &text, float extra) {
             const ImGuiStyle &style = ImGui::GetStyle();
-            const float width =
-                ImGui::CalcTextSize(label, nullptr, true).x + style.FramePadding.x * 2.0f + extra;
+            const float width = ImGui::CalcTextSize(text.c_str(), nullptr, true).x +
+                                style.FramePadding.x * 2.0f + extra;
             ImGui::SameLine();
             if (ImGui::GetContentRegionAvail().x < width) ImGui::NewLine();
         };
-        if (ImGui::Button("Up") && folder_.has_parent_path() && folder_.parent_path() != folder_) {
+        if (ImGui::Button(label(Text::kBrowserUp, "up").c_str()) && folder_.has_parent_path() &&
+            folder_.parent_path() != folder_) {
             folder_ = folder_.parent_path();
             refresh();
         }
-        next_in_row("Home", 0.0f);
-        if (ImGui::Button("Home")) {
+        const std::string home = label(Text::kBrowserHome, "home");
+        next_in_row(home, 0.0f);
+        if (ImGui::Button(home.c_str())) {
             folder_ = home_folder();
             refresh();
         }
@@ -149,7 +205,7 @@ public:
                 const std::string root = std::string(1, drive) + ":\\";
                 std::error_code ec;
                 if (!fs::exists(root, ec)) continue;
-                next_in_row(root.c_str(), 0.0f);
+                next_in_row(root, 0.0f);
                 if (ImGui::Button(root.c_str())) {
                     folder_ = root;
                     refresh();
@@ -157,15 +213,15 @@ public:
             }
         }
         for (const Shortcut &shortcut : shortcuts_) {
-            next_in_row(shortcut.label.c_str(), 0.0f);
+            next_in_row(shortcut.label, 0.0f);
             if (ImGui::Button(shortcut.label.c_str())) {
                 folder_ = shortcut.folder;
                 refresh();
             }
         }
-        constexpr const char *kHidden = "Show hidden folders";
-        next_in_row(kHidden, ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x);
-        if (ImGui::Checkbox(kHidden, &show_hidden_)) refresh();
+        const std::string hidden = label(Text::kBrowserShowHidden, "hidden");
+        next_in_row(hidden, ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x);
+        if (ImGui::Checkbox(hidden.c_str(), &show_hidden_)) refresh();
         if (!error_.empty())
             ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s", error_.c_str());
         ImGui::Separator();
@@ -174,8 +230,10 @@ public:
                               ImGuiChildFlags_None)) {
             std::optional<fs::path> next;
             for (const mpo::launcher::DirEntry &entry : entries_) {
-                const std::string label = (entry.directory ? "[folder]  " : "") + entry.name;
-                if (ImGui::Selectable(label.c_str())) {
+                const std::string name =
+                    (entry.directory ? std::string(tr(Text::kBrowserFolderTag)) + "  " : "") +
+                    entry.name;
+                if (ImGui::Selectable(name.c_str())) {
                     const fs::path path = folder_ / text_path(entry.name);
                     if (entry.directory) {
                         next = path;
@@ -186,7 +244,7 @@ public:
                     }
                 }
             }
-            if (entries_.empty()) ImGui::TextDisabled("(nothing to choose here)");
+            if (entries_.empty()) ImGui::TextDisabled("%s", tr(Text::kBrowserEmpty));
             if (next) {
                 folder_ = *next;
                 refresh();
@@ -194,14 +252,14 @@ public:
         }
         ImGui::EndChild();
         if (mode_ == Mode::kFolder) {
-            if (ImGui::Button("Choose this folder")) {
+            if (ImGui::Button(label(Text::kBrowserChooseFolder, "choose").c_str())) {
                 chosen_ = folder_;
                 done = true;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
         }
-        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        if (ImGui::Button(label(Text::kCancel, "cancel").c_str())) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
         return done;
     }
@@ -220,7 +278,7 @@ private:
             folder_ = path.parent_path();
             refresh();
         } else {
-            error_ = "No such folder: " + path_text(path);
+            error_ = trf(Text::kBrowserNoSuchFolder, {path_text(path)});
         }
     }
 
@@ -232,7 +290,7 @@ private:
                                                      ? std::span<const std::string_view>(kIso)
                                                      : std::span<const std::string_view>(),
                                                  ec, show_hidden_);
-        error_ = ec ? "Cannot open this folder: " + ec.message() : "";
+        error_ = ec ? trf(Text::kBrowserCannotOpen, {ec.message()}) : "";
         path_input_ = path_text(folder_);
     }
 
@@ -255,7 +313,8 @@ std::vector<Shortcut> ppsspp_shortcuts() {
         mpo::launcher::ppsspp_save_folders(home_folder(), documents_folder(), kWindows);
     for (const fs::path &folder : folders) {
         const bool flatpak = path_text(folder).find("org.ppsspp.PPSSPP") != std::string::npos;
-        shortcuts.push_back({flatpak ? "PPSSPP saves (Flatpak)" : "PPSSPP saves", folder});
+        shortcuts.push_back(
+            {tr(flatpak ? Text::kShortcutPpssppFlatpak : Text::kShortcutPpsspp), folder});
     }
     return shortcuts;
 }
@@ -265,12 +324,14 @@ enum class Pick { kNone, kIso, kFonts, kAddFonts, kImportSave, kExportSave };
 struct Launcher {
     mpo::launcher::LauncherPaths paths;
     fs::path data;
+    fs::path settings_file; // --settings, empty for setup.py's default
     std::optional<mpo::launcher::InstallStatus> status;
     Task status_task;
     Task work; // install, import-save, export-save (one at a time)
     Task stages;
     Task game;
-    std::string work_name;
+    // What `work` runs, its title above the progress bar.
+    Text work_title{Text::kWorkInstall};
     std::optional<mpo::launcher::Progress> work_progress;
     std::optional<mpo::launcher::Progress> stages_progress;
     std::string iso;
@@ -285,10 +346,33 @@ struct Launcher {
     bool failure_request{};
     // Why settings.toml could not be written, until the next change.
     std::string settings_error;
+    // F25d: the system's language, for the "auto" setting; the window, for
+    // its title.
+    Language system{Language::kEnglish};
+    SDL_Window *window{};
+
+    // The language of the setting (once status is read), else the system's.
+    void apply_language() {
+        const Language language =
+            mpo::launcher::resolve_language(status ? status->settings.language : "auto", system);
+        if (language == g_language) return;
+        g_language = language;
+        if (window != nullptr) SDL_SetWindowTitle(window, tr(Text::kWindowTitle));
+    }
 
     std::vector<std::string> command(std::string_view subcommand,
                                      const std::vector<std::string> &args) const {
         return mpo::launcher::setup_command(paths, subcommand, data, args);
+    }
+
+    // status and play read settings.toml: --settings goes to both.
+    std::vector<std::string> settings_command(std::string_view subcommand,
+                                              std::vector<std::string> args) const {
+        if (!settings_file.empty()) {
+            args.emplace_back("--settings");
+            args.push_back(path_text(settings_file));
+        }
+        return command(subcommand, args);
     }
 
     void fail(std::string title, const Task &task) {
@@ -309,15 +393,16 @@ struct Launcher {
     void refresh_status() {
         if (status_task.running()) return;
         std::string error;
-        if (!status_task.start(command("status", {"--json"}), error))
-            fail_to_start("Cannot run setup.py", error);
+        if (!status_task.start(settings_command("status", {"--json"}), error))
+            fail_to_start(tr(Text::kFailCannotRunSetup), error);
     }
 
-    void start_work(std::string name, std::vector<std::string> argv) {
+    void start_work(Text title, const std::vector<std::string> &argv) {
         std::string error;
-        work_name = std::move(name);
+        work_title = title;
         work_progress.reset();
-        if (!work.start(argv, error)) fail_to_start("Cannot start: " + work_name, error);
+        if (!work.start(argv, error))
+            fail_to_start(trf(Text::kFailCannotStart, {tr(work_title)}), error);
     }
 
     void start_stages() {
@@ -327,7 +412,7 @@ struct Launcher {
         std::string error;
         stages_progress.reset();
         if (!stages.start(command("stages", {"--low-priority"}), error))
-            fail_to_start("Cannot start compiling the stages", error);
+            fail_to_start(tr(Text::kFailStartStages), error);
     }
 
     [[nodiscard]] fs::path data_folder() const {
@@ -349,15 +434,15 @@ struct Launcher {
             for (const std::string &line : status_task.output().lines()) json += line + "\n";
             if (*status_task.exit_code() == 0) status = mpo::launcher::parse_status(json);
             status_task.reset();
+            apply_language();
         }
         for (const std::string &line : work.poll())
             if (auto p = mpo::launcher::parse_progress_line(line)) work_progress = *p;
         if (work.exit_code()) {
             const bool ok = *work.exit_code() == 0;
-            if (!ok) fail(work_name + " failed", work);
-            if (ok && work_name == "Install" && compile_stages_after_install)
+            if (!ok) fail(trf(Text::kFailWork, {tr(work_title)}), work);
+            if (ok && work_title == Text::kWorkInstall && compile_stages_after_install)
                 start_stages_when_idle = true;
-            work_name.clear();
             work.reset();
             refresh_status();
         }
@@ -365,13 +450,13 @@ struct Launcher {
             if (auto p = mpo::launcher::parse_progress_line(line); p && p->step == "stages")
                 stages_progress = *p;
         if (stages.exit_code()) {
-            if (*stages.exit_code() != 0) fail("Compiling the stages failed", stages);
+            if (*stages.exit_code() != 0) fail(tr(Text::kFailStages), stages);
             stages.reset();
             refresh_status();
         }
         for (const std::string &line : game.poll()) (void)line;
         if (game.exit_code()) {
-            if (*game.exit_code() != 0) fail("The game stopped with an error", game);
+            if (*game.exit_code() != 0) fail(tr(Text::kFailGame), game);
             game.reset();
             refresh_status();
         }
@@ -391,88 +476,82 @@ struct Launcher {
     }
 
     void draw_install() {
-        ImGui::SeparatorText("1. Your copy of the game");
-        ImGui::TextWrapped(
-            "Choose the ISO of Metal Gear Solid: Portable Ops (USA, ULUS-10202). Nothing of the "
-            "game leaves this computer: the port is compiled here, from your ISO.");
+        ImGui::SeparatorText(tr(Text::kStepGame));
+        ImGui::TextWrapped("%s", tr(Text::kStepGameHelp));
         ImGui::SetNextItemWidth(-160.0f);
         ImGui::InputText("##iso", &iso);
         ImGui::SameLine();
-        if (ImGui::Button("Browse...##iso")) {
+        if (ImGui::Button(label(Text::kBrowse, "browse_iso").c_str())) {
             pick = Pick::kIso;
-            browser.open("Choose the ISO", Browser::Mode::kIsoFile, text_path(iso));
+            browser.open(label(Text::kChooseIso, "pick"), Browser::Mode::kIsoFile, text_path(iso));
         }
-        ImGui::SeparatorText("2. PSP firmware fonts");
-        ImGui::TextWrapped(
-            "The folder flash0/font of a PSP or of PPSSPP. If it is next to the ISO, it is found "
-            "by itself. Without it the game runs, and the save screens and the on-screen keyboard "
-            "use a substitute font.");
+        ImGui::SeparatorText(tr(Text::kStepFonts));
+        ImGui::TextWrapped("%s", tr(Text::kStepFontsHelp));
         ImGui::SetNextItemWidth(-160.0f);
         ImGui::InputText("##fonts", &fonts);
         ImGui::SameLine();
-        if (ImGui::Button("Browse...##fonts")) {
+        if (ImGui::Button(label(Text::kBrowse, "browse_fonts").c_str())) {
             pick = Pick::kFonts;
-            browser.open("Choose the fonts folder", Browser::Mode::kFolder, text_path(fonts));
+            browser.open(label(Text::kChooseFontsFolder, "pick"), Browser::Mode::kFolder,
+                         text_path(fonts));
         }
-        ImGui::SeparatorText("3. Install");
-        ImGui::Checkbox("Then compile every stage in the background",
+        ImGui::SeparatorText(tr(Text::kStepInstall));
+        ImGui::Checkbox(label(Text::kCompileAfterInstall, "compile_after").c_str(),
                         &compile_stages_after_install);
-        ImGui::TextWrapped(
-            "The first install takes 20 to 40 minutes and needs about 15 GB free (10 GB once "
-            "done). You can play as soon as it ends; the stages keep compiling while you play.");
+        ImGui::TextWrapped("%s", tr(Text::kInstallTime));
         if constexpr (kWindows) {
             // Avast quarantined llvm-mingw's clang-23.exe on a player's PC (F22c).
             ImGui::TextWrapped(
-                "Some antivirus programs (Avast in particular) remove part of the compiler by "
-                "mistake. Adding an exception for %s first avoids it (see README.md).",
-                data_folder().empty() ? "%LOCALAPPDATA%\\mpo-pc-port"
-                                      : path_text(data_folder()).c_str());
+                "%s", trf(Text::kAntivirus, {data_folder().empty() ? "%LOCALAPPDATA%\\mpo-pc-port"
+                                                                   : path_text(data_folder())})
+                          .c_str());
         }
         ImGui::BeginDisabled(iso.empty() || work.running() || stages.running());
-        if (ImGui::Button("Install", ImVec2(220.0f, 0.0f))) {
+        if (ImGui::Button(label(Text::kInstallButton, "install").c_str(), ImVec2(220.0f, 0.0f))) {
             std::vector<std::string> args{"--iso", iso};
             if (!fonts.empty()) {
                 args.emplace_back("--fonts");
                 args.push_back(fonts);
             }
-            start_work("Install", command("install", args));
+            start_work(Text::kWorkInstall, command("install", args));
         }
         ImGui::EndDisabled();
     }
 
     void draw_play() {
-        ImGui::SeparatorText("Play");
+        ImGui::SeparatorText(tr(Text::kPlaySection));
         const bool all =
             status->stages_total > 0 && status->stages_optimized >= status->stages_total;
         ImGui::BeginDisabled(game.running());
-        if (ImGui::Button(game.running() ? "Playing..." : "Play", ImVec2(260.0f, 64.0f))) {
+        if (ImGui::Button(
+                label(game.running() ? Text::kPlaying : Text::kPlayButton, "play").c_str(),
+                ImVec2(260.0f, 64.0f))) {
             std::string error;
-            if (!game.start(command("play", {}), error))
-                fail_to_start("Cannot start the game", error);
+            if (!game.start(settings_command("play", {}), error))
+                fail_to_start(tr(Text::kFailCannotStartGame), error);
         }
         ImGui::EndDisabled();
         if (status->stages_total > 0) {
-            ImGui::Text("Stages compiled: %d of %d (%d optimized)", status->stages_installed,
-                        status->stages_total, status->stages_optimized);
-            if (!all) {
-                ImGui::TextWrapped(
-                    "A stage that is not compiled yet runs on the interpreter: it plays, but "
-                    "slower. A quick version of every stage comes first, then the optimized one.");
-            }
+            ImGui::TextUnformatted(
+                trf(Text::kStagesCompiled,
+                    {std::to_string(status->stages_installed), std::to_string(status->stages_total),
+                     std::to_string(status->stages_optimized)})
+                    .c_str());
+            if (!all) ImGui::TextWrapped("%s", tr(Text::kStagesInterpreter));
         }
         if (stages.running()) {
             float fraction = 0.0f;
-            std::string label = "starting";
+            std::string progress = tr(Text::kStagesStarting);
             if (stages_progress) {
-                label = stages_progress->message;
+                progress = stages_progress->message;
                 if (stages_progress->total > 0)
                     fraction = static_cast<float>(stages_progress->done) /
                                static_cast<float>(stages_progress->total);
             }
-            ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f), label.c_str());
-            if (ImGui::Button("Stop compiling (after this stage)")) stop_stages();
+            ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f), progress.c_str());
+            if (ImGui::Button(label(Text::kStopCompiling, "stop").c_str())) stop_stages();
         } else if (!all && !work.running()) {
-            if (ImGui::Button("Compile the stages in the background")) start_stages();
+            if (ImGui::Button(label(Text::kCompileInBackground, "compile").c_str())) start_stages();
         }
     }
 
@@ -482,8 +561,8 @@ struct Launcher {
         ImGui::PushID(id);
         for (int n = 1; n <= top; ++n) {
             if (n > 1) ImGui::SameLine();
-            const std::string label = std::to_string(n) + "x";
-            if (ImGui::RadioButton(label.c_str(), value == n)) {
+            const std::string text = std::to_string(n) + "x";
+            if (ImGui::RadioButton(text.c_str(), value == n)) {
                 changed = value != n;
                 value = n;
             }
@@ -492,105 +571,155 @@ struct Launcher {
         return changed;
     }
 
+    // F25d: "auto" (the system's language), English or Spanish, each by its
+    // own name. True when the player picked another one.
+    bool language_buttons(std::string &language) const {
+        using mpo::launcher::language_name;
+        bool changed = false;
+        const auto option = [&](const std::string &text, std::string_view value) {
+            if (ImGui::RadioButton(text.c_str(), language == value) && language != value) {
+                language = value;
+                changed = true;
+            }
+        };
+        option(trf(Text::kLanguageAuto, {language_name(system)}) + "###lang_auto",
+               mpo::launcher::kLanguageAuto);
+        ImGui::SameLine();
+        option(std::string(language_name(Language::kEnglish)) + "###lang_en", "en");
+        ImGui::SameLine();
+        option(std::string(language_name(Language::kSpanish)) + "###lang_es", "es");
+        return changed;
+    }
+
+    // Writes settings.toml when something changed, and shows the language.
+    void commit_settings(const mpo::launcher::GameSettings &settings) {
+        if (settings == status->settings) return;
+        // Kept even when the file cannot be written, so it is tried once
+        // per change, not once per frame.
+        status->settings = settings;
+        settings_error.clear();
+        // The file is rewritten with valid values only.
+        if (mpo::launcher::save_settings(text_path(status->settings_file), settings,
+                                         settings_error))
+            status->settings_notices.clear();
+        apply_language();
+    }
+
+    // Before the install, the language alone (the rest of Settings only
+    // matters once the game is installed).
+    void draw_language_line() {
+        if (status->settings_file.empty()) return;
+        // What setup.py found wrong in settings.toml (as Settings shows it).
+        for (const std::string &notice : status->settings_notices)
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "%s", notice.c_str());
+        mpo::launcher::GameSettings settings = status->settings;
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(tr(Text::kLanguage));
+        ImGui::SameLine();
+        language_buttons(settings.language);
+        commit_settings(settings);
+        if (!settings_error.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s",
+                               trf(Text::kNotSaved, {settings_error}).c_str());
+    }
+
     void draw_settings() {
-        ImGui::SeparatorText("Settings");
+        ImGui::SeparatorText(tr(Text::kSettingsSection));
         for (const std::string &notice : status->settings_notices)
             ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "%s", notice.c_str());
         if (status->settings_file.empty()) {
-            ImGui::TextDisabled("This setup.py does not know the settings.");
+            ImGui::TextDisabled("%s", tr(Text::kSettingsUnknown));
             return;
         }
         using mpo::launcher::GameSettings;
         GameSettings settings = status->settings;
         const bool vulkan = settings.renderer == "vulkan";
-        ImGui::BeginDisabled(game.running());
         if (ImGui::BeginTable("settings", 2, ImGuiTableFlags_SizingFixedFit)) {
+            // The launcher's own: it changes at once, also while playing.
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Renderer");
+            ImGui::TextUnformatted(tr(Text::kLanguage));
+            ImGui::TableNextColumn();
+            language_buttons(settings.language);
+
+            ImGui::BeginDisabled(game.running());
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(tr(Text::kRenderer));
             ImGui::TableNextColumn();
             if (ImGui::RadioButton("Vulkan", vulkan)) settings.renderer = "vulkan";
             ImGui::SameLine();
-            if (ImGui::RadioButton("Software (slow, for diagnosis)", !vulkan))
+            if (ImGui::RadioButton(label(Text::kRendererSoft, "soft").c_str(), !vulkan))
                 settings.renderer = "soft";
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Resolution");
+            ImGui::TextUnformatted(tr(Text::kResolution));
             ImGui::TableNextColumn();
             ImGui::BeginDisabled(!vulkan);
             scale_buttons("render", GameSettings::kMaxRenderScale, settings.render_scale);
             ImGui::SameLine();
             if (vulkan)
-                ImGui::TextDisabled("%s pixels",
-                                    mpo::launcher::pixel_size(settings.render_scale).c_str());
+                ImGui::TextDisabled(
+                    "%s",
+                    trf(Text::kPixels, {mpo::launcher::pixel_size(settings.render_scale)}).c_str());
             else
-                ImGui::TextDisabled("(Vulkan only)");
+                ImGui::TextDisabled("%s", tr(Text::kVulkanOnly));
             ImGui::EndDisabled();
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Window");
+            ImGui::TextUnformatted(tr(Text::kWindow));
             ImGui::TableNextColumn();
             ImGui::BeginDisabled(settings.fullscreen);
             scale_buttons("window", GameSettings::kMaxWindowScale, settings.window_scale);
             ImGui::SameLine();
             if (settings.fullscreen)
-                ImGui::TextDisabled("(fullscreen)");
+                ImGui::TextDisabled("%s", tr(Text::kFullscreenNote));
             else
-                ImGui::TextDisabled("%s pixels",
-                                    mpo::launcher::pixel_size(settings.window_scale).c_str());
+                ImGui::TextDisabled(
+                    "%s",
+                    trf(Text::kPixels, {mpo::launcher::pixel_size(settings.window_scale)}).c_str());
             ImGui::EndDisabled();
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::TableNextColumn();
-            ImGui::Checkbox("Fullscreen (borderless, at the desktop's resolution)",
-                            &settings.fullscreen);
+            ImGui::Checkbox(label(Text::kFullscreen, "fullscreen").c_str(), &settings.fullscreen);
+            ImGui::EndDisabled();
             ImGui::EndTable();
         }
-        ImGui::EndDisabled();
-        if (!(settings == status->settings)) {
-            // Kept even when the file cannot be written, so it is tried once
-            // per change, not once per frame.
-            status->settings = settings;
-            settings_error.clear();
-            // The file is rewritten with valid values only.
-            if (mpo::launcher::save_settings(text_path(status->settings_file), settings,
-                                             settings_error))
-                status->settings_notices.clear();
-        }
+        commit_settings(settings);
         if (!settings_error.empty())
-            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "Not saved: %s",
-                               settings_error.c_str());
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s",
+                               trf(Text::kNotSaved, {settings_error}).c_str());
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         if (game.running())
-            ImGui::TextWrapped("They apply the next time you press Play.");
+            ImGui::TextWrapped("%s", tr(Text::kApplyNextPlay));
         else
-            ImGui::TextWrapped("Changes are saved at once, in %s", status->settings_file.c_str());
+            ImGui::TextWrapped("%s", trf(Text::kSavedAt, {status->settings_file}).c_str());
         ImGui::PopStyleColor();
     }
 
     void open_import_browser() {
         pick = Pick::kImportSave;
-        browser.open("Choose the save folder to import", Browser::Mode::kFolder, {},
+        browser.open(label(Text::kChooseImportFolder, "pick"), Browser::Mode::kFolder, {},
                      ppsspp_shortcuts());
     }
 
     void draw_saves() {
-        ImGui::SeparatorText("Saves");
-        ImGui::TextWrapped(
-            "Bring a save from a PSP or PPSSPP (the PSP/SAVEDATA/ULUS10202... folder), or take "
-            "yours to them.");
+        ImGui::SeparatorText(tr(Text::kSavesSection));
+        ImGui::TextWrapped("%s", tr(Text::kSavesHelp));
         ImGui::BeginDisabled(work.running() || game.running());
-        if (ImGui::Button("Import a save...")) open_import_browser();
+        if (ImGui::Button(label(Text::kImportSave, "import").c_str())) open_import_browser();
         ImGui::SameLine();
-        if (ImGui::Button("Export my saves...")) {
+        if (ImGui::Button(label(Text::kExportSaves, "export").c_str())) {
             pick = Pick::kExportSave;
-            browser.open("Choose where to export the saves", Browser::Mode::kFolder, {},
+            browser.open(label(Text::kChooseExportFolder, "pick"), Browser::Mode::kFolder, {},
                          ppsspp_shortcuts());
         }
         ImGui::EndDisabled();
@@ -598,26 +727,24 @@ struct Launcher {
 
     // After the install: the fonts can be added (or changed) at any time.
     void draw_fonts() {
-        ImGui::SeparatorText("PSP firmware fonts");
+        ImGui::SeparatorText(tr(Text::kFontsSection));
         if (status->fonts) {
-            ImGui::TextDisabled("Installed.");
+            ImGui::TextDisabled("%s", tr(Text::kFontsInstalled));
         } else {
-            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
-                               "Missing: the save screens and the on-screen keyboard use a "
-                               "substitute font.");
-            ImGui::TextWrapped("Choose the flash0/font folder of a PSP, or assets/flash0/font in "
-                               "the PPSSPP folder.");
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "%s", tr(Text::kFontsMissing));
+            ImGui::TextWrapped("%s", tr(Text::kFontsHelp));
         }
         ImGui::BeginDisabled(work.running() || game.running());
-        if (ImGui::Button(status->fonts ? "Change the fonts..." : "Add the fonts...")) {
+        if (ImGui::Button(
+                label(status->fonts ? Text::kChangeFonts : Text::kAddFonts, "fonts").c_str())) {
             pick = Pick::kAddFonts;
-            browser.open("Choose the fonts folder", Browser::Mode::kFolder, {});
+            browser.open(label(Text::kChooseFontsFolder, "pick"), Browser::Mode::kFolder, {});
         }
         ImGui::EndDisabled();
     }
 
     void draw_work() {
-        ImGui::SeparatorText(work_name.c_str());
+        ImGui::SeparatorText(tr(work_title));
         float fraction = 0.0f;
         std::string label = mpo::launcher::format_duration(work.seconds());
         if (work_progress) {
@@ -640,22 +767,19 @@ struct Launcher {
         ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         if (!ImGui::BeginPopupModal("failure", nullptr, ImGuiWindowFlags_NoResize)) return;
         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f), "%s", failure_title.c_str());
-        ImGui::TextWrapped(
-            "The last lines are below; the full logs are in the logs folder of the install "
-            "folder. If the game stopped while playing, what happened since your last save is "
-            "lost.");
+        ImGui::TextWrapped("%s", tr(Text::kFailExplain));
         if (ImGui::BeginChild("lines", ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing() * 1.5f),
                               ImGuiChildFlags_Borders)) {
             for (const std::string &line : failure_lines) ImGui::TextUnformatted(line.c_str());
         }
         ImGui::EndChild();
-        if (ImGui::Button("Copy to the clipboard")) {
+        if (ImGui::Button(label(Text::kCopyToClipboard, "copy").c_str())) {
             std::string text = failure_title + "\n";
             for (const std::string &line : failure_lines) text += line + "\n";
             SDL_SetClipboardText(text.c_str());
         }
         ImGui::SameLine();
-        if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+        if (ImGui::Button(label(Text::kClose, "close").c_str())) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 
@@ -670,13 +794,13 @@ struct Launcher {
             fonts = path_text(chosen);
             break;
         case Pick::kAddFonts:
-            start_work("Fonts", command("fonts", {"--fonts", path_text(chosen)}));
+            start_work(Text::kWorkFonts, command("fonts", {"--fonts", path_text(chosen)}));
             break;
         case Pick::kImportSave:
-            start_work("Import save", command("import-save", {path_text(chosen)}));
+            start_work(Text::kWorkImportSave, command("import-save", {path_text(chosen)}));
             break;
         case Pick::kExportSave:
-            start_work("Export saves", command("export-save", {path_text(chosen)}));
+            start_work(Text::kWorkExportSaves, command("export-save", {path_text(chosen)}));
             break;
         case Pick::kNone:
             break;
@@ -691,25 +815,27 @@ struct Launcher {
         ImGui::Begin("launcher", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings);
-        ImGui::Text("Metal Gear Solid: Portable Ops - unofficial PC port");
-        ImGui::TextDisabled("Not affiliated with Konami. You need your own copy of the game.");
+        ImGui::TextUnformatted(tr(Text::kHeader));
+        ImGui::TextDisabled("%s", tr(Text::kNotAffiliated));
         if (!status) {
             ImGui::Separator();
-            ImGui::TextUnformatted(status_task.running() ? "Reading the install..."
-                                                         : "Could not read the install state.");
-            if (!status_task.running() && ImGui::Button("Try again")) refresh_status();
+            ImGui::TextUnformatted(
+                tr(status_task.running() ? Text::kReadingInstall : Text::kCannotReadInstall));
+            if (!status_task.running() && ImGui::Button(label(Text::kTryAgain, "retry").c_str()))
+                refresh_status();
         } else if (work.running()) {
             draw_work();
         } else if (!status->playable) {
+            draw_language_line();
             draw_install();
         } else {
             draw_play();
             draw_settings();
             draw_saves();
             draw_fonts();
-            ImGui::SeparatorText("Install");
-            ImGui::TextDisabled("Folder: %s", status->data.c_str());
-            ImGui::TextDisabled("ISO: %s", status->iso.c_str());
+            ImGui::SeparatorText(tr(Text::kWorkInstall));
+            ImGui::TextDisabled("%s", trf(Text::kInstallFolder, {status->data}).c_str());
+            ImGui::TextDisabled("%s", trf(Text::kInstallIso, {status->iso}).c_str());
         }
         draw_browser();
         draw_failure();
@@ -721,6 +847,7 @@ int run(int argc, char **argv) {
     fs::path source;
     fs::path python;
     fs::path data;
+    fs::path settings;
     fs::path screenshot;
     bool browse_saves = false;
     for (int i = 1; i < argc; ++i) {
@@ -728,17 +855,18 @@ int run(int argc, char **argv) {
         if (arg == "--browse-saves") {
             browse_saves = true;
         } else if ((arg == "--source" || arg == "--python" || arg == "--data" ||
-                    arg == "--screenshot") &&
+                    arg == "--settings" || arg == "--screenshot") &&
                    i + 1 < argc) {
             const fs::path value = text_path(argv[++i]);
-            (arg == "--source"   ? source
-             : arg == "--python" ? python
-             : arg == "--data"   ? data
-                                 : screenshot) = value;
+            (arg == "--source"     ? source
+             : arg == "--python"   ? python
+             : arg == "--data"     ? data
+             : arg == "--settings" ? settings
+                                   : screenshot) = value;
         } else {
             std::fprintf(stderr, "usage: mpo_launcher [--data <dir>] [--source <repo>] "
-                                 "[--python <exe>] [--screenshot <file.bmp>] "
-                                 "[--browse-saves]\n");
+                                 "[--python <exe>] [--settings <file>] "
+                                 "[--screenshot <file.bmp>] [--browse-saves]\n");
             return 2;
         }
     }
@@ -746,25 +874,25 @@ int run(int argc, char **argv) {
         std::fprintf(stderr, "mpo_launcher: SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
+    // F25d: the system's language until settings.toml says otherwise.
+    const Language system = system_language();
+    g_language = system;
     const char *base_text = SDL_GetBasePath();
     const fs::path base = base_text != nullptr ? text_path(base_text) : fs::current_path();
     const std::optional<mpo::launcher::LauncherPaths> paths = mpo::launcher::find_paths(
         base, source, python, text_path(MPO_LAUNCHER_SOURCE_ROOT), kWindows);
     if (!paths) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "MPO launcher",
-                                 "The port's files (source/profiles/mpo/scripts/setup.py) are not "
-                                 "next to the launcher. Unpack the whole release again.",
-                                 nullptr);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, tr(Text::kMessageBoxTitle),
+                                 tr(Text::kMissingFiles), nullptr);
         SDL_Quit();
         return 1;
     }
 
     const float scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     const float ui_scale = scale > 0.0f ? scale : 1.0f;
-    SDL_Window *window =
-        SDL_CreateWindow("MGS: Portable Ops - PC port", static_cast<int>(1000 * ui_scale),
-                         static_cast<int>(720 * ui_scale),
-                         SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_Window *window = SDL_CreateWindow(
+        tr(Text::kWindowTitle), static_cast<int>(1000 * ui_scale), static_cast<int>(720 * ui_scale),
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     SDL_Renderer *renderer = window != nullptr ? SDL_CreateRenderer(window, nullptr) : nullptr;
     if (renderer == nullptr) {
         std::fprintf(stderr, "mpo_launcher: no window: %s\n", SDL_GetError());
@@ -786,12 +914,17 @@ int run(int argc, char **argv) {
     style.ScaleAllSizes(ui_scale * 1.3f);
     style.FontScaleDpi = ui_scale;
     style.FontScaleMain = 1.3f;
+    // F25d: the font with Latin-1, for the Spanish texts.
+    mpo::launcher::add_launcher_font(*io.Fonts);
     ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer3_Init(renderer);
 
     Launcher launcher;
     launcher.paths = *paths;
     launcher.data = data;
+    launcher.settings_file = settings;
+    launcher.system = system;
+    launcher.window = window;
     launcher.refresh_status();
     if (browse_saves) launcher.open_import_browser();
 

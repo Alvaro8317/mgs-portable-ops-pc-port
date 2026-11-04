@@ -167,6 +167,18 @@ embebible no trae Tkinter). La release lo trae ya compilado: no tiene nada del j
      (`save_settings`, por un temporal) y `setup.py play` lo convierte en opciones de `mpo_boot`
      (`settings_options`). Lo que se pase después de `--` gana, y también `MPO_RENDERER` y
      `MPO_RENDER_SCALE`.
+- **En inglés y en español** (F25d): todas las cadenas están en
+  `launcher/launcher_strings.inc`, una línea por cadena con los dos idiomas
+  (`MPO_TEXT(kId, "English", "Español")`), y se piden con `tr(Text::kId)`. El idioma sale de
+  `language` en `settings.toml` (`"auto"`, `"en"` o `"es"`; también se elige arriba de todo antes
+  de instalar); con `"auto"`, del locale del sistema: Windows (y macOS) por
+  `SDL_GetPreferredLocales`, y Linux por `LC_ALL`, `LC_MESSAGES`, `LANG` y `LANGUAGE` como
+  gettext (SDL solo lee `LANG` y `LANGUAGE`). Español si el primer idioma que el launcher tiene es
+  `es`, inglés en cualquier otro caso. La fuente es la vectorial de Dear ImGui, con Latin-1
+  (`mpo_launcher_font_test` comprueba cada carácter de la tabla). Lo que imprime `setup.py` (los
+  pasos, los avisos de `settings.toml`, los errores y los logs) **queda en inglés**: es lo que
+  trae un reporte de un problema. `mpo_launcher --settings <file>` usa otro `settings.toml` (para
+  tests y capturas).
 - Lee el estado con `setup.py status --json` y el progreso de las líneas `setup: <paso>: …`
   (`mpo_launcher_core`, probado sin ventana en `mpo_launcher_core_test`).
 - **Si el juego o un paso termina con error**, muestra sus últimas líneas (con un botón para

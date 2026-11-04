@@ -69,11 +69,14 @@ The settings (F24a) are <config>/settings.toml, next to input.toml:
   render_scale = 1      # 1 to 8: Vulkan draws at 480x272 times this
   window_scale = 2      # 1 to 8: the window opens at 480x272 times this
   fullscreen = false    # borderless, at the desktop's resolution
+  language = "auto"     # the launcher's (F25d): "auto" (the system's), "en", "es"
 
 `play` turns them into mpo_boot options. A missing file means the defaults
 above; a damaged one, or a value that is not valid, too, with a notice: it
 never stops the game. MPO_RENDERER and MPO_RENDER_SCALE win over the file,
-and the options after `--` win over everything.
+and the options after `--` win over everything. `language` is only the
+launcher's: what setup.py prints stays in English (the logs are what a bug
+report carries).
 """
 
 import argparse
@@ -123,8 +126,12 @@ DEFAULT_SETTINGS = {
     'render_scale': 1,
     'window_scale': 2,
     'fullscreen': False,
+    # The launcher's language (F25d): "auto" follows the system's locale.
+    # mpo_boot gets nothing from it, and setup.py itself prints English.
+    'language': 'auto',
 }
 _RENDERERS = ('vulkan', 'soft')
+_LANGUAGES = ('auto', 'en', 'es')
 _MAX_RENDER_SCALE = 8
 _MAX_WINDOW_SCALE = 8
 
@@ -232,6 +239,8 @@ def _valid_setting(key, value):
     return isinstance(value, str) and value in _RENDERERS
   if key == 'fullscreen':
     return isinstance(value, bool)
+  if key == 'language':
+    return isinstance(value, str) and value in _LANGUAGES
   top = _MAX_RENDER_SCALE if key == 'render_scale' else _MAX_WINDOW_SCALE
   # TOML's true is a Python bool, which is an int: not a scale.
   return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= top
@@ -242,6 +251,7 @@ _SETTING_RANGES = {
     'render_scale': f'1 to {_MAX_RENDER_SCALE}',
     'window_scale': f'1 to {_MAX_WINDOW_SCALE}',
     'fullscreen': 'true or false',
+    'language': ' or '.join(f'"{lang}"' for lang in _LANGUAGES),
 }
 
 

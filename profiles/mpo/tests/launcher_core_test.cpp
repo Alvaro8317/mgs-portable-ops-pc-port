@@ -4,16 +4,25 @@
 // `setup.py status --json` prints, the progress lines of the steps, the
 // release layouts, the folder listing of the built-in browser. F24a: the
 // game settings (from `status --json`, and settings.toml written back).
+// F25d: the texts in English and Spanish, the system's locale and the
+// language setting.
 
 #include <array>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "launcher_core.hpp"
+#include "launcher_text.hpp"
 
 namespace {
 
@@ -92,13 +101,14 @@ void test_settings_in_status() {
     const auto status = parse_status(R"({
   "playable": true,
   "settings_file": "/home/p/.config/mpo-pc-port/settings.toml",
-  "settings": {"renderer": "soft", "render_scale": 4, "window_scale": 3, "fullscreen": true},
+  "settings": {"renderer": "soft", "render_scale": 4, "window_scale": 3, "fullscreen": true,
+               "language": "es"},
   "settings_notices": ["settings.toml: window_scale = 30 is not valid (1 to 8): using 2", 7]
 })");
     check(status.has_value(), "settings status parses");
     if (!status) return;
     check(status->settings_file == "/home/p/.config/mpo-pc-port/settings.toml", "settings file");
-    const GameSettings expected{"soft", 4, 3, true};
+    const GameSettings expected{"soft", 4, 3, true, "es"};
     check(status->settings == expected, "settings values");
     check(status->settings_notices.size() == 1u &&
               status->settings_notices[0].find("window_scale") != std::string::npos,
@@ -109,13 +119,25 @@ void test_settings_in_status() {
               old->settings_notices.empty(),
           "no settings: defaults");
     const auto bad = parse_status(R"({"settings": {"renderer": "opengl", "render_scale": 9,
-                                                   "window_scale": 0, "fullscreen": "yes"}})");
+                                                   "window_scale": 0, "fullscreen": "yes",
+                                                   "language": "fr"}})");
     check(bad && bad->settings == GameSettings{}, "invalid values: defaults");
     const auto edge = parse_status(R"({"settings": {"render_scale": 8, "window_scale": 1}})");
     check(edge && edge->settings.render_scale == 8 && edge->settings.window_scale == 1 &&
               edge->settings.renderer == "vulkan",
           "range ends");
-    check(GameSettings{} == (GameSettings{"vulkan", 1, 2, false}), "defaults");
+    check(GameSettings{} == (GameSettings{"vulkan", 1, 2, false, "auto"}), "defaults");
+    // The language: each valid value, and the rest as "auto".
+    for (const char *language : {"auto", "en", "es"}) {
+        const auto one =
+            parse_status(std::string(R"({"settings": {"language": ")") + language + "\"}}");
+        check(one && one->settings.language == language, language);
+    }
+    for (const char *language : {R"("ES")", R"("es_ES")", R"("")", "1", "true", "null", "[]"}) {
+        const auto one =
+            parse_status(std::string(R"({"settings": {"language": )") + language + "}}");
+        check(one && one->settings.language == "auto", language);
+    }
 }
 
 std::string read_text(const fs::path &path) {
@@ -131,7 +153,7 @@ std::string read_text(const fs::path &path) {
 void test_settings_file(const fs::path &tmp, const fs::path &golden) {
     // setup_script_test.py reads the same golden file with setup.py's
     // load_settings: what the launcher writes is what play reads.
-    const GameSettings settings{"vulkan", 4, 3, true};
+    const GameSettings settings{"vulkan", 4, 3, true, "es"};
     const std::string text = format_settings(settings);
     check(text == read_text(golden), "format_settings matches settings_golden.txt");
     check(format_settings(GameSettings{}).find("render_scale = 1\nwindow_scale") ==
@@ -141,7 +163,8 @@ void test_settings_file(const fs::path &tmp, const fs::path &golden) {
               format_settings(GameSettings{}).find("fullscreen = false") != std::string::npos,
           "defaults formatted");
     // Out of range values never reach the file.
-    const std::string clamped = format_settings(GameSettings{"opengl", 20, 0, false});
+    const std::string clamped = format_settings(GameSettings{"opengl", 20, 0, false, "fr"});
+    check(clamped.find("language = \"auto\"") != std::string::npos, "invalid language: auto");
     check(clamped.find("renderer = \"vulkan\"") != std::string::npos &&
               clamped.find("render_scale = 8") != std::string::npos &&
               clamped.find("window_scale = 1") != std::string::npos,
@@ -151,6 +174,10 @@ void test_settings_file(const fs::path &tmp, const fs::path &golden) {
     std::string error;
     check(save_settings(file, settings, error), "save creates the folder");
     check(read_text(file) == text, "saved text");
+    check(read_text(file).find("language = \"es\"\n") != std::string::npos, "saved language");
+    check(save_settings(file, GameSettings{"vulkan", 1, 2, false, "en"}, error) &&
+              read_text(file).find("language = \"en\"\n") != std::string::npos,
+          "language replaced");
     check(save_settings(file, GameSettings{}, error), "save replaces");
     check(read_text(file) == format_settings(GameSettings{}), "replaced text");
     check(!fs::exists(fs::path(file) += ".tmp"), "no temporary file left");
@@ -281,6 +308,120 @@ void test_duration() {
     check(format_duration(-3.0) == "0 s", "negative");
 }
 
+// F25d: the table in both languages.
+void test_texts() {
+    check(kTextCount > 50u, "the table has the launcher's texts");
+    std::set<std::string> ids;
+    for (std::size_t i = 0; i < kTextCount; ++i) {
+        const auto id = static_cast<Text>(i);
+        const std::string name = text_id(id);
+        check(ids.insert(name).second, "ids are unique");
+        const std::string_view en = text(Language::kEnglish, id);
+        const std::string_view es = text(Language::kSpanish, id);
+        const std::string what = name + ": ";
+        check(!en.empty(), (what + "English is missing").c_str());
+        check(!es.empty(), (what + "Spanish is missing").c_str());
+        check(placeholders(en) == placeholders(es),
+              (what + "both languages use the same placeholders").c_str());
+        // The code adds the ImGui ids ("##iso"): a text never has one.
+        check(en.find("##") == std::string_view::npos && es.find("##") == std::string_view::npos,
+              (what + "no ImGui id in a text").c_str());
+        for (const std::string_view t : {en, es})
+            check(t.empty() || (t.front() != ' ' && t.back() != ' '),
+                  (what + "no space at the ends").c_str());
+    }
+    // Out of range: empty, never a crash.
+    check(std::strlen(text(Language::kSpanish, static_cast<Text>(kTextCount))) == 0u,
+          "out of range");
+    check(std::string_view(text(Language::kEnglish, Text::kPlayButton)) == "Play" &&
+              std::string_view(text(Language::kSpanish, Text::kPlayButton)) == "Jugar",
+          "Play / Jugar");
+    check(std::string_view(text(Language::kSpanish, Text::kResolution)) == "Resoluci\xC3\xB3n",
+          "UTF-8 Spanish");
+    // Nearly every text is translated (names such as "ISO: {0}" stay).
+    std::size_t same = 0;
+    for (std::size_t i = 0; i < kTextCount; ++i)
+        if (std::string_view(text(Language::kEnglish, static_cast<Text>(i))) ==
+            text(Language::kSpanish, static_cast<Text>(i)))
+            ++same;
+    check(same * 20u < kTextCount, "nearly every text has its Spanish");
+
+    check(format_text("Stages compiled: {0} of {1}", {"5", "92"}) == "Stages compiled: 5 of 92",
+          "format");
+    check(format_text("{1} y {0}", {"a", "b"}) == "b y a", "reordered");
+    check(format_text("{0}{0}", {"x"}) == "xx", "repeated");
+    check(format_text("{2} {x} {} {{0}} {", {"a"}) == "{2} {x} {} {0}} {", "left as they are");
+    check(format_text("100%", {}) == "100%", "no placeholders");
+    check(placeholders("{1} {0} {{2}} {0}") == std::vector<int>({0, 0, 1}), "placeholders");
+    check(std::string_view(language_name(Language::kSpanish)) == "Espa\xC3\xB1ol" &&
+              std::string_view(language_name(Language::kEnglish)) == "English",
+          "language names");
+    check(std::string_view(language_code(Language::kSpanish)) == "es", "language code");
+}
+
+// F25d: the system's language (Windows gives "es-MX", Linux "es_MX.UTF-8").
+void test_locale() {
+    struct Case {
+        const char *locale;
+        int language; // -1: none, 0: English, 1: Spanish
+    };
+    for (const Case &c :
+         {Case{"es", 1}, Case{"es_ES.UTF-8", 1}, Case{"es-MX", 1}, Case{"es-419", 1}, Case{"ES", 1},
+          Case{"es_ES@euro", 1}, Case{"es.UTF-8", 1}, Case{"en_US.UTF-8", 0}, Case{"en-GB", 0},
+          Case{"en", 0}, Case{"fr_FR.UTF-8", -1}, Case{"pt-BR", -1}, Case{"est", -1}, Case{"C", -1},
+          Case{"POSIX", -1}, Case{"C.UTF-8", -1}, Case{"", -1}}) {
+        const std::optional<Language> found = locale_language(c.locale);
+        const int got = found ? static_cast<int>(*found) : -1;
+        check(got == c.language, c.locale);
+    }
+    using Locales = std::vector<std::string>;
+    check(language_from_locales(Locales{}) == Language::kEnglish, "no locale: English");
+    check(language_from_locales(Locales{"es_AR"}) == Language::kSpanish, "Spanish");
+    check(language_from_locales(Locales{"de_DE", "fr"}) == Language::kEnglish, "neither: English");
+    check(language_from_locales(Locales{"fr_FR", "es_ES", "en"}) == Language::kSpanish,
+          "the first one the launcher has");
+    check(language_from_locales(Locales{"en_US", "es"}) == Language::kEnglish, "order wins");
+
+    const auto env = [](std::map<std::string, std::string> values) {
+        return [values = std::move(values)](const char *name) -> const char * {
+            const auto it = values.find(name);
+            return it != values.end() ? it->second.c_str() : nullptr;
+        };
+    };
+    check(posix_locales(env({})).empty(), "no variables");
+    check(posix_locales(env({{"LANG", "es_ES.UTF-8"}})) == Locales{"es_ES.UTF-8"}, "LANG");
+    check(posix_locales(env({{"LANG", "en_US.UTF-8"}, {"LC_MESSAGES", "es_MX.UTF-8"}})) ==
+              Locales{"es_MX.UTF-8"},
+          "LC_MESSAGES over LANG");
+    check(posix_locales(env({{"LANG", "es_ES.UTF-8"},
+                             {"LC_MESSAGES", "es_MX.UTF-8"},
+                             {"LC_ALL", "en_GB.UTF-8"}})) == Locales{"en_GB.UTF-8"},
+          "LC_ALL over everything");
+    check(posix_locales(env({{"LANG", "en_US.UTF-8"}, {"LC_ALL", ""}})) == Locales{"en_US.UTF-8"},
+          "an empty variable is not set");
+    check(posix_locales(env({{"LANG", "de_DE.UTF-8"}, {"LANGUAGE", "fr:es::en"}})) ==
+              (Locales{"fr", "es", "en", "de_DE.UTF-8"}),
+          "LANGUAGE first");
+    check(posix_locales(env({{"LANG", "C"}, {"LANGUAGE", "es"}})).empty(),
+          "LANGUAGE does not count with C");
+    check(posix_locales(env({{"LANG", "C.UTF-8"}})).empty(), "C.UTF-8");
+    check(language_from_locales(posix_locales(
+              env({{"LANG", "de_DE.UTF-8"}, {"LANGUAGE", "fr:es"}}))) == Language::kSpanish,
+          "a LANGUAGE list");
+
+    check(valid_language_setting("auto") && valid_language_setting("en") &&
+              valid_language_setting("es"),
+          "valid settings");
+    for (const char *bad : {"", "ES", "es_ES", "spanish", "fr", " es"})
+        check(!valid_language_setting(bad), bad);
+    check(resolve_language("auto", Language::kSpanish) == Language::kSpanish, "auto: system");
+    check(resolve_language("auto", Language::kEnglish) == Language::kEnglish, "auto: system en");
+    check(resolve_language("en", Language::kSpanish) == Language::kEnglish, "en wins");
+    check(resolve_language("es", Language::kEnglish) == Language::kSpanish, "es wins");
+    check(resolve_language("klingon", Language::kSpanish) == Language::kSpanish,
+          "invalid: the system's");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -303,6 +444,8 @@ int main(int argc, char **argv) {
     test_listing(tmp);
     test_ppsspp_saves(tmp);
     test_duration();
+    test_texts();
+    test_locale();
     fs::remove_all(tmp, ec);
     std::printf("mpo_launcher_core_test: %s\n", g_failures == 0 ? "ok" : "FAILED");
     return g_failures == 0 ? 0 : 1;
