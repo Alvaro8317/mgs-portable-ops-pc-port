@@ -430,7 +430,11 @@ void Ge::ExecutePrim(std::uint32_t op, RunResult *result) {
 }
 
 void Ge::ReplaceTexture(RasterizerState *rs) {
-    if (provider_ == nullptr || !rs->enable_textures || rs->sampler.has_invalid_ptr) return;
+    if (provider_ == nullptr) return;
+    // F25c: where the draw writes first, so a draw that samples its own
+    // target already sees it as a framebuffer.
+    provider_->BeginDraw(state_);
+    if (!rs->enable_textures || rs->sampler.has_invalid_ptr) return;
     rs->sampler.replaced = provider_->Find(state_, mem_, rs->sampler, clut_info_);
 }
 
@@ -540,7 +544,9 @@ void Ge::ExecuteBlockTransfer(RunResult *result) {
         const std::uint32_t dst_span = ((height - 1) * dst_stride) * bpp + row_bytes;
         assembler_.backend().SyncMemory(src_first, src_span, false);
         assembler_.backend().SyncMemory(dst_first, dst_span, true);
-        if (provider_ != nullptr) provider_->MemoryWritten(dst_first, dst_span);
+        if (provider_ != nullptr)
+            provider_->BlockTransfer(MemoryRect{src_first, src_stride * bpp, row_bytes, height},
+                                     MemoryRect{dst_first, dst_stride * bpp, row_bytes, height});
     }
     for (std::uint32_t y = 0; y < height; ++y) {
         std::uint32_t src = src_base + ((y + src_y) * src_stride + src_x) * bpp;

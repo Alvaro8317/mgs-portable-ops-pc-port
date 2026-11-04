@@ -312,8 +312,10 @@ El port puede dibujar imágenes PNG tuyas en lugar de las texturas del juego (po
 Un pack es un `textures.ini` y archivos PNG, con el mismo formato que los packs de texturas de
 PPSSPP, con `hash = xxh64` e `ignoreAddress = true` en `[options]`. Un PNG con el nombre de la
 clave de una textura (`00000000a1b2c3d4e5f60718.png`) o listado en `[hashes]` la reemplaza. Un PNG
-más grande que el original también sirve: el renderer Vulkan lo usa a su tamaño. Si esa carpeta no
-tiene un `textures.ini`, el juego se ve exactamente como antes.
+más grande que el original también sirve: el renderer Vulkan lo usa a su tamaño. También se
+reemplazan las texturas de la memoria de video (la mayoría de las que usa el juego), pero nunca lo
+que el juego dibuja él mismo (la pantalla, los render targets) ni los frames de los videos (título,
+cómics y créditos). Si esa carpeta no tiene un `textures.ini`, el juego se ve exactamente como antes.
 
 Para hacer un pack, arranca el juego con `setup.py play -- --dump-textures <carpeta>`: escribe en
 `<carpeta>` cada textura que dibuja, con su clave como nombre, y un `textures.ini`. Edita los PNG

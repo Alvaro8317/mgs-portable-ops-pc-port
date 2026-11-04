@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -34,6 +35,9 @@ constexpr std::uint32_t kIconAddr2 = 0x08310000; // the same icon elsewhere
 constexpr std::uint32_t kClutAddr = 0x08320000;  // 16 x 8888
 constexpr std::uint32_t kClutAddr2 = 0x08320100; // another palette
 constexpr std::uint32_t kRgbaAddr = 0x08330000;  // 8888 16x16
+constexpr std::uint32_t kRgbaAddr2 = 0x08334000; // another 8888 16x16 (F25c)
+constexpr std::uint32_t kVramTex = 0x04180000;   // where tests copy an 8888 16x16 (F25c)
+constexpr std::uint32_t kVramTarget = 0x190000;  // a 16x16 8888 render target (F25c)
 constexpr std::uint32_t kFb = 0x000000;          // 8888, stride 512
 constexpr std::uint32_t kDepth = 0x110000;
 constexpr std::uint32_t kCompareBytes = 512 * 272 * 4;
@@ -88,6 +92,33 @@ public:
         Emit(op(kCmdTexFilter, linear ? 0x101u : 0u));
         Emit(op(kCmdTexWrap, clamp ? 0x101u : 0u));
         Emit(op(kCmdTexFlush, 0));
+    }
+
+    // F25c: draw into the 8888 buffer at VRAM offset `fb` (`stride` pixels),
+    // scissor and region w x h from (0, 0). Target(kFb, 512, 480, 272) is
+    // the screen again.
+    void Target(std::uint32_t fb, int stride, int w, int h) {
+        const auto sc =
+            (static_cast<std::uint32_t>(h - 1) << 10) | static_cast<std::uint32_t>(w - 1);
+        Emit(op(kCmdFrameBufPtr, fb & 0xFFFFFF));
+        Emit(op(kCmdFrameBufWidth, static_cast<std::uint32_t>(stride)));
+        Emit(op(kCmdScissor2, sc));
+        Emit(op(kCmdRegion2, sc));
+    }
+
+    // F25c: a 32-bit block transfer of w x h pixels from (src, src_stride)
+    // to (dst, dst_stride), PSP addresses.
+    void Transfer(std::uint32_t src, int src_stride, std::uint32_t dst, int dst_stride, int w,
+                  int h) {
+        Emit(op(kCmdTransferSrc, src & 0xFFFFF0));
+        Emit(op(kCmdTransferSrcW, ((src >> 24) << 16) | static_cast<std::uint32_t>(src_stride)));
+        Emit(op(kCmdTransferDst, dst & 0xFFFFF0));
+        Emit(op(kCmdTransferDstW, ((dst >> 24) << 16) | static_cast<std::uint32_t>(dst_stride)));
+        Emit(op(kCmdTransferSrcPos, 0));
+        Emit(op(kCmdTransferDstPos, 0));
+        Emit(op(kCmdTransferSize,
+                (static_cast<std::uint32_t>(h - 1) << 10) | static_cast<std::uint32_t>(w - 1)));
+        Emit(op(kCmdTransferStart, 1));
     }
 
     // 16 8888 entries (2 blocks of 32 bytes) from `addr`.
@@ -197,6 +228,21 @@ struct Machine {
                 ram[kRgbaAddr - kRamBase + i * 4 + static_cast<std::uint32_t>(b)] =
                     static_cast<std::uint8_t>(c >> (8 * b));
         }
+        for (std::uint32_t i = 0; i < 16 * 16; ++i) {
+            const std::uint32_t c = 0xFF000000u | ((i * 5u) & 0xFF) |
+                                    (((i * 3u + 90u) & 0xFF) << 8) | (((i * 7u) & 0xFF) << 16);
+            for (int b = 0; b < 4; ++b)
+                ram[kRgbaAddr2 - kRamBase + i * 4 + static_cast<std::uint32_t>(b)] =
+                    static_cast<std::uint8_t>(c >> (8 * b));
+        }
+    }
+
+    // F25c: the CPU copies a 16x16 8888 texture from RAM to VRAM, with
+    // `pitch` bytes between rows.
+    void CopyToVram(std::uint32_t vram_addr, std::uint32_t ram_src, std::uint32_t pitch = 64) {
+        for (std::uint32_t row = 0; row < 16; ++row)
+            std::memcpy(&vram[(vram_addr & (MemoryView::kVramSize - 1)) + row * pitch],
+                        &ram[ram_src - kRamBase + row * 64], 64);
     }
 
     bool Run(const ListBuilder &lb) {
@@ -269,6 +315,32 @@ inline std::vector<std::uint8_t> UpscaleNearest(const std::vector<std::uint8_t> 
                              4 +
                          static_cast<std::size_t>(c)];
     return out;
+}
+
+// F25c: a 16x16 image of one colour (RGBA8).
+inline std::vector<std::uint8_t> Solid(std::uint32_t abgr) {
+    std::vector<std::uint8_t> rgba(16 * 16 * 4);
+    for (std::size_t i = 0; i < rgba.size(); i += 4) std::memcpy(&rgba[i], &abgr, 4);
+    return rgba;
+}
+
+constexpr std::uint32_t kSolid = 0xFFFF00FFu; // magenta, as softgpu writes it
+
+// A sprite at (x, y), 2x, of the 16x16 8888 texture at `addr` (`bufw`).
+inline void SampleRgba(ListBuilder &lb, std::uint32_t addr, int x, int y, int bufw = 16) {
+    lb.Texture(addr, bufw, 4, 4, 3, false);
+    lb.Sprites(true, {{x, y, x + 32, y + 32, 0, 0, 16, 16, 0xFFFFFFFF}});
+}
+
+// Draws a four-colour 16x16 image into the target at kVramTarget, then
+// back on the screen.
+inline void DrawTarget(ListBuilder &lb) {
+    lb.Target(kVramTarget, 16, 16, 16);
+    lb.Sprites(false, {{0, 0, 8, 8, 0, 0, 0, 0, 0xFF0000FF},
+                       {8, 0, 16, 8, 0, 0, 0, 0, 0xFF00FF00},
+                       {0, 8, 8, 16, 0, 0, 0, 0, 0xFFFF0000},
+                       {8, 8, 16, 16, 0, 0, 0, 0, 0xFFFFFFFF}});
+    lb.Target(kFb, 512, 480, 272);
 }
 
 // A fresh, empty folder under the system's temporary folder.

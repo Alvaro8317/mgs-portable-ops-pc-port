@@ -466,6 +466,260 @@ void TestSoftgpu() {
            "a folder without textures.ini is not a pack");
 }
 
+// ---- F25c: textures in VRAM ----
+
+// The content key of the first texture `lb` samples on `m`.
+tr::ReplacementKey ProbeFirst(Machine &m, const ListBuilder &lb) {
+    KeyProbe probe;
+    m.ge.SetTextureProvider(&probe);
+    expect(m.Run(lb), "probe list runs");
+    m.ge.SetTextureProvider(nullptr);
+    expect(!probe.keys.empty(), "probe saw a texture");
+    return probe.keys.empty() ? tr::ReplacementKey{} : tr::WithoutAddress(probe.keys[0]);
+}
+
+// A replacer whose only set gives `keys` the solid magenta image.
+std::unique_ptr<tr::TextureReplacer> SolidReplacer(const std::vector<tr::ReplacementKey> &keys) {
+    tr::TexturesIni ini;
+    ini.ignore_address = true;
+    auto set = std::make_unique<tr::ReplacementSet>("solid", ini);
+    for (const tr::ReplacementKey &k : keys) set->AddAlias(k, "solid.png");
+    set->AddImage("solid.png", 16, 16, Solid(kSolid));
+    auto r = std::make_unique<tr::TextureReplacer>();
+    r->SetActiveSet(r->AddSet(std::move(set)));
+    return r;
+}
+
+void TestVram() {
+    // A: an 8888 texture the CPU copied into VRAM is replaced.
+    ListBuilder vram_list;
+    vram_list.Clear(0xFF402010);
+    SampleRgba(vram_list, kVramTex, 300, 100);
+    Machine plain;
+    plain.CopyToVram(kVramTex, kRgbaAddr);
+    const tr::ReplacementKey kv = ProbeFirst(plain, vram_list);
+    {
+        Machine again;
+        again.CopyToVram(kVramTex, kRgbaAddr);
+        expect(again.Run(vram_list) && again.vram == plain.vram, "VRAM list is deterministic");
+    }
+    const std::vector<std::uint8_t> plain_vram = plain.vram;
+    {
+        Machine idle;
+        idle.CopyToVram(kVramTex, kRgbaAddr);
+        tr::TextureReplacer none;
+        idle.ge.SetTextureProvider(&none);
+        expect(idle.Run(vram_list) && idle.vram == plain_vram,
+               "VRAM: a replacer without sets changes nothing");
+        Machine miss;
+        miss.CopyToVram(kVramTex, kRgbaAddr);
+        auto other = SolidReplacer({{0x1234, 0x5678}});
+        miss.ge.SetTextureProvider(other.get());
+        expect(miss.Run(vram_list) && miss.vram == plain_vram,
+               "VRAM: a set that covers nothing changes nothing");
+        expect(other->stats().vram == 1 && other->stats().replaced == 0,
+               "VRAM: one lookup in VRAM, nothing replaced");
+    }
+    {
+        Machine rep;
+        rep.CopyToVram(kVramTex, kRgbaAddr);
+        auto r = SolidReplacer({kv});
+        rep.ge.SetTextureProvider(r.get());
+        expect(rep.Run(vram_list), "VRAM replaced list runs");
+        expect(rep.Pixel(300, 100) == kSolid && rep.Pixel(331, 131) == kSolid,
+               "a texture in VRAM is replaced");
+        expect(r->stats().vram_replaced == 1 && r->stats().framebuffer == 0,
+               "counted as replaced in VRAM");
+        bool outside = true;
+        for (int y = 0; y < 272; ++y)
+            for (int x = 0; x < 480; ++x)
+                if (x < 300 || x >= 332 || y < 100 || y >= 132)
+                    outside = outside && rep.Pixel(x, y) == plain.Pixel(x, y);
+        expect(outside, "nothing else changes");
+    }
+
+    // The same content as a RAM texture has the same key (ignoreAddress).
+    ListBuilder ram_list;
+    ram_list.Clear(0xFF402010);
+    SampleRgba(ram_list, kRgbaAddr, 300, 100);
+    {
+        Machine m;
+        expect(ProbeFirst(m, ram_list) == kv, "RAM and VRAM copies share the content key");
+    }
+
+    // B: a texture taken from a render target is never replaced, even when
+    // its content has a replacement.
+    ListBuilder rtt_list;
+    rtt_list.Clear(0xFF402010);
+    DrawTarget(rtt_list);
+    SampleRgba(rtt_list, 0x04000000u | kVramTarget, 10, 150);
+    Machine rtt_plain;
+    const tr::ReplacementKey kt = ProbeFirst(rtt_plain, rtt_list);
+    expect(rtt_plain.Pixel(10, 150) == 0xFF0000FFu && rtt_plain.Pixel(41, 181) == 0xFFFFFFFFu,
+           "the render target is drawn and sampled");
+    auto rtt_rep = SolidReplacer({kt, kv});
+    Machine rtt;
+    rtt.ge.SetTextureProvider(rtt_rep.get());
+    expect(rtt.Run(rtt_list), "render-to-texture list runs");
+    expect(rtt.vram == rtt_plain.vram, "a render target sampled as a texture is not replaced");
+    expect(rtt_rep->stats().framebuffer == 1 && rtt_rep->stats().replaced == 0,
+           "counted as a framebuffer: " + std::to_string(rtt_rep->stats().framebuffer));
+    // The control: the same bytes copied there by the CPU are replaced.
+    ListBuilder sample_target;
+    sample_target.Clear(0xFF402010);
+    SampleRgba(sample_target, 0x04000000u | kVramTarget, 10, 150);
+    {
+        Machine cpu;
+        std::memcpy(&cpu.vram[kVramTarget], &rtt_plain.vram[kVramTarget], 16 * 16 * 4);
+        auto r = SolidReplacer({kt});
+        cpu.ge.SetTextureProvider(r.get());
+        expect(cpu.Run(sample_target) && cpu.Pixel(10, 150) == kSolid,
+               "the same content written by the CPU is replaced (the key matches)");
+    }
+
+    // C: the target is forgotten kTargetAge flips after its last use, and
+    // sampling it keeps it alive.
+    {
+        tr::TextureReplacer &r = *rtt_rep;
+        expect(r.target_count() == 3,
+               "three targets (screen, its depth, the 16x16): " + std::to_string(r.target_count()));
+        const std::vector<std::string> lines = r.DescribeTargets();
+        expect(lines.size() == 3 && lines[0] == "0x000000 stride 2048: rows 0-271, bytes 0-1919" &&
+                   lines[2] == "0x190000 stride 64: rows 0-15, bytes 0-63",
+               "the targets as mpo_boot reports them: " + (lines.empty() ? "" : lines[0]));
+        for (std::uint64_t i = 0; i < tr::TextureReplacer::kTargetAge; ++i) r.Flip(nullptr);
+        expect(rtt.Run(sample_target) && r.stats().framebuffer == 2 && r.stats().replaced == 0,
+               "still a framebuffer kTargetAge flips later (and sampling refreshes it)");
+        for (std::uint64_t i = 0; i < tr::TextureReplacer::kTargetAge; ++i) r.Flip(nullptr);
+        expect(rtt.Run(sample_target) && r.stats().framebuffer == 3,
+               "kTargetAge flips after sampling, still one");
+        for (std::uint64_t i = 0; i <= tr::TextureReplacer::kTargetAge; ++i) r.Flip(nullptr);
+        expect(r.stats().targets_aged >= 1, "unused for longer: forgotten");
+        expect(rtt.Run(sample_target) && rtt.Pixel(10, 150) == kSolid && r.stats().replaced == 1,
+               "and then it is a texture like any other");
+    }
+
+    // D: what the display shows is a framebuffer.
+    {
+        Machine m;
+        m.CopyToVram(kVramTex, kRgbaAddr);
+        auto r = SolidReplacer({kv});
+        m.ge.SetTextureProvider(r.get());
+        const mpo::ge::MemoryRect shown{kVramTex, 64, 64, 16};
+        r->Flip(&shown);
+        expect(m.Run(vram_list) && m.vram == plain_vram && r->stats().framebuffer == 1,
+               "the displayed framebuffer is not replaced");
+    }
+
+    // E: a video frame is not replaced (in VRAM or in RAM) for kVideoAge
+    // flips after sceMpeg wrote it.
+    {
+        Machine m;
+        m.CopyToVram(kVramTex, kRgbaAddr);
+        auto r = SolidReplacer({kv});
+        m.ge.SetTextureProvider(r.get());
+        r->VideoWritten(kVramTex, 16 * 16 * 4);
+        expect(m.Run(vram_list) && m.vram == plain_vram && r->stats().video == 1,
+               "a video frame in VRAM is not replaced");
+        for (std::uint64_t i = 0; i < tr::TextureReplacer::kVideoAge; ++i) r->Flip(nullptr);
+        expect(m.Run(vram_list) && m.Pixel(300, 100) != kSolid && r->stats().video == 2,
+               "nor kVideoAge flips later");
+        r->Flip(nullptr);
+        expect(m.Run(vram_list) && m.Pixel(300, 100) == kSolid,
+               "once the video stops, the texture is replaced");
+        Machine ram;
+        auto rr = SolidReplacer({kv});
+        ram.ge.SetTextureProvider(rr.get());
+        expect(ram.Run(ram_list) && ram.Pixel(300, 100) == kSolid, "the RAM texture is replaced");
+        rr->VideoWritten(kRgbaAddr, 16 * 16 * 4);
+        expect(ram.Run(ram_list) && ram.Pixel(300, 100) != kSolid && rr->stats().video == 1,
+               "a video frame in RAM is not");
+    }
+
+    // F: a block transfer over a VRAM texture makes it hash again inside
+    // the same list: first sprite with content B (no replacement), then A
+    // copied over it by the GE, second sprite replaced.
+    {
+        ListBuilder lb;
+        lb.Clear(0xFF402010);
+        SampleRgba(lb, kVramTex, 300, 100);
+        lb.Transfer(kRgbaAddr, 16, kVramTex, 16, 16, 16);
+        SampleRgba(lb, kVramTex, 350, 100);
+        Machine soft_plain;
+        soft_plain.CopyToVram(kVramTex, kRgbaAddr2);
+        expect(soft_plain.Run(lb), "transfer list runs");
+        Machine m;
+        m.CopyToVram(kVramTex, kRgbaAddr2);
+        auto r = SolidReplacer({kv});
+        m.ge.SetTextureProvider(r.get());
+        expect(m.Run(lb), "transfer list runs with the pack");
+        expect(m.Pixel(300, 100) == soft_plain.Pixel(300, 100) && m.Pixel(300, 100) != kSolid,
+               "before the transfer: the game's texels");
+        expect(m.Pixel(350, 100) == kSolid, "after the transfer: rehashed and replaced");
+        expect(r->stats().hashes == 2, "two hashes: " + std::to_string(r->stats().hashes));
+    }
+
+    // G: a CPU write to VRAM is seen at the next flip; until then the hash is
+    // cached (PPSSPP checks once per frame too).
+    {
+        Machine m;
+        m.CopyToVram(kVramTex, kRgbaAddr);
+        auto r = SolidReplacer({kv});
+        m.ge.SetTextureProvider(r.get());
+        expect(m.Run(vram_list) && m.Pixel(300, 100) == kSolid, "A: replaced");
+        expect(m.Run(vram_list) && r->stats().hashes == 1, "the next run reuses the hash");
+        m.CopyToVram(kVramTex, kRgbaAddr2);
+        r->Flip(nullptr);
+        Machine b_plain;
+        b_plain.CopyToVram(kVramTex, kRgbaAddr2);
+        b_plain.Run(vram_list);
+        expect(m.Run(vram_list) && m.vram == b_plain.vram && r->stats().hashes == 2,
+               "after the flip the CPU's new texels are hashed: not replaced");
+        m.CopyToVram(kVramTex, kRgbaAddr);
+        r->Flip(nullptr);
+        expect(m.Run(vram_list) && m.Pixel(300, 100) == kSolid, "and A again: replaced again");
+    }
+
+    // H: a block transfer from a render target makes a framebuffer.
+    {
+        ListBuilder lb;
+        lb.Clear(0xFF402010);
+        DrawTarget(lb);
+        lb.Transfer(0x04000000u | kVramTarget, 16, 0x041A0000u, 16, 16, 16);
+        SampleRgba(lb, 0x041A0000u, 10, 150);
+        Machine p;
+        p.Run(lb);
+        Machine m;
+        auto r = SolidReplacer({kt});
+        m.ge.SetTextureProvider(r.get());
+        expect(m.Run(lb) && m.vram == p.vram && r->stats().framebuffer == 1,
+               "a copy of a render target is a framebuffer too");
+    }
+
+    // I: a texture in the stride gap of the screen (columns 480 to 511,
+    // never inside the scissor) is not a framebuffer.
+    {
+        constexpr std::uint32_t gap = 0x04000000u + 480u * 4u;
+        ListBuilder lb;
+        lb.Clear(0xFF402010);
+        SampleRgba(lb, gap, 300, 100, 512);
+        Machine p;
+        p.CopyToVram(gap, kRgbaAddr, 512 * 4);
+        const tr::ReplacementKey kg = ProbeFirst(p, lb);
+        Machine m;
+        m.CopyToVram(gap, kRgbaAddr, 512 * 4);
+        auto r = SolidReplacer({kg});
+        m.ge.SetTextureProvider(r.get());
+        expect(m.Run(lb) && m.Pixel(300, 100) == kSolid && r->stats().framebuffer == 0,
+               "a texture beside the screen, in its stride, is replaced");
+        // One column to the left, it overlaps the screen.
+        ListBuilder lb2;
+        lb2.Clear(0xFF402010);
+        SampleRgba(lb2, gap - 16, 300, 100, 512);
+        expect(m.Run(lb2) && r->stats().framebuffer == 1, "four texels into the screen: not");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -474,6 +728,7 @@ int main() {
     TestLookup();
     TestScale();
     TestSoftgpu();
+    TestVram();
     if (g_failures != 0) {
         std::fprintf(stderr, "mpo_texreplace_test: %d failure(s)\n", g_failures);
         return 1;

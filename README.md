@@ -303,8 +303,10 @@ icons or HD textures). Put a pack in the `textures` folder next to your saves:
 A pack is a `textures.ini` plus PNG files, in the same format as PPSSPP's texture packs, with
 `hash = xxh64` and `ignoreAddress = true` under `[options]`. A PNG named after a texture's key
 (`00000000a1b2c3d4e5f60718.png`) or listed under `[hashes]` replaces that texture. A PNG larger
-than the original works too: the Vulkan renderer uses it at its own size. Without a `textures.ini` in that folder the game
-looks exactly as before.
+than the original works too: the Vulkan renderer uses it at its own size. Textures in video memory
+(most of the ones the game uses) are replaced too, but never what the game draws itself (the screen, render
+targets) nor the frames of the videos (title, comics and credits). Without a `textures.ini` in
+that folder the game looks exactly as before.
 
 To make a pack, start the game with `setup.py play -- --dump-textures <folder>`: it writes every
 texture it draws into `<folder>`, named by its key, plus a `textures.ini`. Edit the PNGs you want
