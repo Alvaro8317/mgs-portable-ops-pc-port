@@ -236,7 +236,7 @@ muévelo a la izquierda y a la derecha. **F1** (o cambiar a otra ventana) lo sue
 
 **F11** o **Alt+Enter** cambian entre la ventana y la pantalla completa mientras juegas. El juego no
 ve esas teclas: Alt+Enter no aprieta Start, aunque Enter sea Start. Para empezar en pantalla
-completa, usa **Fullscreen** en [Ajustes](#ajustes).
+completa, usa **Pantalla completa** en [Ajustes](#ajustes).
 
 Cuando el juego te pide escribir algo (un nombre, una contraseña), escríbelo con el teclado.
 Retroceso borra, Enter termina y Esc cancela.
