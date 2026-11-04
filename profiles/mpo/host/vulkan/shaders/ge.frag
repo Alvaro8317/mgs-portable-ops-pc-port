@@ -36,6 +36,12 @@
 // the UV of softgpu's 2x2 quads, which start at the primitive's first pixel
 // (not at even pixels like the GPU's). z goes to gl_FragDepth, so the
 // fixed-function depth test sees softgpu's z.
+//
+// F26a: a replacement with mip levels (samp_mips) picks its level with
+// softgpu's rule (CalculateSamplingParams with mip filtering, as PPSSPP
+// forces it for a replacement with levels), on the detail moved to the
+// image's texels and to image pixels (the render scale), and blends two
+// levels in sixteenths like softgpu's level_frac.
 
 #version 450
 
@@ -94,6 +100,7 @@ layout(push_constant) uniform Push {
     uint render_scale; // F23b: image pixels per GE pixel (1 to 8)
     uint rect_sample;  // F23b: 1 + the readback's sample of a rectangle, or 0
     uint samp_size;    // F24c: replaced texture's width | height << 16, or 0
+    uint samp_mips;    // F26a: levels past 0 | (1.27.4 log2 image/texture) << 16, or 0
 } pc;
 
 layout(set = 0, binding = 0) uniform sampler2D u_rgba;
@@ -235,8 +242,11 @@ ivec4 LookupClut(uint entry) {
     return From4444(c);
 }
 
+// F26a: the level of a replacement's chain being sampled.
+int g_level = 0;
+
 ivec4 Fetch(ivec2 uv) {
-    if (kTexMode == 1) return ivec4(roundEven(texelFetch(u_rgba, uv, 0) * 255.0));
+    if (kTexMode == 1) return ivec4(roundEven(texelFetch(u_rgba, uv, g_level) * 255.0));
     return LookupClut(TransformClutIndex(texelFetch(u_index, uv, 0).r));
 }
 
@@ -292,6 +302,17 @@ ivec4 SampleLinear(float s, float t, int width, int height) {
     const ivec4 top = tl * (0x10 - frac_u) + tr * frac_u;
     const ivec4 bot = bl * (0x10 - frac_u) + br * frac_u;
     return (top * (0x10 - frac_v) + bot * frac_v) >> 8;
+}
+
+// F26a: level `level` of a replacement's chain (textureSize: its own size),
+// with the GE's 512-texel limit scaled to it as for level 0.
+int g_detail = 0;
+ivec4 SampleLevel(bool linear, float s, float t, int level, int width, int height) {
+    const ivec2 size = textureSize(u_rgba, level);
+    g_level = level;
+    g_limit_s = max(size.x * 512 / width, 1) - 1;
+    g_limit_t = max(size.y * 512 / height, 1) - 1;
+    return linear ? SampleLinear(s, t, size.x, size.y) : SampleNearest(s, t, size.x, size.y);
 }
 
 // TextureFunctionOutput (x86-64 JIT: 16-bit lanes for MODULATE).
@@ -738,9 +759,11 @@ void main() {
         const vec2 uv_step = vec2(dFdxFine(s) + dFdyFine(s), dFdxFine(t) + dFdyFine(t));
 #endif
         bool linear = kMagLinear;
-        if (kMagLinear != kMinLinear) {
-            // CalculateSamplingParams without mipmaps: the level is always 0,
-            // the filter is the minification one when the detail is > 0.
+        // F26a: the detail also picks a replacement's mip level.
+        if (kMagLinear != kMinLinear || pc.samp_mips != 0u) {
+            // CalculateSamplingParams: the filter is the minification one
+            // when the detail is > 0; the GE's own levels are not used (level
+            // 0 only), a replacement's are (below).
             int detail;
             if (kLodMode == 0) {
 #if defined(GE_EXACT)
@@ -779,6 +802,7 @@ void main() {
             }
             detail += pc.lod_offset;
             linear = detail > 0 ? kMinLinear : kMagLinear;
+            g_detail = detail;
         }
 #if !defined(GE_EXACT)
         // F23b: the image pixel of a rectangle's N x N block that the
@@ -799,8 +823,29 @@ void main() {
             g_limit_s = samp.x * 512 / width - 1;
             g_limit_t = samp.y * 512 / height - 1;
         }
-        const ivec4 tex =
-            linear ? SampleLinear(s, t, samp.x, samp.y) : SampleNearest(s, t, samp.x, samp.y);
+        ivec4 tex;
+        if (pc.samp_mips == 0u) {
+            tex = linear ? SampleLinear(s, t, samp.x, samp.y) : SampleNearest(s, t, samp.x, samp.y);
+        } else {
+            // F26a: softgpu's level and level_frac, in the image's texels and
+            // per image pixel (F23b: N image pixels per GE pixel).
+            const int levels = int(pc.samp_mips & 0xFu);
+            const int bias = int(pc.samp_mips) >> 16;
+            const int lambda =
+                g_detail + bias - int(round(16.0 * log2(float(max(pc.render_scale, 1u)))));
+            int level = 0;
+            int frac = 0;
+            if (lambda > 0) {
+                const int level8 = min(lambda, levels * 16);
+                level = level8 >> 4;
+                frac = level8 & 0xF;
+            }
+            tex = SampleLevel(linear, s, t, level, width, height);
+            if (frac != 0) {
+                const ivec4 c1 = SampleLevel(linear, s, t, level + 1, width, height);
+                tex = (c1 * frac + tex * (16 - frac)) >> 4;
+            }
+        }
         prim = TextureFunction(prim, tex);
     }
 

@@ -54,13 +54,13 @@ void InvalidateBuffer(const VulkanContext &ctx, const Buffer &buffer) {
 
 bool CreateImage2D(const VulkanContext &ctx, int width, int height, VkFormat format,
                    VkImageUsageFlags usage, VkImageAspectFlags aspect, const char *name, Image *out,
-                   std::string *error) {
+                   std::string *error, std::uint32_t levels) {
     VkImageCreateInfo ici{};
     ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     ici.imageType = VK_IMAGE_TYPE_2D;
     ici.format = format;
     ici.extent = {static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), 1};
-    ici.mipLevels = 1;
+    ici.mipLevels = levels;
     ici.arrayLayers = 1;
     ici.samples = VK_SAMPLE_COUNT_1_BIT;
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -81,7 +81,7 @@ bool CreateImage2D(const VulkanContext &ctx, int width, int height, VkFormat for
     vci.image = out->image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = format;
-    vci.subresourceRange = {aspect, 0, 1, 0, 1};
+    vci.subresourceRange = {aspect, 0, levels, 0, 1};
     r = vkCreateImageView(ctx.device(), &vci, nullptr, &out->view);
     if (r != VK_SUCCESS) {
         if (error) *error = ResultError("vkCreateImageView", r);
@@ -108,7 +108,7 @@ void DestroyImage(const VulkanContext &ctx, Image *image) {
 void ImageBarrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
                   VkImageLayout old_layout, VkImageLayout new_layout,
                   VkPipelineStageFlags src_stage, VkAccessFlags src_access,
-                  VkPipelineStageFlags dst_stage, VkAccessFlags dst_access) {
+                  VkPipelineStageFlags dst_stage, VkAccessFlags dst_access, std::uint32_t levels) {
     VkImageMemoryBarrier b{};
     b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     b.srcAccessMask = src_access;
@@ -118,7 +118,7 @@ void ImageBarrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
     b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.image = image;
-    b.subresourceRange = {aspect, 0, 1, 0, 1};
+    b.subresourceRange = {aspect, 0, levels, 0, 1};
     vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &b);
 }
 

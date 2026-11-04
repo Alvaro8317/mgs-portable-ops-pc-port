@@ -828,6 +828,20 @@ bool GeRenderer::EnsureFrame() {
                 ++it;
             }
         }
+    } else if (has_replaced_ && (frame_serial_ & 255u) == 0) {
+        // F26a: replaced textures (HD images, and every image of a pack that
+        // was reloaded) unused for a while, even below the count above.
+        has_replaced_ = false;
+        for (auto it = textures_.begin(); it != textures_.end();) {
+            const bool replaced = it->first.addr == 0xFFFFFFFFu && it->first.format == 0xFFFFu;
+            if (replaced && it->second.last_frame + kReplacedTextureFrames < frame_serial_) {
+                DestroyImage(*ctx_, &it->second.image);
+                it = textures_.erase(it);
+            } else {
+                has_replaced_ = has_replaced_ || replaced;
+                ++it;
+            }
+        }
     }
 
     VkCommandBufferBeginInfo bi{};
@@ -1287,35 +1301,89 @@ void GeRenderer::SyncMemory(std::uint32_t addr, std::uint32_t size, bool write) 
 
 bool GeRenderer::CreateTexture(int width, int height, VkFormat format, const void *data,
                                std::size_t size, const char *name, Image *out) {
+    return CreateTexture(width, height, format, std::vector<LevelData>{{data, size}}, name, out);
+}
+
+bool GeRenderer::CreateTexture(int width, int height, VkFormat format,
+                               const std::vector<LevelData> &levels, const char *name, Image *out) {
     std::string err;
+    const auto level_count = static_cast<std::uint32_t>(levels.size());
     if (!CreateImage2D(*ctx_, width, height, format,
                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                       VK_IMAGE_ASPECT_COLOR_BIT, name, out, &err)) {
+                       VK_IMAGE_ASPECT_COLOR_BIT, name, out, &err, level_count)) {
         Fail(err);
         return false;
     }
-    UploadArena::Allocation a;
-    if (!StageUpload(data, size, &a)) {
-        DestroyImage(*ctx_, out);
-        return false;
+    std::vector<VkBufferImageCopy> copies;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    for (std::uint32_t i = 0; i < level_count; ++i) {
+        UploadArena::Allocation a;
+        if (!StageUpload(levels[i].data, levels[i].size, &a)) {
+            DestroyImage(*ctx_, out);
+            return false;
+        }
+        VkBufferImageCopy copy{};
+        copy.bufferOffset = a.offset;
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1};
+        copy.imageExtent = {std::max(1u, static_cast<std::uint32_t>(width) >> i),
+                            std::max(1u, static_cast<std::uint32_t>(height) >> i), 1};
+        if (buffer != VK_NULL_HANDLE && a.buffer != buffer) {
+            // Another staging chunk: copy what the last one holds first.
+            vkCmdCopyBufferToImage(frame().init_cmd, buffer, out->image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   static_cast<std::uint32_t>(copies.size()), copies.data());
+            copies.clear();
+        }
+        if (i == 0)
+            ImageBarrier(frame().init_cmd, out->image, VK_IMAGE_ASPECT_COLOR_BIT,
+                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_ACCESS_TRANSFER_WRITE_BIT, level_count);
+        buffer = a.buffer;
+        copies.push_back(copy);
     }
     VkCommandBuffer cmd = frame().init_cmd;
-    ImageBarrier(cmd, out->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    VkBufferImageCopy copy{};
-    copy.bufferOffset = a.offset;
-    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copy.imageExtent = {static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), 1};
-    vkCmdCopyBufferToImage(cmd, a.buffer, out->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                           &copy);
+    vkCmdCopyBufferToImage(cmd, buffer, out->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           static_cast<std::uint32_t>(copies.size()), copies.data());
     ImageBarrier(cmd, out->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                 VK_ACCESS_SHADER_READ_BIT);
+                 VK_ACCESS_SHADER_READ_BIT, level_count);
     ++stats_.texture_uploads;
     return true;
 }
+
+namespace {
+
+// F26a: the replacement's mip levels that CreateTexture uploads: those of
+// max(1, size >> i) (BuildReplacement makes no others).
+std::size_t ValidMipCount(const ge::ReplacedTexture &r) {
+    std::size_t n = 0;
+    for (const ge::ReplacedTexture::Level &l : r.mips) {
+        if (l.width != std::max(1, r.image_width >> (n + 1)) ||
+            l.height != std::max(1, r.image_height >> (n + 1)) ||
+            l.rgba.size() <
+                static_cast<std::size_t>(l.width) * static_cast<std::size_t>(l.height) * 4)
+            break;
+        ++n;
+    }
+    return n;
+}
+
+// F26a: PushConstants::samp_mips for a replacement of a w x h texture.
+std::uint32_t ReplacementMips(const ge::ReplacedTexture &r, int w, int h) {
+    const std::size_t n = std::min<std::size_t>(ValidMipCount(r), 15);
+    if (n == 0 || w <= 0 || h <= 0) return 0;
+    const double ratio =
+        std::max(static_cast<double>(r.image_width) / w, static_cast<double>(r.image_height) / h);
+    const auto bias = static_cast<std::int32_t>(std::lround(16.0 * std::log2(ratio)));
+    return static_cast<std::uint32_t>(n) |
+           (static_cast<std::uint32_t>(static_cast<std::uint16_t>(
+                static_cast<std::int16_t>(std::clamp(bias, -32768, 32767))))
+            << 16);
+}
+
+} // namespace
 
 bool GeRenderer::ResolveReplacedTexture(const ge::ReplacedTexture &r, VkImageView *rgba) {
     // F24c: keyed by the replacement's id (unique for the process), so a
@@ -1336,9 +1404,15 @@ bool GeRenderer::ResolveReplacedTexture(const ge::ReplacedTexture &r, VkImageVie
         char name[64];
         std::snprintf(name, sizeof(name), "ge replaced tex %llu",
                       static_cast<unsigned long long>(r.id));
-        if (!CreateTexture(r.image_width, r.image_height, VK_FORMAT_R8G8B8A8_UNORM, r.image.data(),
-                           r.image.size(), name, &tex.image))
+        // F26a: with its mip levels (the pack's, or generated).
+        std::vector<LevelData> levels{{r.image.data(), r.image.size()}};
+        const std::size_t mips = std::min<std::size_t>(ValidMipCount(r), 15);
+        for (std::size_t i = 0; i < mips; ++i)
+            levels.push_back({r.mips[i].rgba.data(), r.mips[i].rgba.size()});
+        if (!CreateTexture(r.image_width, r.image_height, VK_FORMAT_R8G8B8A8_UNORM, levels, name,
+                           &tex.image))
             return false;
+        has_replaced_ = true;
         it = textures_.emplace(key, std::move(tex)).first;
     } else {
         ++stats_.texture_hits;
@@ -1642,6 +1716,8 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
                 pc.samp_size = static_cast<std::uint32_t>(st.replaced->image_width) |
                                (static_cast<std::uint32_t>(st.replaced->image_height) << 16);
             }
+            if (st.replaced != nullptr && !st.replaced->mips.empty())
+                pc.samp_mips = ReplacementMips(*st.replaced, st.sizes[0].w, st.sizes[0].h);
             if (rs.through_mode) {
                 pc.uv_scale[0] = 1.0f / static_cast<float>(1 << st.width0_shift);
                 pc.uv_scale[1] = 1.0f / static_cast<float>(1 << st.height0_shift);
@@ -1658,7 +1734,9 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
                 }
                 if (!UploadClut(st.clut, &ds.clut_offset, &clut_buffer)) return;
             }
-            if (rs.max_tex_level > 0) stats_.Approximate("mipmaps: level 0 only (F15)");
+            // F26a: a replacement's levels are the shader's own.
+            if (rs.max_tex_level > 0 && pc.samp_mips == 0)
+                stats_.Approximate("mipmaps: level 0 only (F15)");
             if (!st.use_shared_clut && clut)
                 stats_.Approximate("CLUT4 palettes per mip level (F15)");
         }

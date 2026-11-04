@@ -223,10 +223,16 @@ const ge::ReplacedTexture *PromptIconProvider::Find(const ge::GeState &gs,
                                                     const ge::MemoryView &mem,
                                                     const ge::SamplerState &st,
                                                     const ge::ClutLoadInfo &clut) {
+    from_base_ = false;
     if (active()) {
         if (const ge::ReplacedTexture *tex = FindIcon(gs, mem, st, clut)) return tex;
     }
+    from_base_ = base_ != nullptr;
     return base_ != nullptr ? base_->Find(gs, mem, st, clut) : nullptr;
+}
+
+ge::TextureFilter PromptIconProvider::Filtering() const {
+    return from_base_ ? base_->Filtering() : ge::TextureFilter::kAuto;
 }
 
 std::unique_ptr<PromptIconProvider> LoadPromptIcons(const std::filesystem::path &dir,

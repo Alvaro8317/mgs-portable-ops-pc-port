@@ -113,6 +113,9 @@ public:
     const ge::ReplacedTexture *Find(const ge::GeState &gs, const ge::MemoryView &mem,
                                     const ge::SamplerState &st,
                                     const ge::ClutLoadInfo &clut) override;
+    // F26a: the base's [filtering] when the last Find went to it; an icon
+    // keeps the game's filters.
+    [[nodiscard]] ge::TextureFilter Filtering() const override;
 
 private:
     // The port's icons of one prompt set: a ReplacementSet of images from
@@ -132,6 +135,7 @@ private:
 
     Inventory inventory_;
     ge::TextureProvider *base_ = nullptr;
+    bool from_base_ = false; // the last Find was the base's (F26a)
     std::array<std::unique_ptr<texreplace::ReplacementSet>, kPromptStyleCount> packs_;
 
     std::mutex mutex_; // guards the requested state

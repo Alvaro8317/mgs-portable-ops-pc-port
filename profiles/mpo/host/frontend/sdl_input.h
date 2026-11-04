@@ -61,6 +61,8 @@ public:
     bool HandleWindowShortcut(const SDL_Event &event);
     // How many times a shortcut toggled fullscreen.
     [[nodiscard]] int fullscreen_toggles() const { return fullscreen_toggles_; }
+    // F26a: how many times F5 asked for the texture pack to be reloaded.
+    [[nodiscard]] int texture_reloads() const { return texture_reloads_; }
 
     [[nodiscard]] int gamepad_count() const { return static_cast<int>(gamepads_.size()); }
 
@@ -90,6 +92,7 @@ private:
     DeviceTracker devices_;
     WindowShortcutFilter shortcuts_;
     int fullscreen_toggles_ = 0;
+    int texture_reloads_ = 0;
     Observer observer_;
     bool captured_ = false;
     SDL_WindowID captured_window_ = 0;

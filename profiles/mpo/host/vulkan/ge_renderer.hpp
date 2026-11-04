@@ -43,6 +43,10 @@
 //   same UV mapping; at another size than the GE texture (an HD pack) the
 //   texel coordinates, clamp and wrap work at the image's size
 //   (PushConstants::samp_size), the level of detail at the texture's.
+//   F26a: with mip levels (the pack's or generated), the image has them all
+//   and the shader picks one with softgpu's rule, in the replacement's own
+//   texels and per image pixel (PushConstants::samp_mips); a [filtering]
+//   entry arrives as the RasterizerState's filters.
 // - Frames in flight: kFramesInFlight sets of command buffers, fences, upload
 //   arenas and descriptor pools. Recording starts with the first draw.
 // - Render scale (F23b, RendererOptions::render_scale): the targets are N
@@ -421,6 +425,14 @@ private:
     // frame's init commands.
     bool CreateTexture(int width, int height, VkFormat format, const void *data, std::size_t size,
                        const char *name, Image *out);
+    // F26a: the same with mip levels: `levels[i]` is level i, of
+    // max(1, width >> i) x max(1, height >> i).
+    struct LevelData {
+        const void *data = nullptr;
+        std::size_t size = 0;
+    };
+    bool CreateTexture(int width, int height, VkFormat format, const std::vector<LevelData> &levels,
+                       const char *name, Image *out);
     bool UploadClut(const std::uint8_t *clut, std::uint32_t *offset, VkBuffer *buffer);
     // `tri_buffer` (with the bytes at `tri_offset`, `tri_range` long): the
     // batch's GpuTriangle records; the dummy buffer for other batches.
@@ -480,6 +492,10 @@ private:
     int frame_index_ = 0;
     bool frame_open_ = false;
     std::uint64_t frame_serial_ = 0;
+    // F26a: a replaced texture unused for this many frames (several per
+    // game frame: one per readback) leaves the cache, checked every 256.
+    static constexpr std::uint64_t kReplacedTextureFrames = 2048;
+    bool has_replaced_ = false;
 
     VkSampler sampler_ = VK_NULL_HANDLE;
     Image dummy_rgba_;

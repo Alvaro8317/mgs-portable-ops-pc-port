@@ -18,7 +18,8 @@ static_assert(scancode::kEscape == SDL_SCANCODE_ESCAPE && scancode::kTab == SDL_
 static_assert(scancode::kLeftCtrl == SDL_SCANCODE_LCTRL &&
               scancode::kRightCtrl == SDL_SCANCODE_RCTRL);
 static_assert(scancode::kLeftAlt == SDL_SCANCODE_LALT && scancode::kRightAlt == SDL_SCANCODE_RALT);
-static_assert(scancode::kF1 == SDL_SCANCODE_F1 && scancode::kF11 == SDL_SCANCODE_F11);
+static_assert(scancode::kF1 == SDL_SCANCODE_F1 && scancode::kF11 == SDL_SCANCODE_F11 &&
+              scancode::kF5 == SDL_SCANCODE_F5);
 static_assert(scancode::kKpEnter == SDL_SCANCODE_KP_ENTER);
 static_assert(static_cast<int>(MouseButton::kLeft) == SDL_BUTTON_LEFT);
 static_assert(static_cast<int>(MouseButton::kMiddle) == SDL_BUTTON_MIDDLE);
@@ -137,6 +138,10 @@ bool SdlInput::HandleWindowShortcut(const SDL_Event &event) {
     if (!shortcuts_.OnKey(static_cast<Scancode>(event.key.scancode), down, event.key.repeat,
                           (event.key.mod & SDL_KMOD_ALT) != 0, &shortcut))
         return false;
+    if (shortcut == WindowShortcut::kReloadTextures) {
+        ++texture_reloads_;
+        Note("texture reload");
+    }
     if (shortcut == WindowShortcut::kToggleFullscreen) {
         SDL_Window *window = SDL_GetWindowFromID(event.key.windowID);
         if (window == nullptr) {

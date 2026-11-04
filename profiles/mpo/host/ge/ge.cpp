@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 
 #include "bounding_box.hpp"
 #include "rasterizer.hpp"
@@ -435,7 +436,38 @@ void Ge::ReplaceTexture(RasterizerState *rs) {
     // target already sees it as a framebuffer.
     provider_->BeginDraw(state_);
     if (!rs->enable_textures || rs->sampler.has_invalid_ptr) return;
-    rs->sampler.replaced = provider_->Find(state_, mem_, rs->sampler, clut_info_);
+    const ReplacedTexture *replaced = provider_->Find(state_, mem_, rs->sampler, clut_info_);
+    rs->sampler.replaced = replaced;
+    // F26a: a replacement's own levels below the native size replace the
+    // game's (PPSSPP loads every level the replacer has, ignoring the
+    // game's, and forces mip filtering). Without them nothing changes.
+    if (replaced != nullptr && !replaced->native_mips.empty()) {
+        const int levels = std::min(static_cast<int>(replaced->native_mips.size()),
+                                    static_cast<int>(std::size(rs->sampler.sizes)) - 1);
+        for (int i = 1; i <= levels; ++i) {
+            const ReplacedTexture::NativeLevel &l =
+                replaced->native_mips[static_cast<std::size_t>(i - 1)];
+            rs->sampler.sizes[i].w = l.width;
+            rs->sampler.sizes[i].h = l.height;
+        }
+        rs->sampler.has_any_mips = true;
+        rs->max_tex_level = levels;
+        rs->mip_filt = true;
+    }
+    // [filtering] (PPSSPP's GetSamplingParams with a forced filter).
+    switch (provider_->Filtering()) {
+    case TextureFilter::kNearest:
+        rs->mag_filt = false;
+        rs->min_filt = false;
+        break;
+    case TextureFilter::kLinear:
+        rs->mag_filt = true;
+        rs->min_filt = true;
+        rs->mip_filt = true;
+        break;
+    case TextureFilter::kAuto:
+        break;
+    }
 }
 
 void Ge::ReportDrawState(std::uint32_t vtype) {

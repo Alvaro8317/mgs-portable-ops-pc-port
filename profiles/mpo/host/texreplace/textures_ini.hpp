@@ -16,9 +16,14 @@
 //
 // '#' starts a comment (unless it is escaped as "\#"), keys and sections
 // are case-insensitive, a UTF-8 BOM is skipped. What is not supported is
-// reported in `warnings` and ignored ([hashranges], [filtering],
-// [reducehashranges], [games], mip levels other than 0), or makes the file
-// invalid when it would give other keys (hash = quick, reduceHash = true).
+// reported in `warnings` and ignored ([hashranges], [reducehashranges],
+// [games]), or makes the file invalid when it would give other keys
+// (hash = quick, reduceHash = true).
+//
+// F26a: mip levels ("a.png|b.png|c.png", or <key>_1 = b.png, <key>_2 =
+// c.png, as PPSSPP's ComputeAliasMap joins them, stopping at the first
+// missing level) and [filtering] (<key> = nearest | linear | auto; a key of
+// 16 zeros alone is the global default, as in PPSSPP) are read too.
 
 #pragma once
 
@@ -27,6 +32,7 @@
 #include <vector>
 
 #include "texture_key.hpp"
+#include "texture_provider.hpp"
 
 namespace mpo::texreplace {
 
@@ -40,9 +46,19 @@ struct TexturesIni {
         // PPSSPP allows "a.png|b.png" (one file per mip level); level 0 is the
         // first. Empty: the texture is listed but not replaced.
         std::string file;
+        // F26a: the files of mip levels 1, 2... (the rest of "a.png|b.png",
+        // then the <key>_1, <key>_2... lines).
+        std::vector<std::string> levels;
         int line = 0;
     };
     std::vector<Entry> hashes;
+    // F26a: [filtering].
+    struct Filter {
+        ReplacementKey key;
+        ge::TextureFilter filter = ge::TextureFilter::kAuto;
+        int line = 0;
+    };
+    std::vector<Filter> filtering;
     std::vector<std::string> warnings;
 };
 

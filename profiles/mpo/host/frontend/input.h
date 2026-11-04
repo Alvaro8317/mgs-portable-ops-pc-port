@@ -51,6 +51,7 @@ inline constexpr Scancode kEscape = 41;
 inline constexpr Scancode kTab = 43;
 inline constexpr Scancode kSpace = 44;
 inline constexpr Scancode kF1 = 58;
+inline constexpr Scancode kF5 = 62;
 inline constexpr Scancode kF11 = 68;
 inline constexpr Scancode kRight = 79;
 inline constexpr Scancode kLeft = 80;
@@ -230,7 +231,9 @@ void ConvertAnalogStick(const AnalogConfig &config, float x, float y, float *out
 // frontend takes them before the OSK and the mapping see the key, so Alt+Enter
 // never presses Start (Enter) and whatever input.toml binds to F11 does not
 // fire. Alt alone, and Enter without Alt, still go to the game.
-enum class WindowShortcut : std::uint8_t { kNone, kToggleFullscreen };
+// F26a: F5 reloads the texture pack (with or without Alt), the same way: the
+// default map leaves it free, and a mapping that binds it does not get it.
+enum class WindowShortcut : std::uint8_t { kNone, kToggleFullscreen, kReloadTextures };
 [[nodiscard]] WindowShortcut WindowShortcutFor(Scancode key, bool alt_held);
 
 // Filters the shortcuts out of the key events. A shortcut's press is taken,
