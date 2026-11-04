@@ -282,6 +282,11 @@ que se muestra, F19) cambia si cambia un prompt. Ver §7.5.
   inventario de los ~25 íconos y los PNG). Riesgo: medio-bajo; lo delicado es invalidar la caché de
   Vulkan y que la textura del ícono no sea parte de un atlas (no lo es, §2.1). Sirve tal cual para las
   texturas HD de M7+.
+- **Hecho en F25a** (`profiles/mpo/host/prompticons/`, `docs/sessions/F25a.md`): en vez de PNG por
+  dispositivo, el port dibuja los íconos por código a partir del `PromptSet` que se muestra (así
+  siguen el `input.toml`), sobre las claves de un inventario (`config/prompt_icons.toml`); el
+  jugador puede poner sus propios packs por estilo. Falta el inventario completo, que sale de un
+  volcado con `profiles/mpo/tools/prompt_icons.py`.
 
 ### 7.3 Glifos de botón en los bloques de glifos
 

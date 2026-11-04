@@ -57,6 +57,9 @@ add_subdirectory(apscan)
 
 add_subdirectory(frontend)
 
+# F25a: the game's button icons by device (needs texreplace and frontend).
+add_subdirectory(prompticons)
+
 # F17a: PMF videos and PGF fonts (they use mpo_audio and mpo_ge_replay).
 add_subdirectory(video)
 add_subdirectory(font)

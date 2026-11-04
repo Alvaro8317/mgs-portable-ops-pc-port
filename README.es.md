@@ -254,11 +254,23 @@ cómo responde, mira `[pad_camera]` en `input.toml` (abajo).
 Las pantallas de guardar, cargar y los mensajes, y el teclado en pantalla, muestran los botones de
 lo que estás usando, y cambian en cuanto usas otra cosa: las teclas y los botones del mouse de tu
 `input.toml` (Space, Esc, Right click...) con el teclado, A/B/X/Y con un mando de Xbox, las figuras
-con uno de PlayStation, y las etiquetas de los de Nintendo y los demás. Las pantallas del propio
-juego (el HUD, los menús, los tutoriales) siguen mostrando los botones de la PSP.
+con uno de PlayStation, y las etiquetas de los de Nintendo y los demás.
 
-Para mostrar siempre los mismos, arranca el juego con `--prompts`, por ejemplo
-`setup.py play -- --prompts psp` (también `xbox`, `playstation`, `nintendo` o `keyboard`).
+Los íconos de botón del propio juego (en los menús y el HUD, como "△ : FLOOR CHANGE" en el mapa de la
+pausa) también cambian, con íconos que dibuja el port: una letra en un círculo con un mando (A,
+B...), una tecla con su nombre con el teclado (SPC, Q...), un mouse con el botón marcado. Con un
+mando de PlayStation las figuras quedan como están. Por ahora se conocen pocos íconos; los demás
+siguen mostrando los botones de la PSP, y los tutoriales y el códec también. Con un pack de
+texturas, estos íconos ganan a los del pack solo en esas texturas.
+
+- Para mostrar siempre los mismos, arranca el juego con `--prompts`, por ejemplo
+  `setup.py play -- --prompts psp` (también `xbox`, `playstation`, `nintendo` o `keyboard`).
+- Para dejar los íconos del juego (y los de tu pack), añade `--prompt-icons off`.
+- Tus propios íconos van en la carpeta `prompts` de la carpeta de datos (junto a `textures`, ver
+  [Packs de texturas](#packs-de-texturas)): un pack por estilo en `prompts/xbox/`,
+  `prompts/playstation/`, `prompts/nintendo/`, `prompts/generic/` o `prompts/keyboard/`, y más
+  íconos para que los dibuje el port en `prompts/inventory.toml` (el formato está en
+  [`profiles/mpo/config/prompt_icons.toml`](profiles/mpo/config/prompt_icons.toml)).
 
 ### Cambiar los controles
 

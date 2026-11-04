@@ -128,6 +128,7 @@ que `mpo_vfpu` sea bit a bit en Windows, el código generado usa los helpers de 
 | F24a | Ajustes del juego en el launcher (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; probar `--fullscreen` en el juego y el launcher con mando: pendiente del usuario) |
 | F24b | Controles en pantalla según el dispositivo, parte I (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; `--prompts`, los diálogos del sistema; probar con mandos reales: pendiente del usuario) |
 | F24c | Reemplazo de texturas por hash (autónomo) | M7 | ✅ hecha (ola 6; integrada el 2026-11-03; solo texturas en RAM: las de VRAM, el 91 % de las búsquedas, quedan para las HD) |
+| F25a | Íconos del HUD según el dispositivo (autónomo) | M7 | ✅ hecha (ola 7; `--prompt-icons`, íconos dibujados por el port; el inventario completo y la prueba en el juego: pendientes del usuario) |
 | F23+ | Mejoras (ver al final) | M7+ | ⬜ pendiente |
 
 Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se explica en la nota de sesión).
@@ -1567,6 +1568,52 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 
 ## F23+ — Mejoras (se planifican cuando M6 esté cerrado)
 
+### F25a — Íconos del HUD según el dispositivo, autónomo (ola 7)
+
+- **Objetivo**: el paso 2 del spike (`docs/analysis/button-prompts.md` §7.2): que los íconos de
+  botón de los menús y del HUD del juego (texturas propias, §2 del spike) muestren los botones del
+  último dispositivo, como ya lo hacen los diálogos del sistema (F24b).
+- **Requisitos**: F24b (`DeviceTracker`, `PromptSet` y el registro `p`) y F24c
+  (`TextureReplacer`, `ReplacementSet` y el cambio en caliente).
+- **Cómo se combina con el pack del jugador** (la pregunta que quedó abierta en F24c):
+  - por capas, de arriba abajo: (1) los íconos propios del jugador para ese estilo, un pack de
+    F24c en `<datos>/prompts/<estilo>/`; (2) los íconos que dibuja el port para las claves del
+    inventario; (3) el pack del jugador (`--textures`), y por último la textura del juego;
+  - los íconos del dispositivo ganan al pack del jugador **solo en las claves de los íconos** y
+    **solo con un juego de botones que no es el de la PSP**. Con el de la PSP (sin ventana, con
+    `--prompts psp` o en una repetición sin `p`), todo queda exactamente como en F24c. Un pack
+    del jugador está hecho para los botones de la PSP, así que sus íconos serían los equivocados
+    con otro mando; el resto del pack no cambia;
+  - `--prompt-icons off` deja solo el pack del jugador y el juego.
+- **Tareas**:
+  - Un **inventario de los íconos** en el perfil (`config/prompt_icons.toml`): la clave de F24c
+    sin la dirección, el botón de la PSP y el marco del ícono dentro de la textura. Solo claves y
+    números, ningún asset (CLAUDE.md §1). El jugador añade las suyas sin recompilar en
+    `<datos>/prompts/inventory.toml`. Hoy se conoce una sola clave [V], el △ de la pausa
+    (`0000000001e57e0adb2960d5`, F24c); el resto se saca en el juego.
+  - Una herramienta que arme el inventario de un volcado (`--dump-textures`): compara cada PNG
+    con las páginas de las TXP (`txp.py`) y escribe las entradas de las páginas que son botones.
+  - **Íconos dibujados por el port** (código GPL-3.0-or-later, sin PNG en el repo ni nada sacado
+    de las texturas del juego, y sin logos de marca): letras en un círculo para los botones de la
+    cara de un mando, una tecla con su nombre corto para el teclado, un mouse con el botón
+    marcado y una píldora con texto para L, R, Start y Select. Las figuras (○ × △ □) se quedan con
+    la textura del juego. Salen del `PromptSet` que ya se muestra, así que siguen el mapeo de
+    `input.toml`.
+  - Elegidos con el mismo `PromptSet` que los diálogos (`DeviceTracker::generation()` y
+    `PromptSet::style`, F24b), en la misma muestra del mando; el cambio se aplica en la siguiente
+    lista del GE, como `SetActiveSet`.
+  - Un registro `i <muestra> off|on <digest>` en las grabaciones, para que la repetición ponga
+    los íconos donde los tenía la partida; una grabación sin `i` (las de antes) se repite sin
+    íconos, como se grabó.
+  - `mpo_boot --prompt-icons auto|off|<carpeta>`, y README.md y README.es.md a la vez.
+  - Sin tocar el ABI del runtime ni el framework, y con cambios mínimos en
+    `host/texreplace/` (F25c también lo toca).
+- **Criterios de hecho**: tests sin el juego (el inventario, los íconos dibujados, las capas y su
+  prioridad, que con el juego de la PSP y sin íconos la VRAM queda igual byte a byte, el cambio
+  en la lista siguiente, el registro `i` al grabar y al repetir, y que las grabaciones viejas no
+  cambian). En el juego (pendiente del usuario): el inventario de los íconos y la pausa con un
+  mando de Xbox y con el teclado, en softgpu y Vulkan. `ctest` completo en Clang y GCC.
+
 ### F24a — Ajustes del juego en el launcher, autónomo (ola 6)
 
 - **Objetivo**: elegir en el launcher, con mouse o con mando, cómo corre el juego, sin variables
@@ -1726,8 +1773,8 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Íconos del HUD según el dispositivo** (paso 2 del spike de los controles): un `ReplacementSet`
   por dispositivo con PNG propios de los íconos (las claves salen de `--dump-textures` y
   `txp.py`), elegido con `DeviceTracker::generation()` y `PromptSet::style` (F24b) y guardado en
-  el registro `p` para que la repetición siga siendo determinista. Falta decidir cómo se combina
-  con el pack del jugador.
+  el registro `p` para que la repetición siga siendo determinista. **Hecha en F25a** (ver su
+  ficha): por capas, delante del pack del jugador, y con un registro `i` en las grabaciones.
 - **`sceFont` con la fuente de respaldo** (F23c): sin las PGF del firmware, solo falta el aviso
   "Checking Memory Stick" del arranque. Las métricas de `sceFont` deciden el layout del juego,
   así que habría que imitarlas con cuidado.

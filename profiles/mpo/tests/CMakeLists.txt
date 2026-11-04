@@ -85,7 +85,8 @@ endif()
 if(Python3_FOUND)
     foreach(mpo_tool_test IN ITEMS tools_test zstd_lite_test ge_usage_test ge_frame_diff_test
                                    overlay_scripts_test capture_compare_test setup_script_test
-                                   release_check_test hash_saves_test make_fallback_font_test)
+                                   release_check_test hash_saves_test make_fallback_font_test
+                                   prompt_icons_tool_test)
         add_test(NAME mpo_${mpo_tool_test}
                  COMMAND Python3::Interpreter -I ${CMAKE_CURRENT_SOURCE_DIR}/${mpo_tool_test}.py)
     endforeach()
@@ -116,6 +117,12 @@ add_executable(mpo_texreplace_test texreplace_test.cpp)
 target_link_libraries(mpo_texreplace_test PRIVATE mpo_texreplace mpo_xxhash)
 mpo_target_warnings(mpo_texreplace_test)
 add_test(NAME mpo_texreplace_test COMMAND mpo_texreplace_test)
+
+# F25a: the game's button icons by device (mpo_prompticons).
+add_executable(mpo_prompticons_test prompticons_test.cpp)
+target_link_libraries(mpo_prompticons_test PRIVATE mpo_prompticons)
+mpo_target_warnings(mpo_prompticons_test)
+add_test(NAME mpo_prompticons_test COMMAND mpo_prompticons_test)
 # F12: transform mode, splines, lines, lighting, fog, clipping, bounding box.
 add_executable(mpo_ge_transform_test ge_transform_test.cpp)
 target_link_libraries(mpo_ge_transform_test PRIVATE mpo_ge)

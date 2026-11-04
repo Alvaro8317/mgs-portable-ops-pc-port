@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# F25a: the inventory of the game's button icons (docs/analysis/button-prompts.md
+# §2), for the icons that follow the last device. Only keys and numbers live
+# here, never the game's art (CLAUDE.md §1): each icon is found by the content
+# key of its texture (F24c, texture_key.hpp), the one --dump-textures names its
+# PNG with, and the port draws its own image over it while the prompts are not
+# the PSP's (prompticons/icon_art.hpp).
+#
+# [[icon]]: one texture the port replaces.
+#   key     the dumped PNG's name: 24 hex digits, with the address half (the
+#           first 8) zero, as the dump writes them (ignoreAddress = true).
+#   button  the PSP button it shows: cross, circle, triangle, square, start,
+#           select, l or r.
+#   frame   [x, y, w, h]: the part of the texture the layout shows (the TXP
+#           frame, `txp.py info`); the port draws inside it. Optional: the
+#           whole texture.
+#   source  free text: where it comes from.
+#   verified  true when checked in the game.
+#
+# [[page]]: a TXP texture known to be a button icon whose key is not known
+# yet. prompt_icons.py turns a dump into [[icon]] entries for them:
+#   python -I profiles/mpo/tools/prompt_icons.py match <dump dir> <stages dir>
+# mpo_boot only reads [[icon]].
+#
+# Players add icons without rebuilding in <data dir>/prompts/inventory.toml
+# (same format; an entry with the same key replaces the one here).
+
+version = 1
+
+# The pause map's "△ : FLOOR CHANGE" (F24c [V]: its dump is the RGBA of
+# lay_pausemenu_0.txp texture 19, decoded with txp.py).
+[[icon]]
+key = "0000000001e57e0adb2960d5"
+button = "triangle"
+frame = [0, 0, 12, 12]
+source = "lay_pausemenu_0.txp texture 19 (r_main01)"
+verified = true
+
+# KEY CONFIG (lay_keyconfig_0.txp, r_main01, r_net01 and ntmenu2), spike §2.1.
+# Textures 10, 11, 12 and 17 are the d-pad arrows: the prompts do not cover
+# the d-pad, so they keep the game's.
+[[page]]
+txp = "lay_keyconfig_0.txp"
+texture = 9
+button = "square"
+
+[[page]]
+txp = "lay_keyconfig_0.txp"
+texture = 13
+button = "r"
+
+[[page]]
+txp = "lay_keyconfig_0.txp"
+texture = 14
+button = "circle"
+
+[[page]]
+txp = "lay_keyconfig_0.txp"
+texture = 15
+button = "l"
+
+[[page]]
+txp = "lay_keyconfig_0.txp"
+texture = 16
+button = "cross"
+
+[[page]]
+txp = "lay_keyconfig_0.txp"
+texture = 18
+button = "triangle"
+
+# The small triangle (8 x 16) of 16 TXP (spike §2.2).
+[[page]]
+txp = "lay_keyconfig_0.txp"
+texture = 19
+button = "triangle"
+
+# The pause menu (lay_pausemenu_0.txp, r_main01): texture 19 is above; 20 is
+# the ⊗ (a cross in a circle, also in lay_partyedit_0 and
+# lay_gameovermenu_0), taken as the cross [?].
+[[page]]
+txp = "lay_pausemenu_0.txp"
+texture = 20
+button = "cross"
+
+[[page]]
+txp = "lay_pausemenu_0.txp"
+texture = 21
+button = "square"
