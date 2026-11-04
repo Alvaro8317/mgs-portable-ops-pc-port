@@ -4,6 +4,7 @@
 
 #include "ge.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -77,6 +78,7 @@ void Ge::AdvanceVerts(std::uint32_t vtype, int count, std::uint32_t bytes_read) 
 
 RunResult Ge::Run(DisplayList &list, std::uint64_t max_commands) {
     RunResult result;
+    if (provider_ != nullptr) provider_->BeginRun();
     while (true) {
         if (list.stall != 0 && list.pc == list.stall) {
             result.status = RunStatus::kStalled;
@@ -420,10 +422,16 @@ void Ge::ExecutePrim(std::uint32_t op, RunResult *result) {
     result->cycles +=
         static_cast<std::uint64_t>(EstimatePerVertexCost()) * static_cast<std::uint64_t>(count);
     ReportDrawState(vtype);
-    const RasterizerState rs = ComputeRasterizerState(state_, mem_, clut_.data());
+    RasterizerState rs = ComputeRasterizerState(state_, mem_, clut_.data());
+    ReplaceTexture(&rs);
     const std::uint32_t bytes_read =
         assembler_.Submit(state_, rs, prim, vertex_addr_, index_addr_, count);
     AdvanceVerts(vtype, count, bytes_read);
+}
+
+void Ge::ReplaceTexture(RasterizerState *rs) {
+    if (provider_ == nullptr || !rs->enable_textures || rs->sampler.has_invalid_ptr) return;
+    rs->sampler.replaced = provider_->Find(state_, mem_, rs->sampler, clut_info_);
 }
 
 void Ge::ReportDrawState(std::uint32_t vtype) {
@@ -461,7 +469,8 @@ void Ge::ExecutePatch(std::uint32_t op, bool spline) {
     bool bad_memory = false;
     if (TessellatePatch(state_, mem_, op, spline, vertex_addr_, index_addr_, &mesh, &bad_memory)) {
         ++stats_.patches;
-        const RasterizerState rs = ComputeRasterizerState(state_, mem_, clut_.data());
+        RasterizerState rs = ComputeRasterizerState(state_, mem_, clut_.data());
+        ReplaceTexture(&rs);
         ArrayVertexSource source(mesh.vertices, mesh.indices);
         assembler_.SubmitVertices(state_, rs, mesh.prim, source, mesh.vtype,
                                   static_cast<int>(mesh.indices.size()));
@@ -478,6 +487,13 @@ void Ge::ExecuteLoadClut() {
     ++stats_.clut_loads;
     const std::uint32_t addr = state_.ClutAddress();
     std::uint32_t bytes = static_cast<std::uint32_t>(state_.ClutLoadBlocks() & 0x3F) * 32;
+    // F24c: PPSSPP's clutTotalBytes_ and clutMaxBytes_ (TextureCacheCommon::
+    // LoadClut, which takes 0x40 blocks as 2048 bytes and ignores a load of
+    // 0), for the replacement key.
+    if (const auto load = static_cast<std::uint32_t>(state_.ClutLoadBlocks()) * 32; load != 0) {
+        clut_info_.last_bytes = load;
+        clut_info_.max_bytes = std::max(clut_info_.max_bytes, load);
+    }
     if (bytes > 1024) bytes = 1024;
     if (bytes != 0) assembler_.backend().SyncMemory(addr, bytes, false);
     if (mem_.IsValidRange(addr, 1)) {
@@ -524,6 +540,7 @@ void Ge::ExecuteBlockTransfer(RunResult *result) {
         const std::uint32_t dst_span = ((height - 1) * dst_stride) * bpp + row_bytes;
         assembler_.backend().SyncMemory(src_first, src_span, false);
         assembler_.backend().SyncMemory(dst_first, dst_span, true);
+        if (provider_ != nullptr) provider_->MemoryWritten(dst_first, dst_span);
     }
     for (std::uint32_t y = 0; y < height; ++y) {
         std::uint32_t src = src_base + ((y + src_y) * src_stride + src_x) * bpp;

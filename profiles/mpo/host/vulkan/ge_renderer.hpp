@@ -38,6 +38,11 @@
 // - Textures: level 0, decoded on the CPU (unswizzled; CLUT formats keep the
 //   raw index) and cached by address, format, size and a hash of the source
 //   bytes. The palette goes to the shader in a uniform buffer.
+// - Replaced textures (F24c, SamplerState::replaced): the replacement's own
+//   image (RGBA8, at the PNG's size), cached by its id, sampled with the
+//   same UV mapping; at another size than the GE texture (an HD pack) the
+//   texel coordinates, clamp and wrap work at the image's size
+//   (PushConstants::samp_size), the level of detail at the texture's.
 // - Frames in flight: kFramesInFlight sets of command buffers, fences, upload
 //   arenas and descriptor pools. Recording starts with the first draw.
 // - Render scale (F23b, RendererOptions::render_scale): the targets are N
@@ -410,6 +415,12 @@ private:
     [[nodiscard]] std::vector<std::pair<int, int>>
     ChangedRows(const VramShadow &shadow, std::uint32_t offset, int stride_bytes, int rows) const;
     bool ResolveTexture(const ge::SamplerState &st, VkImageView *rgba, VkImageView *index);
+    // F24c: the image of a replaced texture (at its own size, RGBA8).
+    bool ResolveReplacedTexture(const ge::ReplacedTexture &r, VkImageView *rgba);
+    // A sampled image of `width` x `height` with `data`, uploaded in the
+    // frame's init commands.
+    bool CreateTexture(int width, int height, VkFormat format, const void *data, std::size_t size,
+                       const char *name, Image *out);
     bool UploadClut(const std::uint8_t *clut, std::uint32_t *offset, VkBuffer *buffer);
     // `tri_buffer` (with the bytes at `tri_offset`, `tri_range` long): the
     // batch's GpuTriangle records; the dummy buffer for other batches.

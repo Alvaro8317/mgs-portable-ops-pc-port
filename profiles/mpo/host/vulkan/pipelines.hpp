@@ -119,8 +119,12 @@ struct PushConstants {
     // image pixel down and right (at the GE pixel's centre, as softgpu);
     // 0 otherwise. ge.frag only.
     std::uint32_t rect_sample = 0;
+    // F24c: a replaced texture at a size other than the GE texture's (an HD
+    // pack): its width | height << 16, which the sampling uses instead of
+    // tex_size (the level of detail keeps tex_size); 0 otherwise. ge.frag only.
+    std::uint32_t samp_size = 0;
 };
-static_assert(sizeof(PushConstants) == 100);
+static_assert(sizeof(PushConstants) == 104);
 
 // How a shader reads the destination pixel (F15a).
 enum class DstRead : std::uint8_t {

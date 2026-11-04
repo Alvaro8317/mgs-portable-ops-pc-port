@@ -1285,9 +1285,73 @@ void GeRenderer::SyncMemory(std::uint32_t addr, std::uint32_t size, bool write) 
     }
 }
 
+bool GeRenderer::CreateTexture(int width, int height, VkFormat format, const void *data,
+                               std::size_t size, const char *name, Image *out) {
+    std::string err;
+    if (!CreateImage2D(*ctx_, width, height, format,
+                       VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                       VK_IMAGE_ASPECT_COLOR_BIT, name, out, &err)) {
+        Fail(err);
+        return false;
+    }
+    UploadArena::Allocation a;
+    if (!StageUpload(data, size, &a)) {
+        DestroyImage(*ctx_, out);
+        return false;
+    }
+    VkCommandBuffer cmd = frame().init_cmd;
+    ImageBarrier(cmd, out->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkBufferImageCopy copy{};
+    copy.bufferOffset = a.offset;
+    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.imageExtent = {static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), 1};
+    vkCmdCopyBufferToImage(cmd, a.buffer, out->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                           &copy);
+    ImageBarrier(cmd, out->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                 VK_ACCESS_SHADER_READ_BIT);
+    ++stats_.texture_uploads;
+    return true;
+}
+
+bool GeRenderer::ResolveReplacedTexture(const ge::ReplacedTexture &r, VkImageView *rgba) {
+    // F24c: keyed by the replacement's id (unique for the process), so a
+    // switch of pack never finds the other pack's image.
+    TextureKey key;
+    key.addr = 0xFFFFFFFFu;
+    key.format = 0xFFFFu;
+    key.size = static_cast<std::uint32_t>(r.image_width) |
+               (static_cast<std::uint32_t>(r.image_height) << 16);
+    key.hash = r.id;
+    auto it = textures_.find(key);
+    if (it == textures_.end()) {
+        if (r.image_width <= 0 || r.image_height <= 0 ||
+            r.image.size() < static_cast<std::size_t>(r.image_width) *
+                                 static_cast<std::size_t>(r.image_height) * 4)
+            return false;
+        Texture tex;
+        char name[64];
+        std::snprintf(name, sizeof(name), "ge replaced tex %llu",
+                      static_cast<unsigned long long>(r.id));
+        if (!CreateTexture(r.image_width, r.image_height, VK_FORMAT_R8G8B8A8_UNORM, r.image.data(),
+                           r.image.size(), name, &tex.image))
+            return false;
+        it = textures_.emplace(key, std::move(tex)).first;
+    } else {
+        ++stats_.texture_hits;
+    }
+    it->second.last_frame = frame_serial_;
+    *rgba = it->second.image.view;
+    return true;
+}
+
 bool GeRenderer::ResolveTexture(const ge::SamplerState &st, VkImageView *rgba, VkImageView *index) {
     *rgba = dummy_rgba_.view;
     *index = dummy_index_.view;
+    if (st.replaced != nullptr) return ResolveReplacedTexture(*st.replaced, rgba);
     const std::uint32_t bytes = TextureSourceBytes(st);
     const std::uint8_t *src = bytes ? mem_.Translate(st.texaddr[0], bytes) : nullptr;
 
@@ -1338,34 +1402,9 @@ bool GeRenderer::ResolveTexture(const ge::SamplerState &st, VkImageView *rgba, V
         Texture tex;
         char name[64];
         std::snprintf(name, sizeof(name), "ge tex 0x%08X fmt %u", key.addr, key.format & 0xFF);
-        std::string err;
-        if (!CreateImage2D(*ctx_, decoded.width, decoded.height, format,
-                           VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                           VK_IMAGE_ASPECT_COLOR_BIT, name, &tex.image, &err)) {
-            Fail(err);
+        if (!CreateTexture(decoded.width, decoded.height, format, decoded.data.data(),
+                           decoded.data.size(), name, &tex.image))
             return false;
-        }
-        UploadArena::Allocation a;
-        if (!StageUpload(decoded.data.data(), decoded.data.size(), &a)) {
-            DestroyImage(*ctx_, &tex.image);
-            return false;
-        }
-        VkCommandBuffer cmd = frame().init_cmd;
-        ImageBarrier(cmd, tex.image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-        VkBufferImageCopy copy{};
-        copy.bufferOffset = a.offset;
-        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        copy.imageExtent = {static_cast<std::uint32_t>(decoded.width),
-                            static_cast<std::uint32_t>(decoded.height), 1};
-        vkCmdCopyBufferToImage(cmd, a.buffer, tex.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                               1, &copy);
-        ImageBarrier(cmd, tex.image.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-        ++stats_.texture_uploads;
         it = textures_.emplace(key, std::move(tex)).first;
     } else {
         ++stats_.texture_hits;
@@ -1583,7 +1622,8 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
             if (!ResolveTexture(st, &rgba_view, &index_view)) {
                 if (failed_) return;
             }
-            const bool clut = IsClutFormat(st.texfmt);
+            // F24c: a replaced texture is RGBA, whatever the GE format.
+            const bool clut = IsClutFormat(st.texfmt) && st.replaced == nullptr;
             k.tex_mode = clut ? 2 : 1;
             k.clut_format = static_cast<std::uint8_t>(st.clutfmt);
             k.tex_func = static_cast<std::uint8_t>(st.tex_func);
@@ -1597,6 +1637,11 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
             k.lod_mode = static_cast<std::uint8_t>(rs.tex_level_mode);
             pc.tex_size = static_cast<std::uint32_t>(st.sizes[0].w) |
                           (static_cast<std::uint32_t>(st.sizes[0].h) << 16);
+            if (st.replaced != nullptr && (st.replaced->image_width != st.sizes[0].w ||
+                                           st.replaced->image_height != st.sizes[0].h)) {
+                pc.samp_size = static_cast<std::uint32_t>(st.replaced->image_width) |
+                               (static_cast<std::uint32_t>(st.replaced->image_height) << 16);
+            }
             if (rs.through_mode) {
                 pc.uv_scale[0] = 1.0f / static_cast<float>(1 << st.width0_shift);
                 pc.uv_scale[1] = 1.0f / static_cast<float>(1 << st.height0_shift);
@@ -1614,7 +1659,8 @@ void GeRenderer::BeginDraw(const ge::GeState &gs, const ge::RasterizerState &rs)
                 if (!UploadClut(st.clut, &ds.clut_offset, &clut_buffer)) return;
             }
             if (rs.max_tex_level > 0) stats_.Approximate("mipmaps: level 0 only (F15)");
-            if (!st.use_shared_clut) stats_.Approximate("CLUT4 palettes per mip level (F15)");
+            if (!st.use_shared_clut && clut)
+                stats_.Approximate("CLUT4 palettes per mip level (F15)");
         }
 
         k.alpha_func = static_cast<std::uint8_t>(ps.alpha_test_func);

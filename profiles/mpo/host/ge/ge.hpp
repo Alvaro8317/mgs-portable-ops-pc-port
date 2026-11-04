@@ -20,6 +20,7 @@
 #include "memory_view.hpp"
 #include "primitive_assembler.hpp"
 #include "stats.hpp"
+#include "texture_provider.hpp"
 
 namespace mpo::ge {
 
@@ -104,6 +105,14 @@ public:
     // The GE's internal palette, as loaded by the last LOADCLUT.
     [[nodiscard]] std::span<const std::uint8_t, 1024> clut() const { return clut_; }
 
+    // F24c: replaced textures. With a provider, each textured draw asks it
+    // for a replacement of its texture (SamplerState::replaced); nullptr
+    // (the default) samples the game's texels as always. The provider must
+    // outlive its use.
+    void SetTextureProvider(TextureProvider *provider) { provider_ = provider; }
+    [[nodiscard]] TextureProvider *texture_provider() const { return provider_; }
+    [[nodiscard]] const ClutLoadInfo &clut_load_info() const { return clut_info_; }
+
 private:
     // Returns false when the list must stop (status in *result).
     bool Execute(std::uint32_t op, std::uint32_t diff, DisplayList &list, RunResult *result);
@@ -120,6 +129,8 @@ private:
                            std::uint32_t size, std::uint32_t op);
     bool ExecuteEnd(std::uint32_t op, DisplayList &list, RunResult *result);
     void AdvanceVerts(std::uint32_t vtype, int count, std::uint32_t bytes_read);
+    // F24c: asks the provider for the draw's texture.
+    void ReplaceTexture(RasterizerState *rs);
 
     MemoryView mem_;
     GeState state_;
@@ -131,6 +142,8 @@ private:
     std::uint32_t edram_translation_ = 0x400;
     std::array<float, 8> morph_weights_{};
     std::array<std::uint8_t, 1024> clut_{};
+    TextureProvider *provider_ = nullptr;
+    ClutLoadInfo clut_info_;
 };
 
 } // namespace mpo::ge

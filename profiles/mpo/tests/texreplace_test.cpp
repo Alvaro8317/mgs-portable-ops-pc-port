@@ -1,0 +1,483 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// mpo_texreplace (F24c), without the game and without a GPU:
+// - the key: PPSSPP's formula (checked against xxHash directly and a fixed
+//   name), stable, address-independent with ignoreAddress, sensitive to the
+//   texels, the palette and the CLUT format, blind to the bytes between rows
+//   and to the palette for direct-colour textures;
+// - textures.ini parsing and the hash file names;
+// - the lookup order (PPSSPP's LookupWildcard) and "do not replace" entries;
+// - the box filter that brings a larger PNG to the native size;
+// - on softgpu (mpo_ge): no provider and a provider with nothing to replace
+//   draw the same bytes as before; a replacement is drawn texel for texel
+//   (CLUT4 swizzled icon, at its size and from a 4x PNG); the hot switch
+//   between two sets takes effect at the next list run;
+// - the dump: a PNG per key and a textures.ini, which then work as a pack.
+// PNG files are written and read through SDL3 (png_io.hpp); without it,
+// those checks are skipped (and said so).
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "png_io.hpp"
+#include "texreplace_test_util.hpp"
+#include "texture_key.hpp"
+#include "texture_replacer.hpp"
+#include "textures_ini.hpp"
+#include "xxhash.h"
+
+namespace {
+
+using namespace texreplace_test;
+namespace tr = mpo::texreplace;
+
+int g_failures = 0;
+
+void expect(bool condition, const std::string &message) {
+    if (!condition) {
+        std::fprintf(stderr, "FAIL: %s\n", message.c_str());
+        ++g_failures;
+    }
+}
+
+// The state of a CLUT4 icon draw, as Ge::ExecutePrim hands it over.
+struct IconDraw {
+    Machine m;
+    ListBuilder lb;
+    explicit IconDraw(std::uint32_t icon = kIconAddr, std::uint32_t clut = kClutAddr) {
+        lb.LoadClut(clut);
+        lb.Texture(icon, 32, 5, 4, 4, true);
+        lb.Sprites(true, {{0, 0, 32, 16, 0, 0, 32, 16, 0xFFFFFFFF}});
+    }
+};
+
+// A provider that records the key of every texture it is asked about.
+class KeyProbe final : public mpo::ge::TextureProvider {
+public:
+    std::vector<tr::ReplacementKey> keys;
+    const mpo::ge::ReplacedTexture *Find(const mpo::ge::GeState &gs, const mpo::ge::MemoryView &mem,
+                                         const mpo::ge::SamplerState &st,
+                                         const mpo::ge::ClutLoadInfo &clut) override {
+        keys.push_back(tr::ComputeKey(gs, mem, st, clut, tr::HashType::kXxh64));
+        return nullptr;
+    }
+};
+
+tr::ReplacementKey ProbeIcon(std::uint32_t icon, std::uint32_t clut,
+                             void (*tweak)(Machine &) = nullptr) {
+    IconDraw d(icon, clut);
+    if (tweak) tweak(d.m);
+    KeyProbe probe;
+    d.m.ge.SetTextureProvider(&probe);
+    expect(d.m.Run(d.lb), "icon list runs");
+    expect(probe.keys.size() == 1, "one textured draw");
+    return probe.keys.empty() ? tr::ReplacementKey{} : probe.keys[0];
+}
+
+void TestKey() {
+    const tr::ReplacementKey a = ProbeIcon(kIconAddr, kClutAddr);
+    // PPSSPP's formula, by hand: dim = TEXSIZE0 & 0xF0F = 0x405; the CLUT
+    // hash covers min(64 + 0, 64) bytes; the texels bufw * h / 2 bytes.
+    Machine m;
+    const std::uint32_t clut_reg = op(kCmdClutFormat, 3 | (0xFFu << 8));
+    const std::uint32_t cluthash = XXH32(&m.ram[kClutAddr - kRamBase], 64, 0xC0108888) ^ clut_reg;
+    const std::uint64_t cachekey =
+        ((static_cast<std::uint64_t>(kIconAddr) & 0x3FFFFFFF) << 32 | 0x405u) ^ cluthash;
+    const auto hash =
+        static_cast<std::uint32_t>(XXH64(&m.ram[kIconAddr - kRamBase], 32 * 16 / 2, 0xBACD7814));
+    expect(a.cachekey == cachekey, "cachekey follows TexCacheEntry::CacheKey");
+    expect(a.hash == hash, "hash is XXH64 of the texels, truncated");
+    std::printf("  icon key %s\n", tr::HashName(a).c_str());
+    // Stable: a fixed value (the formula above, frozen), so a pack's names
+    // never change from one build to another.
+    expect(tr::HashName(tr::WithoutAddress(a)) == "0000000009f357c00cdcc7e2",
+           "stable name of the synthetic icon: " + tr::HashName(tr::WithoutAddress(a)));
+
+    const tr::ReplacementKey moved = ProbeIcon(kIconAddr2, kClutAddr);
+    expect(moved.cachekey != a.cachekey, "the full key has the address");
+    expect(tr::WithoutAddress(moved) == tr::WithoutAddress(a),
+           "without the address, the same texels give the same key");
+    const tr::ReplacementKey other_clut = ProbeIcon(kIconAddr, kClutAddr2);
+    expect(tr::WithoutAddress(other_clut).cachekey != tr::WithoutAddress(a).cachekey,
+           "another palette changes the key");
+    expect(other_clut.hash == a.hash, "the palette is not in the texel hash");
+    const tr::ReplacementKey texel = ProbeIcon(
+        kIconAddr, kClutAddr, [](Machine &mm) { mm.ram[kIconAddr - kRamBase + 37] ^= 0x10; });
+    expect(texel.hash != a.hash, "a texel changes the hash");
+    const tr::ReplacementKey beyond = ProbeIcon(kIconAddr, kClutAddr, [](Machine &mm) {
+        // Palette entry 20, past the 64 bytes loaded.
+        mm.ram[kClutAddr - kRamBase + 80] ^= 0xFF;
+        // And a byte right after the texture.
+        mm.ram[kIconAddr - kRamBase + 256] ^= 0xFF;
+    });
+    expect(beyond == a, "bytes outside the texture and the loaded palette do not count");
+
+    // Direct colour: the palette does not count; bufw > w hashes row by row,
+    // blind to the gap.
+    auto probe_rgba = [](int bufw, void (*tweak)(Machine &)) {
+        Machine mm;
+        if (tweak) tweak(mm);
+        ListBuilder lb;
+        lb.LoadClut(kClutAddr);
+        lb.Texture(kRgbaAddr, bufw, 3, 3, 3, false);
+        lb.Sprites(true, {{0, 0, 8, 8, 0, 0, 8, 8, 0xFFFFFFFF}});
+        KeyProbe probe;
+        mm.ge.SetTextureProvider(&probe);
+        mm.Run(lb);
+        return probe.keys.empty() ? tr::ReplacementKey{} : probe.keys[0];
+    };
+    const tr::ReplacementKey r8 = probe_rgba(8, nullptr);
+    const tr::ReplacementKey r8_clut =
+        probe_rgba(8, [](Machine &mm) { mm.ram[kClutAddr - kRamBase] ^= 0xFF; });
+    expect(r8 == r8_clut, "8888: the palette is not in the key");
+    expect((r8.cachekey & 0xFFFFFFFFu) == 0x303u, "8888: the low half is the dim alone");
+    const tr::ReplacementKey r16 = probe_rgba(16, nullptr);
+    const tr::ReplacementKey r16_gap = probe_rgba(16, [](Machine &mm) {
+        mm.ram[kRgbaAddr - kRamBase + 8 * 4 + 1] ^= 0xFF; // texel (8, 0): in the gap
+    });
+    expect(r16 == r16_gap, "bufw > w: the bytes between rows do not count");
+    std::uint32_t rows = 0;
+    {
+        Machine mm;
+        for (int y = 0; y < 8; ++y)
+            rows = (rows * 11) ^
+                   static_cast<std::uint32_t>(
+                       XXH64(&mm.ram[kRgbaAddr - kRamBase + static_cast<std::uint32_t>(y) * 64], 32,
+                             0xBACD7814));
+    }
+    expect(r16.hash == rows, "bufw > w: (result * 11) ^ row hash, as PPSSPP");
+
+    // Names.
+    tr::ReplacementKey k;
+    int level = -1;
+    expect(tr::ParseHashName("00000000bb2bdcb33dc35a44", &k, &level) && k.cachekey == 0xbb2bdcb3u &&
+               k.hash == 0x3dc35a44u && level == 0,
+           "ParseHashName");
+    expect(tr::ParseHashName("08300000000004053dc35a44_2", &k, &level) &&
+               k.cachekey == 0x0830000000000405ull && level == 2,
+           "ParseHashName with a level");
+    expect(tr::ParseHashName("0830000000000405", &k, &level) && k.hash == 0,
+           "ParseHashName: the cachekey alone");
+    expect(!tr::ParseHashName("xyz", &k, &level), "ParseHashName rejects non-hex");
+    expect(tr::HashName({0x12, 0xAB}) == "0000000000000012000000ab", "HashName");
+}
+
+void TestIni() {
+    tr::TexturesIni ini;
+    std::string error;
+    const std::string text = "\xEF\xBB\xBF# a pack\r\n"
+                             "[options]\r\n"
+                             "version = 1\r\n"
+                             "hash = XXH64   # the default\r\n"
+                             "ignoreAddress = true\r\n"
+                             "ignoreMipmap = true\r\n"
+                             "[games]\r\n"
+                             "ULUS10202 = textures.ini\r\n"
+                             "[hashes]\r\n"
+                             "00000000bb2bdcb33dc35a44 = icons/y.png\r\n"
+                             "00000000bb2bdcb33dc35a44_1 = icons/y_1.png\r\n"
+                             "0000000000000303deadbeef = a\\b.png|a\\b1.png\r\n"
+                             "000000000000040500000000 =\r\n"
+                             "00000000000004051234abcd = with\\#hash.png\r\n"
+                             "[hashranges]\r\n"
+                             "08b31020,512,512 = 480,272\r\n";
+    expect(tr::ParseTexturesIni(text, &ini, &error), "ini parses: " + error);
+    expect(ini.hash == tr::HashType::kXxh64 && ini.ignore_address && ini.version == 1, "options");
+    expect(ini.hashes.size() == 4, "four level-0 entries");
+    if (ini.hashes.size() == 4) {
+        expect(ini.hashes[0].file == "icons/y.png" && ini.hashes[0].key.hash == 0x3dc35a44u,
+               "entry 1");
+        expect(ini.hashes[1].file == "a/b.png", "entry 2: backslashes, first mip level");
+        expect(ini.hashes[2].file.empty(), "entry 3: listed, not replaced");
+        expect(ini.hashes[3].file == "with#hash.png", "entry 4: escaped #");
+    }
+    expect(ini.warnings.size() == 3,
+           "warnings for [games], [hashranges] and levels: " + std::to_string(ini.warnings.size()));
+
+    tr::TexturesIni other;
+    expect(tr::ParseTexturesIni("[options]\nhash = xxh32\n", &other, &error) &&
+               other.hash == tr::HashType::kXxh32 && !other.ignore_address,
+           "xxh32, ignoreAddress defaults to false (PPSSPP)");
+    expect(!tr::ParseTexturesIni("[options]\nhash = quick\n", &other, &error), "quick is refused");
+    expect(!tr::ParseTexturesIni("[options]\nignoreAddress = true\n", &other, &error),
+           "a hash type is required");
+    expect(!tr::ParseTexturesIni("[options]\nhash = xxh64\nreduceHash = true\n", &other, &error),
+           "reduceHash is refused");
+    expect(tr::ParseTexturesIni(tr::DefaultTexturesIni(), &other, &error) &&
+               other.hash == tr::HashType::kXxh64 && other.ignore_address && other.hashes.empty() &&
+               other.warnings.empty(),
+           "the dump's textures.ini");
+}
+
+void TestLookup() {
+    tr::TexturesIni ini;
+    ini.ignore_address = false;
+    tr::ReplacementSet set("unused", ini);
+    const tr::ReplacementKey full{0x08300000BB2BDCB3ull, 0x3DC35A44u};
+    expect(set.Lookup(full) == nullptr, "empty set");
+    set.AddAlias({0, 0x3DC35A44u}, "any.png");
+    expect(set.Lookup(full) && *set.Lookup(full) == "any.png", "texel hash alone");
+    set.AddAlias({0xBB2BDCB3ull, 0x3DC35A44u}, "noaddr.png");
+    expect(*set.Lookup(full) == "noaddr.png", "without the address before the texel hash alone");
+    set.AddAlias({0xBB2BDCB3ull, 0}, "clut.png");
+    expect(*set.Lookup(full) == "clut.png", "CLUT/size half before that");
+    set.AddAlias(full, "exact.png");
+    expect(*set.Lookup(full) == "exact.png", "the exact key first");
+    set.AddAlias(full, "");
+    expect(set.Lookup(full) == nullptr, "an empty file stops the lookup");
+
+    tr::TexturesIni ignore;
+    ignore.ignore_address = true;
+    tr::ReplacementSet set2("unused", ignore);
+    set2.AddAlias({0x08300000BB2BDCB3ull, 0x3DC35A44u}, "with_address.png");
+    expect(set2.Lookup(full) == nullptr, "ignoreAddress: names with an address never match");
+    set2.AddAlias({0xBB2BDCB3ull, 0x3DC35A44u}, "y.png");
+    expect(set2.Lookup(full) && *set2.Lookup(full) == "y.png", "ignoreAddress: content key");
+    expect(set2.Lookup({0x08310000BB2BDCB3ull, 0x3DC35A44u}) != nullptr,
+           "ignoreAddress: anywhere in memory");
+}
+
+void TestScale() {
+    std::vector<std::uint32_t> out;
+    const std::vector<std::uint8_t> img = {1, 2, 3, 4, 5, 6, 7, 8};
+    tr::ScaleToNative(img.data(), 2, 1, 2, 1, &out);
+    expect(out.size() == 2 && out[0] == 0x04030201u && out[1] == 0x08070605u, "same size: copy");
+    // 2x2 -> 1x1: alpha-weighted colour, mean alpha.
+    const std::vector<std::uint8_t> quad = {200, 0, 0, 255, 0, 0, 0, 0, 0, 100, 0, 255, 0, 0, 0, 0};
+    tr::ScaleToNative(quad.data(), 2, 2, 1, 1, &out);
+    expect(out.size() == 1 && out[0] == ((128u << 24) | (50u << 8) | 100u),
+           "box filter ignores the colour of transparent pixels");
+    // Smaller: nearest.
+    tr::ScaleToNative(img.data(), 2, 1, 4, 1, &out);
+    expect(out.size() == 4 && out[0] == out[1] && out[2] == out[3] && out[2] == 0x08070605u,
+           "smaller image: nearest");
+    // A 4x nearest upscale comes back exactly.
+    const std::vector<std::uint8_t> y16 = LetterY(32, 16);
+    const std::vector<std::uint8_t> y64 = UpscaleNearest(y16, 32, 16, 4);
+    tr::ScaleToNative(y64.data(), 128, 64, 32, 16, &out);
+    bool same = out.size() == 32 * 16;
+    for (std::size_t i = 0; same && i < out.size(); ++i) {
+        std::uint32_t c;
+        std::memcpy(&c, &y16[i * 4], 4);
+        same = out[i] == c;
+    }
+    expect(same, "4x nearest upscale scales back to the same image");
+}
+
+// The 32x16 icon area of the framebuffer, as RGBA words.
+std::vector<std::uint32_t> IconPixels(const Machine &m, int x0, int y0) {
+    std::vector<std::uint32_t> px;
+    for (int y = 0; y < 16; ++y)
+        for (int x = 0; x < 32; ++x) px.push_back(m.Pixel(x0 + x, y0 + y));
+    return px;
+}
+
+void TestSoftgpu() {
+    ListBuilder lb;
+    lb.Clear(0xFF402010);
+    lb.LoadClut(kClutAddr);
+    lb.Texture(kIconAddr, 32, 5, 4, 4, true);
+    lb.Sprites(true, {{10, 10, 42, 26, 0, 0, 32, 16, 0xFFFFFFFF}});
+    lb.Blend(true);
+    lb.Texture(kIconAddr2, 32, 5, 4, 4, true, 0x100, true, false);
+    lb.Sprites(true, {{100, 40, 164, 72, 0, 0, 32, 16, 0xFF80FFFF}});
+    lb.Blend(false);
+    lb.Texture(kRgbaAddr, 16, 4, 4, 3, false);
+    lb.Sprites(true, {{200, 10, 232, 42, 0, 0, 16, 16, 0xFFFFFFFF}});
+
+    Machine plain;
+    expect(plain.Run(lb), "plain list runs");
+
+    // A provider without sets (and no dump): the same bytes.
+    Machine idle;
+    tr::TextureReplacer idle_replacer;
+    idle.ge.SetTextureProvider(&idle_replacer);
+    expect(idle.Run(lb), "idle list runs");
+    expect(idle.vram == plain.vram, "a replacer with nothing to do changes nothing");
+    expect(idle_replacer.stats().lookups == 0, "and does not even hash");
+
+    // A set whose key matches nothing: the same bytes.
+    tr::TexturesIni ini;
+    ini.ignore_address = true;
+    Machine miss;
+    tr::TextureReplacer miss_replacer;
+    auto miss_set = std::make_unique<tr::ReplacementSet>("unused", ini);
+    miss_set->AddAlias({0x1234, 0x5678}, "nothing.png");
+    miss_replacer.SetActiveSet(miss_replacer.AddSet(std::move(miss_set)));
+    miss.ge.SetTextureProvider(&miss_replacer);
+    expect(miss.Run(lb), "miss list runs");
+    expect(miss.vram == plain.vram, "a set that covers nothing changes nothing");
+    expect(miss_replacer.stats().lookups == 3 && miss_replacer.stats().replaced == 0,
+           "three lookups, nothing replaced");
+
+    if (!tr::HavePng()) {
+        std::printf("  SKIP: no PNG support in this build: replacement and dump checks\n");
+        return;
+    }
+
+    // The pack: the icon's content key -> our "Y", native size; and the 8888
+    // texture -> a 4x PNG.
+    const std::filesystem::path pack = FreshDir("mpo_texreplace_test_pack");
+    const tr::ReplacementKey icon = tr::WithoutAddress(ProbeIcon(kIconAddr, kClutAddr));
+    const std::vector<std::uint8_t> y = LetterY(32, 16);
+    std::string error;
+    expect(tr::SavePng(pack / "y.png", 32, 16, y, &error), "write y.png: " + error);
+    std::vector<std::uint8_t> big(64 * 64 * 4);
+    for (std::size_t i = 0; i < big.size(); i += 4) {
+        big[i] = 0x10;
+        big[i + 1] = static_cast<std::uint8_t>(i / 4 % 64 * 4);
+        big[i + 2] = 0xC0;
+        big[i + 3] = 0xFF;
+    }
+    expect(tr::SavePng(pack / "big.png", 64, 64, big, &error), "write big.png: " + error);
+    tr::ReplacementKey rgba_key;
+    {
+        Machine mm;
+        ListBuilder l2;
+        l2.Texture(kRgbaAddr, 16, 4, 4, 3, false);
+        l2.Sprites(true, {{0, 0, 16, 16, 0, 0, 16, 16, 0xFFFFFFFF}});
+        KeyProbe probe;
+        mm.ge.SetTextureProvider(&probe);
+        mm.Run(l2);
+        if (!probe.keys.empty()) rgba_key = tr::WithoutAddress(probe.keys[0]);
+    }
+    {
+        std::ofstream out(pack / "textures.ini", std::ios::binary);
+        out << "[options]\nversion = 1\nhash = xxh64\nignoreAddress = true\n\n[hashes]\n"
+            << tr::HashName(rgba_key) << " = big.png\n";
+    }
+    // The icon by its file name, as a dump names it.
+    std::filesystem::copy_file(pack / "y.png", pack / (tr::HashName(icon) + ".png"));
+
+    auto set = tr::ReplacementSet::Load(pack, &error);
+    expect(set != nullptr, "the pack loads: " + error);
+    if (!set) return;
+    expect(set->size() == 2, "two replacements (one listed, one by file name)");
+    Machine rep;
+    tr::TextureReplacer replacer;
+    replacer.SetActiveSet(replacer.AddSet(std::move(set)));
+    rep.ge.SetTextureProvider(&replacer);
+    expect(rep.Run(lb), "replaced list runs");
+    expect(replacer.stats().replaced == 3,
+           "three draws replaced: " + std::to_string(replacer.stats().replaced));
+    expect(replacer.stats().distinct.size() == 2, "two images");
+    // The first sprite is 1:1 with REPLACE: the PNG's pixels, where opaque
+    // (alpha 0 keeps the clear colour with the alpha test of the sprite path).
+    const std::vector<std::uint32_t> px = IconPixels(rep, 10, 10);
+    bool exact = true;
+    for (int i = 0; i < 32 * 16; ++i) {
+        std::uint32_t c;
+        std::memcpy(&c, &y[static_cast<std::size_t>(i) * 4], 4);
+        if ((c >> 24) != 0 && px[static_cast<std::size_t>(i)] != c) exact = false;
+    }
+    expect(exact, "softgpu draws the replacement texel for texel");
+    expect(IconPixels(rep, 10, 10) != IconPixels(plain, 10, 10), "and it is not the game's icon");
+    // The 4x PNG is box-filtered to 16x16: the pixel at the sprite's (0, 0)
+    // is the mean of the PNG's top-left 4x4.
+    expect(rep.Pixel(200, 10) == 0xFFC00610u, "the larger PNG is filtered to the texture's size: " +
+                                                  std::to_string(rep.Pixel(200, 10)));
+    // Everything outside the sprites is the same as without the pack.
+    bool outside = true;
+    for (int yy = 100; yy < 272; ++yy)
+        for (int xx = 0; xx < 480; ++xx)
+            outside = outside && rep.Pixel(xx, yy) == plain.Pixel(xx, yy);
+    expect(outside, "nothing else changes");
+
+    // The hot switch: set 1 is the plain icon (the game's own texels, from
+    // a dump), set 0 the "Y". The switch applies at the next run.
+    const std::filesystem::path dump = FreshDir("mpo_texreplace_test_dump");
+    {
+        Machine dm;
+        tr::TextureReplacer dumper;
+        expect(dumper.SetDumpDir(dump, &error), "dump dir: " + error);
+        dm.ge.SetTextureProvider(&dumper);
+        expect(dm.Run(lb), "dump list runs");
+        expect(dm.vram == plain.vram, "dumping changes nothing on screen");
+        // Icon (one key: the two copies share it), its other palette state is
+        // the same, and the 8888 texture.
+        expect(dumper.stats().dumped == 2,
+               "two PNGs dumped: " + std::to_string(dumper.stats().dumped));
+        expect(std::filesystem::exists(dump / "textures.ini"), "the dump writes a textures.ini");
+        expect(std::filesystem::exists(dump / (tr::HashName(icon) + ".png")),
+               "the icon's PNG has its key as name");
+        int w = 0;
+        int h = 0;
+        std::vector<std::uint8_t> back;
+        expect(tr::LoadPng(dump / (tr::HashName(icon) + ".png"), &w, &h, &back, &error) &&
+                   w == 32 && h == 16,
+               "the dumped icon reads back");
+        Machine again;
+        tr::TextureReplacer dumper2;
+        expect(dumper2.SetDumpDir(dump, &error), "dump dir again");
+        again.ge.SetTextureProvider(&dumper2);
+        again.Run(lb);
+        expect(dumper2.stats().dumped == 0, "keys already dumped are not written again");
+    }
+    auto dumped_set = tr::ReplacementSet::Load(dump, &error);
+    expect(dumped_set != nullptr && dumped_set->size() == 2, "the dump loads as a pack");
+    if (!dumped_set) return;
+    const int dumped_index = replacer.AddSet(std::move(dumped_set));
+    replacer.SetActiveSet(dumped_index);
+    expect(replacer.active_set() == 0, "the switch waits for the next run");
+    Machine sw;
+    sw.ge.SetTextureProvider(&replacer);
+    expect(sw.Run(lb), "switched list runs");
+    expect(replacer.active_set() == dumped_index, "the next run uses the new set");
+    expect(sw.vram == plain.vram, "the dumped textures as a pack draw exactly the game's frame");
+    replacer.SetActiveSet(0);
+    Machine back_to_y;
+    back_to_y.ge.SetTextureProvider(&replacer);
+    expect(back_to_y.Run(lb), "switched back");
+    expect(back_to_y.vram == rep.vram, "and back to the Y");
+    replacer.SetActiveSet(-1);
+    Machine off;
+    off.ge.SetTextureProvider(&replacer);
+    expect(off.Run(lb), "set -1");
+    expect(off.vram == plain.vram, "no active set: the game's frame");
+    expect(replacer.stats().switches == 4,
+           "four switches applied: " + std::to_string(replacer.stats().switches));
+
+    // A PNG that cannot be read: reported once, the game's texture drawn.
+    {
+        const std::filesystem::path broken = FreshDir("mpo_texreplace_test_broken");
+        std::ofstream(broken / "textures.ini", std::ios::binary)
+            << "[options]\nhash = xxh64\nignoreAddress = true\n[hashes]\n"
+            << tr::HashName(icon) << " = missing.png\n";
+        auto bset = tr::ReplacementSet::Load(broken, &error);
+        expect(bset != nullptr, "broken pack loads");
+        if (bset) {
+            tr::TextureReplacer br;
+            int logged = 0;
+            br.SetLog([&](std::string_view) { ++logged; });
+            br.SetActiveSet(br.AddSet(std::move(bset)));
+            Machine bm;
+            bm.ge.SetTextureProvider(&br);
+            bm.Run(lb);
+            expect(bm.vram == plain.vram, "an unreadable PNG leaves the game's texture");
+            expect(logged == 1 && br.stats().load_errors == 1, "and is reported once");
+        }
+    }
+    expect(tr::ReplacementSet::Load(FreshDir("mpo_texreplace_test_empty"), &error) == nullptr,
+           "a folder without textures.ini is not a pack");
+}
+
+} // namespace
+
+int main() {
+    TestKey();
+    TestIni();
+    TestLookup();
+    TestScale();
+    TestSoftgpu();
+    if (g_failures != 0) {
+        std::fprintf(stderr, "mpo_texreplace_test: %d failure(s)\n", g_failures);
+        return 1;
+    }
+    std::printf("mpo_texreplace_test: all checks passed\n");
+    return 0;
+}

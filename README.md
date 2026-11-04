@@ -26,6 +26,7 @@ translated game is never downloaded from anywhere and must never be shared (see
 - [Playing](#playing)
 - [Controls](#controls)
 - [Saves](#saves)
+- [Texture packs](#texture-packs)
 - [If something goes wrong](#if-something-goes-wrong)
 - [Uninstall](#uninstall)
 - [Legal notice](#legal-notice)
@@ -248,6 +249,28 @@ Without the launcher, use `setup.py import-save <folder>` and `setup.py export-s
 (add `--overwrite` to replace a save that is already there).
 
 > Back up your save folder before trying a new version of the port.
+
+## Texture packs
+
+The port can draw your own PNG images instead of the game's textures (for example, other button
+icons or HD textures). Put a pack in the `textures` folder next to your saves:
+
+| | Texture pack folder |
+|---|---|
+| Windows | `%APPDATA%\mpo-pc-port\textures` |
+| Linux | `~/.local/share/mpo-pc-port/textures` |
+| Flatpak | `~/.var/app/io.github.alvaro8317.MpoPcPort/data/mpo-pc-port/textures` |
+
+A pack is a `textures.ini` plus PNG files, in the same format as PPSSPP's texture packs, with
+`hash = xxh64` and `ignoreAddress = true` under `[options]`. A PNG named after a texture's key
+(`00000000a1b2c3d4e5f60718.png`) or listed under `[hashes]` replaces that texture. A PNG larger
+than the original works too: the Vulkan renderer uses it at its own size. Without a `textures.ini` in that folder the game
+looks exactly as before.
+
+To make a pack, start the game with `setup.py play -- --dump-textures <folder>`: it writes every
+texture it draws into `<folder>`, named by its key, plus a `textures.ini`. Edit the PNGs you want
+to change and copy them, with the `textures.ini`, into the pack folder. The dumped textures are the
+game's art: keep them for yourself and only share PNGs you made.
 
 ## If something goes wrong
 

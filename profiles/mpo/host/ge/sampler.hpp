@@ -11,6 +11,7 @@
 #include "ge_constants.hpp"
 #include "ge_state.hpp"
 #include "memory_view.hpp"
+#include "texture_provider.hpp"
 
 namespace mpo::ge {
 
@@ -44,6 +45,10 @@ struct SamplerState {
 
     std::uint32_t texaddr[8] = {};
     int texbufw[8] = {};
+    // F24c: level 0 replaced by a TextureProvider (Ge::SetTextureProvider):
+    // Fetch reads its `native` texels instead of memory. Other levels keep
+    // the game's texels.
+    const ReplacedTexture *replaced = nullptr;
 };
 
 // Texture buffer width in texels for `level` (GetTextureBufw).

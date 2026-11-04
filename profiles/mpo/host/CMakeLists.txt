@@ -49,6 +49,9 @@ mpo_target_warnings(mpo)
 
 add_subdirectory(ge)
 
+# F24c: texture replacement packs and the texture dump (mpo_texreplace).
+add_subdirectory(texreplace)
+
 # F20a: AP Scan model (sceNetApctl) and virtual access points.
 add_subdirectory(apscan)
 
