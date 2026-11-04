@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# LeakSanitizer suppressions for the mpo_vulkan_* tests only (F25,
+# profiles/mpo/tests/CMakeLists.txt sets LSAN_OPTIONS on them, with ASan).
+# Nothing else uses this file.
+#
+# Why: the Linux gcc asan-ubsan CI job failed now and then with small indirect
+# leaks (224 to 560 bytes, 56-byte blocks) allocated on threads that lavapipe
+# starts. Every frame between calloc and asan_thread_start is in the driver,
+# which the Vulkan loader had already unloaded at vkDestroyInstance, so LSan
+# prints "<unknown module>" or a stale name of another library mapped later at
+# those addresses (libasan.so, libubsan.so, the test itself). The blocks are
+# only pointed to from the unloaded driver's data. With the same Mesa
+# (25.2.8-0ubuntu0.24.04.4) it reproduces here too.
+#
+# The fix is VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1 (the Vulkan
+# loader of Ubuntu 24.04, 1.3.275, has it; an older one ignores it), set on
+# the same tests: the driver stays loaded, its data
+# still points to the blocks and LSan reports nothing. These lines are a
+# fallback, for frames in the driver or the layers.
+#
+# What stays covered: a leak in our code has its frames in the test binary or
+# our libraries, which are never unloaded, so no line below matches it. A
+# Vulkan object we forget to destroy is reported by the validation layer
+# (MPO_VK_REQUIRE_VALIDATION=1 in CI), not by LSan.
+#
+# LSan suppresses a leak when any frame of its allocation stack matches a
+# line, by module, function or file name (substring).
+
+# Frames in a library that was unloaded anyway.
+leak:<unknown module>
+# lavapipe (and the LLVM it links), the Vulkan loader and the validation layer.
+leak:libvulkan_lvp.so
+leak:libLLVM.so
+leak:libvulkan.so
+leak:libVkLayer_khronos_validation.so

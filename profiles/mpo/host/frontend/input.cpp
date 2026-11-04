@@ -298,4 +298,30 @@ SceCtrlData InputTranslator::Sample(std::uint32_t timestamp) const {
     return data;
 }
 
+WindowShortcut WindowShortcutFor(Scancode key, bool alt_held) {
+    if (key == scancode::kF11) return WindowShortcut::kToggleFullscreen;
+    if (alt_held && (key == scancode::kReturn || key == scancode::kKpEnter))
+        return WindowShortcut::kToggleFullscreen;
+    return WindowShortcut::kNone;
+}
+
+bool WindowShortcutFilter::OnKey(Scancode key, bool down, bool repeat, bool alt_held,
+                                 WindowShortcut *shortcut) {
+    *shortcut = WindowShortcut::kNone;
+    if (key >= kScancodeCount) return false;
+    if (!down) {
+        const bool held = held_[key];
+        held_[key] = false;
+        return held;
+    }
+    // A repeat is never a new shortcut: it belongs to whoever got the press.
+    if (repeat) return held_[key];
+    if (held_[key]) return true; // a second press without a release
+    const WindowShortcut action = WindowShortcutFor(key, alt_held);
+    if (action == WindowShortcut::kNone) return false;
+    held_[key] = true;
+    *shortcut = action;
+    return true;
+}
+
 } // namespace mpo::frontend

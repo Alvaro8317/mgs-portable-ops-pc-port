@@ -376,6 +376,21 @@ if(TARGET mpo_vulkan)
     # arguments it prints its usage and fails.
     add_test(NAME mpo_vulkan_compare_usage COMMAND mpo_vulkan_compare)
     set_tests_properties(mpo_vulkan_compare_usage PROPERTIES WILL_FAIL TRUE)
+    # F25: lavapipe's threads keep a few blocks that only the driver's own
+    # data points to. The loader unloads the driver at vkDestroyInstance, so
+    # by exit LSan sees them as leaks from "<unknown module>" (now and then:
+    # the CI's intermittent failures). Keeping the libraries loaded is the
+    # fix; the suppressions (see the file) only match frames outside our
+    # binaries, as a fallback. Only these tests get either.
+    if(MPO_SANITIZERS MATCHES "address")
+        set_property(TEST
+                mpo_vulkan_texture_decode_test mpo_vulkan_renderer_test
+                mpo_vulkan_renderer_scaled_test mpo_vulkan_vram_sync_test
+                mpo_vulkan_texreplace_test mpo_vulkan_hazard_test
+            APPEND PROPERTY ENVIRONMENT
+                "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1"
+                "LSAN_OPTIONS=suppressions='${CMAKE_CURRENT_SOURCE_DIR}/lsan_vulkan.supp'")
+    endif()
 endif()
 if(Python3_FOUND)
     add_test(NAME mpo_vulkan_shaders_fresh

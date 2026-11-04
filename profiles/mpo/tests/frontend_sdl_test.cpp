@@ -207,6 +207,81 @@ void TestFullscreen() {
            "windowed by default");
 }
 
+// F25: F11 and Alt+Enter toggle fullscreen on the key's window and never
+// reach the translator (Enter is Start in the default map).
+void PushWindowKey(SDL_WindowID window, SDL_Scancode code, bool down, SDL_Keymod mod,
+                   bool repeat = false) {
+    SDL_Event e{};
+    e.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+    e.key.windowID = window;
+    e.key.scancode = code;
+    e.key.mod = mod;
+    e.key.down = down;
+    e.key.repeat = repeat;
+    Expect(SDL_PushEvent(&e), "SDL_PushEvent");
+}
+
+void TestWindowShortcut() {
+    PresenterConfig config;
+    config.hidden = true;
+    config.render_driver = "software";
+    std::string error;
+    auto presenter = SdlPresenter::Create(config, &error);
+    if (!presenter) {
+        Expect(false, "SdlPresenter::Create (shortcut): " + error);
+        return;
+    }
+    SDL_Window *window = presenter->window();
+    const SDL_WindowID id = presenter->window_id();
+    const auto fullscreen = [&] {
+        return (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
+    };
+    InputTranslator translator;
+    SdlInput input(&translator);
+    std::vector<std::string> notes;
+    input.SetObserver([&](std::string_view s) { notes.emplace_back(s); });
+    Expect(!fullscreen(), "starts windowed");
+    const std::uint64_t generation = input.devices().generation();
+
+    PushWindowKey(id, SDL_SCANCODE_F11, true, SDL_KMOD_NONE);
+    PushWindowKey(id, SDL_SCANCODE_F11, true, SDL_KMOD_NONE, /*repeat=*/true);
+    PumpInto(&input);
+    Expect(fullscreen(), "F11 -> fullscreen");
+    ExpectEq(input.fullscreen_toggles(), 1, "a repeat does not toggle again");
+    PushWindowKey(id, SDL_SCANCODE_F11, false, SDL_KMOD_NONE);
+    PumpInto(&input);
+    Expect(SDL_GetWindowFullscreenMode(window) == nullptr, "borderless, no exclusive mode");
+    // Not game input: the last device (and so the prompts) does not change.
+    ExpectEq(input.devices().generation(), generation, "F11 is not a device input");
+    Expect(std::find(notes.begin(), notes.end(), "key F11 down") == notes.end(),
+           "F11 is not noted as a key");
+
+    PushWindowKey(id, SDL_SCANCODE_LALT, true, SDL_KMOD_LALT);
+    PushWindowKey(id, SDL_SCANCODE_RETURN, true, SDL_KMOD_LALT);
+    PumpInto(&input);
+    Expect(!fullscreen(), "Alt+Enter -> windowed");
+    ExpectEq(translator.Sample().buttons, 0u, "Alt+Enter does not press Start");
+    PushWindowKey(id, SDL_SCANCODE_RETURN, false, SDL_KMOD_LALT);
+    PushWindowKey(id, SDL_SCANCODE_LALT, false, SDL_KMOD_NONE);
+    PumpInto(&input);
+    ExpectEq(input.fullscreen_toggles(), 2, "two toggles");
+    Expect(std::find(notes.begin(), notes.end(), "key Return down") == notes.end(),
+           "Alt+Enter's Return is not noted as a key");
+
+    // Enter alone is still Start.
+    PushWindowKey(id, SDL_SCANCODE_RETURN, true, SDL_KMOD_NONE);
+    PumpInto(&input);
+    ExpectEq(translator.Sample().buttons, ctrl::kStart, "Enter = Start");
+    PushWindowKey(id, SDL_SCANCODE_RETURN, false, SDL_KMOD_NONE);
+    PumpInto(&input);
+    ExpectEq(translator.Sample().buttons, 0u, "Start released");
+    Expect(!fullscreen(), "Enter alone does not toggle");
+    ExpectEq(input.fullscreen_toggles(), 2, "still two toggles");
+    Expect(std::find(notes.begin(), notes.end(), "fullscreen on") != notes.end() &&
+               std::find(notes.begin(), notes.end(), "fullscreen off") != notes.end(),
+           "observer notes the toggles");
+}
+
 void TestKeyboard() {
     InputTranslator translator;
     SdlInput input(&translator);
@@ -679,6 +754,7 @@ int main(int argc, char **argv) {
     TestFitRect();
     TestPresenter();
     TestFullscreen();
+    TestWindowShortcut();
     TestKeyboard();
     TestVirtualGamepad();
     TestFaceLabelsMatchSdl();

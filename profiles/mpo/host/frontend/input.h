@@ -50,12 +50,17 @@ inline constexpr Scancode kReturn = 40;
 inline constexpr Scancode kEscape = 41;
 inline constexpr Scancode kTab = 43;
 inline constexpr Scancode kSpace = 44;
+inline constexpr Scancode kF1 = 58;
+inline constexpr Scancode kF11 = 68;
 inline constexpr Scancode kRight = 79;
 inline constexpr Scancode kLeft = 80;
 inline constexpr Scancode kDown = 81;
 inline constexpr Scancode kUp = 82;
+inline constexpr Scancode kKpEnter = 88;
 inline constexpr Scancode kLeftCtrl = 224;
 inline constexpr Scancode kRightCtrl = 228;
+inline constexpr Scancode kLeftAlt = 226;
+inline constexpr Scancode kRightAlt = 230;
 } // namespace scancode
 
 // SDL_BUTTON_* values (SDL numbers mouse buttons from 1).
@@ -217,6 +222,31 @@ struct InputMapping {
 void ConvertAnalogStick(const AnalogConfig &config, float x, float y, float *out_x, float *out_y);
 // __CtrlSetAnalogX/Y: -1..1 (Y down) -> 0..255, 1.0 -> 255, 0 -> 128.
 [[nodiscard]] std::uint8_t AnalogToByte(float value);
+
+// F25: the window's own shortcuts. F11, or Alt+Enter (either Enter key),
+// toggles fullscreen. They belong to the window, not to the game: the
+// frontend takes them before the OSK and the mapping see the key, so Alt+Enter
+// never presses Start (Enter) and whatever input.toml binds to F11 does not
+// fire. Alt alone, and Enter without Alt, still go to the game.
+enum class WindowShortcut : std::uint8_t { kNone, kToggleFullscreen };
+[[nodiscard]] WindowShortcut WindowShortcutFor(Scancode key, bool alt_held);
+
+// Filters the shortcuts out of the key events. A shortcut's press is taken,
+// and so are its key's repeats and release: the game sees nothing of it. A key
+// that was already held when Alt went down (Enter as Start) keeps going to the
+// game, repeats and release included.
+class WindowShortcutFilter {
+public:
+    // True when the event belongs to a shortcut and must not reach the game.
+    // `*shortcut` is the action to run (only on the press; kNone otherwise).
+    bool OnKey(Scancode key, bool down, bool repeat, bool alt_held, WindowShortcut *shortcut);
+    // The releases of held shortcut keys never arrive (the window lost the
+    // focus): forget them.
+    void Reset() { held_.reset(); }
+
+private:
+    std::bitset<kScancodeCount> held_;
+};
 
 class InputTranslator {
 public:

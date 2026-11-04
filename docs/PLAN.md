@@ -1799,8 +1799,29 @@ Símbolos: ⬜ pendiente · 🟨 en curso · ✅ hecha · ⏸️ bloqueada (se e
 - **Leaks intermitentes de lavapipe en la CI** (2026-11-03): el job `Linux gcc asan-ubsan` falló dos
   veces seguidas en los `mpo_vulkan_*` con fugas pequeñas (224 a 560 bytes) desde módulos ya
   descargados (`<unknown module>`, el driver o las capas) y pasó al repetirlo, con la misma Mesa
-  (25.2.8-0ubuntu0.24.04.4). En local no se reproduce. Si sigue, una supresión de LSan o
-  `LSAN_OPTIONS` para esos tests.
+  (25.2.8-0ubuntu0.24.04.4). En local no se reproducía entonces.
+  - **Hecho (ola 7, `docs/sessions/F25-mejoras.md`)**: se reprodujo en local con la misma Mesa.
+    Las fugas (todas indirectas, en hilos de lavapipe, sin un frame nuestro) son bloques que solo
+    apunta el driver, que el loader descarga en `vkDestroyInstance`. Solo en los `mpo_vulkan_*` y
+    solo con ASan, ctest pone `VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1` (el arreglo: así
+    salen limpios sin suprimir nada) y, de respaldo, `LSAN_OPTIONS` con
+    `profiles/mpo/tests/lsan_vulkan.supp` (`<unknown module>`, `libvulkan_lvp.so`, `libLLVM.so`,
+    `libvulkan.so` y la capa de validación). Una fuga de nuestro código se sigue viendo (probado
+    con un caso sintético). Falta ver en la CI que el job ya no falla.
 - **`#include <algorithm>` en `allegrex_context.hpp`** (el fork, F22b): cuando convenga
   recompilar todo el corpus; después se quitan el `-include algorithm` del `CMakeLists.txt` raíz y
   el `CXXFLAGS` del job `windows-llvm-mingw`.
+  - **Sigue pendiente (ola 7, revisado)**: obliga a recompilar las 92 etapas. El C++ generado
+    (`codegen_main.cpp`) incluye `psprecomp/runtime.hpp`, que incluye `allegrex_context.hpp`;
+    las etapas son targets `mpo_overlay_<s>` del mismo árbol de CMake y Ninja que `setup.py`
+    compila (`_build_stage`), y Ninja sigue los headers con depfiles (`ninja -t deps` lista el
+    header en los objetos del corpus). Cambiar el header (y el puntero del submódulo) vuelve a
+    compilar todo el corpus del jugador (6 h 45 min a `-j5`, F21). Se hace junto con el próximo
+    cambio que ya obligue a recompilar (por ejemplo, el emisor por funciones o un cambio de ABI).
+- **Atajo de pantalla completa durante el juego** (pendiente de F24a). **Hecho (ola 7,
+  `docs/sessions/F25-mejoras.md`)**: F11 o Alt+Enter (también el Enter del teclado numérico)
+  alternan la pantalla completa sin bordes en la ventana de `mpo_boot` (SDL y Vulkan) y en
+  `mpo_frontend_demo`. `WindowShortcutFilter` (`host/frontend/input.h`) se queda con la tecla, su
+  repetición y su suelta antes que el OSK y el mapeo: Alt+Enter no aprieta Start, un F11 asignado en
+  `input.toml` no llega al juego y no cuenta como último dispositivo, así que las grabaciones no
+  cambian. Falta probarlo en el juego (Linux y Windows).

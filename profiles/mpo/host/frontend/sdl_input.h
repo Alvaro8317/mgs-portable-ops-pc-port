@@ -55,6 +55,12 @@ public:
     // gamepad or focus input (focus lost or gained, consumed here); other
     // events are left to the caller.
     bool HandleEvent(const SDL_Event &event);
+    // The window shortcuts alone (HandleEvent runs this first): true when the
+    // event was a shortcut's key, which nothing else may see. mpo_boot calls
+    // it before giving keys to the OSK.
+    bool HandleWindowShortcut(const SDL_Event &event);
+    // How many times a shortcut toggled fullscreen.
+    [[nodiscard]] int fullscreen_toggles() const { return fullscreen_toggles_; }
 
     [[nodiscard]] int gamepad_count() const { return static_cast<int>(gamepads_.size()); }
 
@@ -82,6 +88,8 @@ private:
     std::string error_;
     std::vector<SDL_Gamepad *> gamepads_;
     DeviceTracker devices_;
+    WindowShortcutFilter shortcuts_;
+    int fullscreen_toggles_ = 0;
     Observer observer_;
     bool captured_ = false;
     SDL_WindowID captured_window_ = 0;

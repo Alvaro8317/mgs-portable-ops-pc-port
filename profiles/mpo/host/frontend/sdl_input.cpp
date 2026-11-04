@@ -17,6 +17,9 @@ static_assert(scancode::kD == SDL_SCANCODE_D && scancode::kE == SDL_SCANCODE_E);
 static_assert(scancode::kEscape == SDL_SCANCODE_ESCAPE && scancode::kTab == SDL_SCANCODE_TAB);
 static_assert(scancode::kLeftCtrl == SDL_SCANCODE_LCTRL &&
               scancode::kRightCtrl == SDL_SCANCODE_RCTRL);
+static_assert(scancode::kLeftAlt == SDL_SCANCODE_LALT && scancode::kRightAlt == SDL_SCANCODE_RALT);
+static_assert(scancode::kF1 == SDL_SCANCODE_F1 && scancode::kF11 == SDL_SCANCODE_F11);
+static_assert(scancode::kKpEnter == SDL_SCANCODE_KP_ENTER);
 static_assert(static_cast<int>(MouseButton::kLeft) == SDL_BUTTON_LEFT);
 static_assert(static_cast<int>(MouseButton::kMiddle) == SDL_BUTTON_MIDDLE);
 static_assert(static_cast<int>(MouseButton::kRight) == SDL_BUTTON_RIGHT);
@@ -127,11 +130,38 @@ void SdlInput::ReleaseMouseCapture() {
     Note("mouse released");
 }
 
+bool SdlInput::HandleWindowShortcut(const SDL_Event &event) {
+    if (event.type != SDL_EVENT_KEY_DOWN && event.type != SDL_EVENT_KEY_UP) return false;
+    const bool down = event.type == SDL_EVENT_KEY_DOWN;
+    WindowShortcut shortcut = WindowShortcut::kNone;
+    if (!shortcuts_.OnKey(static_cast<Scancode>(event.key.scancode), down, event.key.repeat,
+                          (event.key.mod & SDL_KMOD_ALT) != 0, &shortcut))
+        return false;
+    if (shortcut == WindowShortcut::kToggleFullscreen) {
+        SDL_Window *window = SDL_GetWindowFromID(event.key.windowID);
+        if (window == nullptr) {
+            Note("fullscreen toggle: no window");
+            return true;
+        }
+        const bool fullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) == 0;
+        // No display mode: borderless at the desktop's resolution (F24a). The
+        // swapchain follows with SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED.
+        if (SDL_SetWindowFullscreen(window, fullscreen)) {
+            ++fullscreen_toggles_;
+            Note(fullscreen ? "fullscreen on" : "fullscreen off");
+        } else {
+            Note(std::string("fullscreen toggle failed: ") + SDL_GetError());
+        }
+    }
+    return true;
+}
+
 bool SdlInput::HandleEvent(const SDL_Event &event) {
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
         const bool down = event.type == SDL_EVENT_KEY_DOWN;
+        if (HandleWindowShortcut(event)) return true;
         if (event.key.repeat) return true;
         if (down) devices_.OnKeyboardInput();
         if (down && captured_ && event.key.scancode == SDL_SCANCODE_F1) {
@@ -241,6 +271,7 @@ bool SdlInput::HandleEvent(const SDL_Event &event) {
         translator_->ReleaseKeyboard();
         translator_->ReleaseMouse();
         ReleaseMouseCapture();
+        shortcuts_.Reset();
         // Gamepads keep working unfocused, but the right stick stops turning
         // the camera until the window is back (F23a).
         translator_->SetPadCameraPaused(true);

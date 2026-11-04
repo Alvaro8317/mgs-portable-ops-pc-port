@@ -178,7 +178,8 @@ change is saved at once and applies the next time you press **Play** (the langua
 - **Resolution**: the game's internal resolution, from 1x (the PSP's 480x272) to 8x (3840x2176).
   Vulkan only. A higher one is sharper and asks more of the GPU.
 - **Window**: the size of the window, from 1x (480x272) to 8x. You can still resize it by hand.
-- **Fullscreen**: borderless, at your desktop's resolution.
+- **Fullscreen**: borderless, at your desktop's resolution. **F11** or **Alt+Enter** also switches
+  while you play.
 - **Language**: the launcher's, English or Spanish. **System** follows your system's language
   (Spanish if it's Spanish, English otherwise); before installing, the choice is at the top of the
   window. The messages of the install steps and the logs stay in English, the same for everyone
@@ -221,6 +222,10 @@ The game's menus confirm with **Circle** and go back with **Cross**, as on the P
 
 **The mouse can turn the camera**: click in the game window to capture the mouse, then move it left
 and right. **F1** (or switching to another window) releases it.
+
+**F11** or **Alt+Enter** switches between the window and fullscreen while you play. The game doesn't
+see those keys: Alt+Enter doesn't press Start, even though Enter is Start. To start in fullscreen,
+use **Fullscreen** in [Settings](#settings).
 
 When the game asks you to type something (a name, a password), type it on the keyboard. Backspace
 deletes, Enter finishes and Esc cancels.

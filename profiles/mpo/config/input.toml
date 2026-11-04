@@ -22,6 +22,8 @@
 # triggers as L/R, and [analog] holds PPSSPP's stick settings (deadzone,
 # inverse deadzone, sensitivity, square or circular stick, threshold for axes
 # used as buttons).
+# F11 and Alt+Enter toggle fullscreen and never reach the game, whatever this
+# file binds to them (Enter alone is still Start).
 # [mouse_camera] turns the game's camera (the d-pad) with the mouse: click in
 # the window to capture the mouse, F1 (or switching windows) releases it. Every
 # pixels_per_press pixels of motion press left or right for one frame, so a

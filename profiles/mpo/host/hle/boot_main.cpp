@@ -63,7 +63,10 @@
 //                             right stick turns it too ([pad_camera], F23a).
 //   --fullscreen 1            opens the window fullscreen, borderless at the
 //                             desktop's resolution (SDL3's fullscreen without
-//                             a display mode); --scale is then ignored (F24a).
+//                             a display mode); --scale is then the size of
+//                             the window when it leaves fullscreen (F24a).
+//                             F11 or Alt+Enter toggles fullscreen while the
+//                             game runs; the game never sees those keys (F25).
 //   --filter linear           scales the 480x272 image to the window with
 //                             bilinear filtering instead of the nearest
 //                             pixel (F22). --capture (VRAM) is not affected;
@@ -1281,6 +1284,8 @@ int main(int argc, char **argv) {
                 SDL_Event event;
                 sync_text_input();
                 while (SDL_PollEvent(&event)) {
+                    // F25: F11 / Alt+Enter, before the OSK and the game.
+                    if (input->HandleWindowShortcut(event)) continue;
                     if (osk_keyboard(event)) continue;
                     if (input->HandleEvent(event)) continue;
                     if (event.type == SDL_EVENT_QUIT ||
@@ -1352,6 +1357,8 @@ int main(int argc, char **argv) {
                 SDL_Event event;
                 sync_text_input();
                 while (SDL_PollEvent(&event)) {
+                    // F25: F11 / Alt+Enter, before the OSK and the game.
+                    if (input->HandleWindowShortcut(event)) continue;
                     if (osk_keyboard(event)) continue;
                     if (input->HandleEvent(event)) continue;
                     if (event.type == SDL_EVENT_QUIT ||

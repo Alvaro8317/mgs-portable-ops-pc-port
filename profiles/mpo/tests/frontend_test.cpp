@@ -1224,6 +1224,120 @@ void TestPromptRecording() {
 }
 } // namespace
 
+// ---------------------------------------------------------------------------
+// Window shortcuts (F25): F11 and Alt+Enter toggle fullscreen and never reach
+// the game.
+
+// What SdlInput does with a key event: the filter first, then the translator
+// (repeats are not presses). Returns the shortcut the event ran.
+WindowShortcut FeedKey(WindowShortcutFilter *filter, InputTranslator *t, Scancode key, bool down,
+                       bool alt, bool repeat = false) {
+    WindowShortcut shortcut = WindowShortcut::kNone;
+    if (filter->OnKey(key, down, repeat, alt, &shortcut)) return shortcut;
+    if (!repeat) t->OnKey(key, down);
+    return shortcut;
+}
+
+void TestWindowShortcuts() {
+    using WS = WindowShortcut;
+    ExpectEq(static_cast<int>(WindowShortcutFor(scancode::kF11, false)),
+             static_cast<int>(WS::kToggleFullscreen), "F11");
+    ExpectEq(static_cast<int>(WindowShortcutFor(scancode::kF11, true)),
+             static_cast<int>(WS::kToggleFullscreen), "Alt+F11");
+    ExpectEq(static_cast<int>(WindowShortcutFor(scancode::kReturn, true)),
+             static_cast<int>(WS::kToggleFullscreen), "Alt+Enter");
+    ExpectEq(static_cast<int>(WindowShortcutFor(scancode::kKpEnter, true)),
+             static_cast<int>(WS::kToggleFullscreen), "Alt+keypad Enter");
+    ExpectEq(static_cast<int>(WindowShortcutFor(scancode::kReturn, false)),
+             static_cast<int>(WS::kNone), "Enter alone is Start");
+    ExpectEq(static_cast<int>(WindowShortcutFor(scancode::kF1, false)), static_cast<int>(WS::kNone),
+             "F1 releases the mouse, not a window shortcut");
+    for (const Scancode key : {scancode::kSpace, scancode::kEscape, scancode::kTab, scancode::kW,
+                               scancode::kLeftAlt, scancode::kRightAlt}) {
+        ExpectEq(static_cast<int>(WindowShortcutFor(key, true)), static_cast<int>(WS::kNone),
+                 "Alt+" + std::to_string(key) + " is not a shortcut");
+    }
+
+    // The default PC layout (CLAUDE.md decision 11) binds none of the
+    // shortcut keys (Enter is Start, but only without Alt).
+    for (const KeyBinding &binding : InputMapping::Default().keys) {
+        Expect(binding.key != scancode::kF11 && binding.key != scancode::kKpEnter &&
+                   binding.key != scancode::kLeftAlt && binding.key != scancode::kRightAlt &&
+                   binding.key != scancode::kF1,
+               "default map leaves F1, F11, Alt and keypad Enter free (key " +
+                   std::to_string(binding.key) + ")");
+    }
+
+    WindowShortcutFilter filter;
+    InputTranslator t;
+
+    // F11: the press toggles, its repeats and release are taken too.
+    ExpectEq(static_cast<int>(FeedKey(&filter, &t, scancode::kF11, true, false)),
+             static_cast<int>(WS::kToggleFullscreen), "F11 press toggles");
+    ExpectEq(static_cast<int>(FeedKey(&filter, &t, scancode::kF11, true, false, true)),
+             static_cast<int>(WS::kNone), "F11 repeat does not toggle again");
+    WindowShortcut ignored = WS::kNone;
+    Expect(filter.OnKey(scancode::kF11, true, true, false, &ignored), "F11 repeat is taken");
+    Expect(filter.OnKey(scancode::kF11, false, false, false, &ignored), "F11 release is taken");
+    ExpectEq(t.Sample().buttons, 0u, "F11 presses nothing");
+
+    // Alt+Enter: Alt goes to the game (unbound), Enter does not press Start.
+    ExpectEq(static_cast<int>(FeedKey(&filter, &t, scancode::kLeftAlt, true, true)),
+             static_cast<int>(WS::kNone), "Alt alone");
+    ExpectEq(static_cast<int>(FeedKey(&filter, &t, scancode::kReturn, true, true)),
+             static_cast<int>(WS::kToggleFullscreen), "Alt+Enter toggles");
+    ExpectEq(t.Sample().buttons, 0u, "Alt+Enter does not press Start");
+    // Alt let go before Enter: the release is still the shortcut's.
+    (void)FeedKey(&filter, &t, scancode::kLeftAlt, false, false);
+    Expect(filter.OnKey(scancode::kReturn, false, false, false, &ignored),
+           "Enter release after Alt+Enter is taken");
+    ExpectEq(t.Sample().buttons, 0u, "nothing held after Alt+Enter");
+
+    // Enter alone is Start; holding it and then pressing Alt keeps it Start
+    // (only a new press can be a shortcut), and its release reaches the game.
+    (void)FeedKey(&filter, &t, scancode::kReturn, true, false);
+    ExpectEq(t.Sample().buttons, ctrl::kStart, "Enter = Start");
+    (void)FeedKey(&filter, &t, scancode::kRightAlt, true, true);
+    ExpectEq(static_cast<int>(FeedKey(&filter, &t, scancode::kReturn, true, true, true)),
+             static_cast<int>(WS::kNone), "Enter repeat with Alt is not a shortcut");
+    Expect(!filter.OnKey(scancode::kReturn, true, true, true, &ignored),
+           "a repeat of a key the game holds is not taken");
+    ExpectEq(t.Sample().buttons, ctrl::kStart, "Start still held");
+    (void)FeedKey(&filter, &t, scancode::kReturn, false, true);
+    (void)FeedKey(&filter, &t, scancode::kRightAlt, false, false);
+    ExpectEq(t.Sample().buttons, 0u, "Start released");
+
+    // Alt+Space is cross: only Enter makes a shortcut with Alt.
+    (void)FeedKey(&filter, &t, scancode::kSpace, true, true);
+    ExpectEq(t.Sample().buttons, ctrl::kCross, "Alt+Space = cross");
+    (void)FeedKey(&filter, &t, scancode::kSpace, false, true);
+
+    // Keypad Enter with Alt, too.
+    ExpectEq(static_cast<int>(FeedKey(&filter, &t, scancode::kKpEnter, true, true)),
+             static_cast<int>(WS::kToggleFullscreen), "Alt+keypad Enter toggles");
+    Expect(filter.OnKey(scancode::kKpEnter, false, false, false, &ignored),
+           "keypad Enter release taken");
+
+    // A mapping that binds F11 does not get it: the shortcut wins.
+    InputMapping custom = InputMapping::Default();
+    custom.keys.push_back({scancode::kF11, Target::Button(ctrl::kSelect)});
+    InputTranslator bound(custom);
+    ExpectEq(static_cast<int>(FeedKey(&filter, &bound, scancode::kF11, true, false)),
+             static_cast<int>(WS::kToggleFullscreen), "bound F11 still toggles");
+    ExpectEq(bound.Sample().buttons, 0u, "bound F11 does not press select");
+    (void)FeedKey(&filter, &bound, scancode::kF11, false, false);
+    ExpectEq(bound.Sample().buttons, 0u, "bound F11 release");
+
+    // Focus lost while F11 is down: its release never arrives, so the filter
+    // forgets it and the next F11 toggles again.
+    (void)FeedKey(&filter, &t, scancode::kF11, true, false);
+    filter.Reset();
+    ExpectEq(static_cast<int>(FeedKey(&filter, &t, scancode::kF11, true, false)),
+             static_cast<int>(WS::kToggleFullscreen), "F11 toggles after a reset");
+    (void)FeedKey(&filter, &t, scancode::kF11, false, false);
+    ExpectEq(t.Sample().buttons, 0u, "nothing held at the end");
+}
+
 int main() {
     TestFormatsExhaustive();
     TestStridesAndAddresses();
@@ -1231,6 +1345,7 @@ int main() {
     TestDefaultKeyboard();
     TestMouseCamera();
     TestPadCamera();
+    TestWindowShortcuts();
     TestDefaultGamepad();
     TestCustomMapping();
     TestCtrlData();
